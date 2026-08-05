@@ -328,3 +328,50 @@ TEST(SurnameKey, HarmonisedDisplayNameKeepsAGroupTogether) {
   EXPECT_EQ(library::surnameKey("Ian Manook"), library::surnameKey("Ian Manook"));
   EXPECT_NE(library::surnameKey("Ian Manook"), library::surnameKey("Manook Ian"));
 }
+
+// --- nextLetterMask ----------------------------------------------------------
+
+namespace {
+uint32_t bit(const char c) { return 1u << (c - 'a'); }
+}  // namespace
+
+TEST(NextLetterMask, EmptyQueryOffersEveryWordInitial) {
+  const uint32_t m = library::nextLetterMask(library::fold("Dark Matter"), "");
+  EXPECT_EQ(m, bit('d') | bit('m'));
+}
+
+TEST(NextLetterMask, PartialWordOffersOnlyItsContinuation) {
+  EXPECT_EQ(library::nextLetterMask(library::fold("Dark Matter"), library::fold("da")), bit('r'));
+}
+
+// The key result: after a complete word and a space, the OTHER words are offered
+// — which is what makes "dar mat" reachable without guessing.
+TEST(NextLetterMask, AfterASpaceTheRemainingWordsAreOffered) {
+  const uint32_t m = library::nextLetterMask(library::fold("Dark Matter"), "dark ");
+  EXPECT_EQ(m, bit('d') | bit('m'));
+}
+
+TEST(NextLetterMask, DeadEndOffersNothing) {
+  EXPECT_EQ(library::nextLetterMask(library::fold("Dark Matter"), library::fold("dz")), 0u);
+}
+
+// A book whose completed words do not match contributes nothing at all, even
+// though it has words continuing the partial one.
+TEST(NextLetterMask, BookFailingTheCompletedWordsIsExcluded) {
+  EXPECT_EQ(library::nextLetterMask(library::fold("Dark Matter"), library::fold("blue ma")), 0u);
+}
+
+TEST(NextLetterMask, EndOfWordOffersNothingFromThatWord) {
+  EXPECT_EQ(library::nextLetterMask(library::fold("Dark Matter"), library::fold("dark")), 0u);
+}
+
+TEST(NextLetterMask, MasksCombineAcrossBooks) {
+  const uint32_t a = library::nextLetterMask(library::fold("Dark Matter"), library::fold("d"));
+  const uint32_t b = library::nextLetterMask(library::fold("Dune"), library::fold("d"));
+  EXPECT_EQ(a | b, bit('a') | bit('u'));
+}
+
+TEST(NextLetterMask, ApostropheBreaksWordsHereToo) {
+  const uint32_t m = library::nextLetterMask(library::fold("L'inconsole"), library::fold("i"));
+  EXPECT_EQ(m, bit('n'));
+}

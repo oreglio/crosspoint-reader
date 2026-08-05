@@ -135,4 +135,21 @@ bool matchesQuery(std::string_view haystack, std::string_view needle);
 // hiding: a single word name simply keys on itself.
 std::string surnameKey(std::string_view displayAuthor);
 
+// Which letters could usefully come next, as a bit per 'a'..'z'.
+//
+// The point is the panel: every keypress costs a full ~185 ms repaint, so a key
+// that leads to no book charges the reader twice — once for the flash, once for
+// the correction. Greying it out is worth the pass it takes to work out.
+//
+// Not a trie walk, because the match rule is "every typed word prefixes some word
+// of the book, in any order". A book contributes only if its OTHER words already
+// satisfy the completed part of the query; then every one of its words that
+// begins with the word currently being typed offers its next character. A query
+// ending in a space is starting a fresh word, so every word-initial of a still
+// matching book qualifies.
+//
+// Callers OR the masks together across the shelf, so an empty result means the
+// query is already a dead end.
+uint32_t nextLetterMask(std::string_view haystack, std::string_view needle);
+
 }  // namespace library
