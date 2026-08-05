@@ -305,11 +305,19 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   }
   header.knownAuthorCount = known;
 
-  // Records, in title order, with both ranks filled in.
+  // Records, in title order, with both ranks and the name offset filled in.
+  //
+  // nameOff MUST be recomputed here. The walk assigns offsets in discovery
+  // order, but the name blob below is written in title order, so a staged offset
+  // points at whatever name happened to be staged at that position — which
+  // renders as the tail of one name glued to the head of the next.
+  uint32_t nameCursor = 0;
   for (uint16_t i = 0; i < n; i++) {
     StagedEntry entry{};
     stage.seekSet(static_cast<uint64_t>(order[i]) * STAGE_STRIDE);
     stage.read(reinterpret_cast<uint8_t*>(&entry), STAGE_STRIDE);
+    entry.record.nameOff = nameCursor;
+    nameCursor += entry.record.nameLen;
     // firstSeen is handed out sequentially during the walk and carried across
     // rebuilds, so the position in first-seen order is the offset from the value
     // this build started at — not the raw counter.

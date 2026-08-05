@@ -253,6 +253,58 @@ ParsedName parseFilename(const std::string_view stem) {
   return out;
 }
 
+std::string cleanPersonName(const std::string_view author) {
+  std::string out;
+  out.reserve(author.size());
+  int depth = 0;
+  for (size_t i = 0; i < author.size(); i++) {
+    const char c = author[i];
+    if (c == '[' || c == '(') {
+      depth++;
+      continue;
+    }
+    if (c == ']' || c == ')') {
+      if (depth > 0) depth--;
+      continue;
+    }
+    if (c == ';') break;  // secondary authors
+    if (depth > 0) continue;
+    if (c == '_') {
+      // "Michael S_ Heiser" — the underscore stands in for a full stop the
+      // filesystem would not take. Between letters it is an abbreviation dot;
+      // at the end of a word it is just noise.
+      const bool betweenLetters = i > 0 && i + 1 < author.size() && isalpha(static_cast<unsigned char>(author[i - 1])) &&
+                                  isalpha(static_cast<unsigned char>(author[i + 1]));
+      out.push_back(betweenLetters ? '.' : ' ');
+      continue;
+    }
+    out.push_back(c);
+  }
+
+  while (!out.empty() && (out.back() == ' ' || out.back() == ',' || out.back() == '-' || out.back() == '.' ||
+                          out.back() == '_')) {
+    out.pop_back();
+  }
+  size_t start = 0;
+  while (start < out.size() && out[start] == ' ') start++;
+  out.erase(0, start);
+
+  // Collapse the space runs left behind by the removals.
+  std::string collapsed;
+  collapsed.reserve(out.size());
+  bool space = false;
+  for (const char c : out) {
+    if (c == ' ') {
+      space = true;
+      continue;
+    }
+    if (space && !collapsed.empty()) collapsed.push_back(' ');
+    space = false;
+    collapsed.push_back(c);
+  }
+  return collapsed;
+}
+
 std::string authorKey(const std::string_view author) {
   // Drop bracketed spans ("Karine Giebel [Giebel, Karine]") and everything after
   // a multi-author separator.

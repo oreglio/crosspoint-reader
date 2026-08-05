@@ -19,6 +19,9 @@
 // Rows are built only for the visible window, so nothing proportional to the
 // library is held: the index streams from SD and the screen keeps at most a
 // page of strings.
+// Left and right inset of the dotted row rule, in pixels.
+inline constexpr int LIBRARY_SEPARATOR_INSET = 12;
+
 class LibraryListActivity final : public Activity {
  public:
   explicit LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
@@ -47,6 +50,7 @@ class LibraryListActivity final : public Activity {
   // it is well under a second, and it only runs when the index is missing or the
   // user asks.
   bool rebuildIndex();
+  void drawRowSeparators();
   void openSelectedBook();
   void cycleSortOrder();
   const char* sortOrderLabel() const;
@@ -60,6 +64,10 @@ class LibraryListActivity final : public Activity {
   int selectedIndex = 0;
   int topIndex = 0;
   int visibleRows = 1;
+  // Row geometry captured while building the screen, so the separators drawn
+  // afterwards land exactly on the widget's own row boundaries.
+  int lastListTop = 0;
+  int lastRowStep = 0;
   bool uiReady = false;
   bool indexReady = false;
   // Set when the walk finished but the sort did not, so the screen can say the

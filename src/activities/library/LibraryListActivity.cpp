@@ -161,9 +161,27 @@ void LibraryListActivity::buildListScreen(UiApp::ScreenType& screen) {
   // One line for the title, one for the author, always. A wrapped title would
   // push the author column out of alignment, which is the one property this
   // screen exists to provide; the renderer ellipsises on measured width instead.
-  props.labelText.maxLines = 1;
+  // One line, and it has to stay one line. FreeInkUI sizes the label band as
+  // exactly lineHeight(labelFont) whenever a subtitle is present
+  // (components/lists/list.h:269-279), so a second title line is drawn outside
+  // its band and lands on top of the author. A wrapped title and a fixed author
+  // column are mutually exclusive in this widget; the column wins, because it is
+  // the thing that makes the list scannable. Long titles ellipsise on measured
+  // width, which stays correct at every theme and UI scale.
+  // The author gets its own, visibly smaller style. With both lines at the same
+  // weight the rows read as one undifferentiated block and it stops being
+  // obvious which line is the title — the separation is what makes the column
+  // scannable, which is the entire point of the two-slot row.
+  props.subtitleText = screen.theme().smallText;
+  props.subtitleText.maxLines = 1;
+  // Remember the geometry so render() can rule between rows: the list widget has
+  // no separator of its own, and reproducing its layout after the fact is the
+  // only way to add one without editing shared SDK code.
+  lastListTop = screen.body().y;
+  lastRowStep = 0;  // filled in below, once configureUiList has sized the row
   const auto rows = configureUiList(props, screen.theme(), screen.body(), UiListRowType::WithSubtitle);
   visibleRows = rows > 0 ? rows : 1;
+  lastRowStep = props.rowHeight + props.rowGap;
   topIndex = scrollListBy(topIndex, 0, visibleRows, count);
 
   // Materialise only the visible window. Titles and authors are derived here
@@ -180,11 +198,14 @@ void LibraryListActivity::buildListScreen(UiApp::ScreenType& screen) {
     if (ordinal != 0xFFFF && index.readRecord(ordinal, record) && index.readName(record, name)) {
       const library::ParsedName parsed = library::parseFilename(stemOf(name));
       rowText[i].title = parsed.title;
-      rowText[i].author = parsed.author;
+      rowText[i].author = library::cleanPersonName(parsed.author);
     }
     if (rowText[i].title.empty()) rowText[i].title = tr(STR_LIBRARY_UNKNOWN_TITLE);
 
     fui::ListItem item;
+    // A book glyph on every row anchors the eye at a fixed left edge, so a row
+    // reads as one object rather than two loose lines.
+    item.icon = listIconFor(Book, 24);
     item.label = rowText[i].title.c_str();
     // An empty subtitle still reserves the line, so rows stay a uniform height
     // and the author column stays where the eye expects it.
@@ -261,9 +282,25 @@ void LibraryListActivity::render(RenderLock&&) {
     uiReady = false;
     app.render();
     uiReady = true;
+    drawRowSeparators();
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
+}
+
+void LibraryListActivity::drawRowSeparators() {
+  if (lastRowStep <= 0) return;
+  const int drawn = std::min(visibleRows, static_cast<int>(index.bookCount()) - topIndex);
+  const int width = renderer.getScreenWidth();
+  // Dotted, not solid: on a 1-bit panel every-other-pixel is how you get a rule
+  // that reads as grey. A solid black line would weigh more than the text it is
+  // meant to separate.
+  for (int row = 1; row < drawn; row++) {
+    const int y = lastListTop + row * lastRowStep - 1;
+    for (int x = LIBRARY_SEPARATOR_INSET; x < width - LIBRARY_SEPARATOR_INSET; x += 2) {
+      renderer.drawPixel(x, y, true);
+    }
+  }
 }

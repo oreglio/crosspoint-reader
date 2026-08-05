@@ -68,7 +68,11 @@ struct HomeMenuEntry {
 };
 
 struct HomeMenuEntries {
-  static constexpr int kCapacity = 8;
+  // Continue Reading, Browse Files, Library, Recent Books, OPDS, Reading Stats,
+  // Bookmarks, File Transfer, Settings — nine when every optional entry is
+  // present, plus one spare. Overflow silently drops the LAST item pushed, which
+  // is Settings, so this has to lead the list rather than trail it.
+  static constexpr int kCapacity = 10;
   std::array<HomeMenuEntry, kCapacity> entries{};
   int count = 0;
 
@@ -589,7 +593,10 @@ static_assert(HomeActivity::kMaxCachedBooks >= LyraCarouselMetrics::values.homeR
 
 int HomeActivity::getMenuItemCount() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  int count = 4;  // File Browser, Recents, File transfer, Settings
+  // Kept in step with appendHomeMenuItems() by hand: this counts the fixed
+  // rows, that function pushes them. They disagreeing is invisible in the
+  // drawn menu and shows up only as a row you can see but never select.
+  int count = 5;  // File Browser, Library, Recents, File transfer, Settings
   if (!metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
     count += getVisibleRecentBookCount();
   } else if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
@@ -1135,9 +1142,13 @@ void HomeActivity::renderCarouselFrameToCurrentBuffer(int bookIdx, BookReadingSt
       renderer, Rect{0, metrics.homeTopPadding, pageWidth, metrics.homeCoverTileHeight}, recentBooks, bookCount, dummy1,
       dummy2, dummy3, []() { return true; }, frameStatsPtr, frameProgressPercent);
 
-  const bool frameHasReadingStats = hasAnyBookStats(frameStats) || hasAnyGlobalStats(globalStats) ||
-                                    (showAllDevicesStats && hasAnyGlobalStats(allDevicesGlobalStats));
-  const auto menuItems = buildHomeMenuItems(hasOpdsServers, frameHasReadingStats, hasBookmarks, hasClippings);
+  // hasReadingStats, not a per-frame recomputation from frameStats. Navigation
+  // (the menuItemCount below) and dispatch both use the member, so deriving the
+  // DRAWN menu from the carousel's current book let the two disagree by one row:
+  // the extra row was painted and then skipped by every wrap, which is how
+  // Settings became visible but unreachable. It also means the menu no longer
+  // changes length as the carousel scrolls.
+  const auto menuItems = buildHomeMenuItems(hasOpdsServers, hasReadingStats, hasBookmarks, hasClippings);
   GUI.drawButtonMenu(
       renderer,
       Rect{0, metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.verticalSpacing, pageWidth,

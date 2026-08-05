@@ -751,7 +751,13 @@ void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
                                const std::function<const char*(int index)>& buttonLabel,
                                const std::function<UIIcon(int index)>& rowIcon) const {
   (void)rowIcon;
-  constexpr int maxVisibleItems = 7;
+  // The full Home menu is nine rows with every optional entry present. This is
+  // an upper bound, not a layout: pageItems below still clamps to what the
+  // screen can actually hold. It matters because the Home carousel draws this
+  // menu with selectedIndex == -1, which pins pageStartIndex to 0 — so anything
+  // past this bound is not merely on another page, it is unreachable. At 7 the
+  // ninth entry (Settings) silently vanished; both panels fit 9 rows.
+  constexpr int maxVisibleItems = 9;
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int rowStep = metrics.menuRowHeight + metrics.menuSpacing;
   const int availableHeight = std::max(0, rect.height - metrics.verticalSpacing);

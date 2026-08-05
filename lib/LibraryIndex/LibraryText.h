@@ -70,6 +70,21 @@ ParsedName parseFilename(std::string_view stem);
 // for testing. Only ever applied to a candidate author, never to a title.
 bool looksLikeMetadata(std::string_view raw);
 
+// Tidy a person's name for DISPLAY, without reordering it.
+//
+// Drops bracketed spans ("Karine Giebel [Giebel, Karine]"), everything after a
+// multi-author separator, and the trailing underscores and punctuation that
+// exporters leave behind ("Qiu Xiaolong_", "Michael S_ Heiser"). An underscore
+// between letters becomes a full stop, since that is what it replaced in a name
+// a filesystem refused to hold.
+//
+// It deliberately does NOT swap "Last, First" into "First Last": "Qiu Xiaolong"
+// and "Lee Min Jin" defeat every such rule, and guessing wrong is worse than
+// leaving the author's own spelling alone. Harmonising the several spellings of
+// one person is done by picking the most common one that actually occurs, which
+// needs the whole library and so belongs to the index build.
+std::string cleanPersonName(std::string_view author);
+
 // Order-insensitive identity for one person, at most AUTHOR_KEY_MAX_BYTES.
 //
 // Drops bracketed spans and everything after ';' (multi-author separator), folds,
