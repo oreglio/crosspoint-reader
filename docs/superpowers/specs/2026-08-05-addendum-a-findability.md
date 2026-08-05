@@ -586,10 +586,21 @@ kept near 170 lines; an optional parameter keeps any conflict trivial. Writing a
 second keyboard inside the Library shares nothing but duplicates an existing one
 and invites the two to diverge. The filter is the recommendation.
 
-Computing the allowed set is not a plain trie walk, because the match rule is
-"every typed word prefixes some word of the book, in any order". For each book
-still matching, take the character following the partial word being typed. One
-pass over the shelf, not twenty-six.
+Computing the allowed set is DONE: `library::nextLetterMask` in LibraryText, with
+8 host tests. Callers OR the per-book masks together; an empty union means the
+query is a dead end.
+
+What remains is the keyboard itself, and the shape of the problem is now known.
+KeyboardEntryActivity holds its layouts as `static const fui::KeyboardKey[]` rows
+(URL_ROW1 and friends, KeyboardEntryActivity.cpp:39-50). The struct's seventh
+field is the enabled flag, and `fui::list` already renders a disabled key as
+StateDisabled — so the SDK side needs nothing.
+
+The obstacle is that the layouts are const and shared by every caller, including
+the network credential screens. Disabling per keypress means copying the active
+layout into a mutable buffer owned by the activity and rewriting the flags as the
+text changes. That is the twenty-line change, and it must not alter behaviour when
+no filter is supplied — the credential keyboards have no shelf to filter against.
 
 ### Known defects
 
