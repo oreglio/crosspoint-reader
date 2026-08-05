@@ -334,9 +334,13 @@ void LibraryListActivity::drawLetterGrid() {
   const int rows = (kLetterCount + kLetterCols - 1) / kLetterCols;
   const int cellH = listHeight / (rows + 1);
   const int top = listTop + cellH / 2;
+  // Centre the block itself. Laying it out from the left margin left the last
+  // column hanging off the right edge, since 26 letters do not fill 5 columns
+  // evenly and the remainder all landed on one side.
+  const int originX = (width - kLetterCols * cell) / 2;
 
   for (int i = 0; i < kLetterCount; i++) {
-    const int cx = LIBRARY_SIDE_PADDING + (i % kLetterCols) * cell;
+    const int cx = originX + (i % kLetterCols) * cell;
     const int cy = top + (i / kLetterCols) * cellH;
     const bool present = (lettersPresent & (1u << i)) != 0;
 

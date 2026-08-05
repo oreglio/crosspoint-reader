@@ -513,7 +513,11 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   // same string, so they cannot split across two places.
   if (authorSort && authorRankOf && canonicalFrom && n > 1) {
     for (uint16_t i = 0; i < n; i++) {
-      const uint16_t src = canonicalFrom[i];
+      // canonicalFrom holds TITLE-order positions, and the staging file is keyed
+      // by walk order — order[] is the map between them. Reading staging with the
+      // title position directly fetches an unrelated book, which is what split
+      // John Scalzi into two groups and left the shelf in no order at all.
+      const uint16_t src = order[canonicalFrom[i]];
       uint8_t authorLen = 0;
       char author[STAGE_AUTHOR_BYTES] = {};
       stage.seekSet(static_cast<uint64_t>(src) * STAGE_STRIDE + offsetof(StagedEntry, authorLen));
