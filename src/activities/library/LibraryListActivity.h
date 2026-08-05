@@ -24,6 +24,9 @@
 // (components/lists/list.h:445, :449), which makes a wrapped title and an
 // aligned author column mutually exclusive. This screen needs both.
 inline constexpr int LIBRARY_TITLE_LINES = 3;
+// Height of the sort strip. Sized to the small font plus the underline that marks
+// the active tab.
+inline constexpr int LIBRARY_TABS_HEIGHT = 26;
 inline constexpr int LIBRARY_ICON_SIZE = 24;
 inline constexpr int LIBRARY_ICON_GAP = 10;
 inline constexpr int LIBRARY_SIDE_PADDING = 12;
@@ -61,7 +64,13 @@ class LibraryListActivity final : public Activity {
   void previousPage(bool selectLast = false);
   void openSelectedBook();
   void openSortMenu();
-  void cycleSortOrder();
+  void drawSortTabs(int top);
+  int tabsTop = 0;
+  // Left/Right turn pages, so the strip cannot own that axis outright. It takes
+  // it only while focused, which the reader reaches by pressing Up from the first
+  // book — the one press that had nothing to do before.
+  bool tabsFocused = false;
+  void cycleSortOrder(bool forward = true);
   const char* sortOrderLabel() const;
 
   library::LibraryIndexFile index;

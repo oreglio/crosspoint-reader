@@ -139,23 +139,40 @@ void LibraryListActivity::openSortMenu() {
       });
 }
 
-void LibraryListActivity::cycleSortOrder() {
-  switch (sortOrder) {
-    case library::SortOrder::DateDesc:
-      sortOrder = library::SortOrder::TitleAsc;
-      break;
-    case library::SortOrder::TitleAsc:
-      sortOrder = library::SortOrder::TitleDesc;
-      break;
-    case library::SortOrder::TitleDesc:
-      sortOrder = library::SortOrder::AuthorAsc;
-      break;
-    case library::SortOrder::AuthorAsc:
-      sortOrder = library::SortOrder::DateDesc;
-      break;
+// The strip's tab order, which is also the cycle order.
+constexpr library::SortOrder kSortTabs[] = {library::SortOrder::DateDesc, library::SortOrder::TitleAsc,
+                                            library::SortOrder::TitleDesc, library::SortOrder::AuthorAsc};
+constexpr int kSortTabCount = static_cast<int>(sizeof(kSortTabs) / sizeof(kSortTabs[0]));
+
+int sortTabIndex(const library::SortOrder order) {
+  for (int i = 0; i < kSortTabCount; i++) {
+    if (kSortTabs[i] == order) return i;
   }
+  return 0;
+}
+
+void LibraryListActivity::cycleSortOrder(const bool forward) {
+  const int next = (sortTabIndex(sortOrder) + (forward ? 1 : kSortTabCount - 1)) % kSortTabCount;
+  sortOrder = kSortTabs[next];
   selectedIndex = 0;
   topIndex = 0;
+  requestUpdate();
+}
+
+// The strip needs the mode alone. The header strings carry a "Library ·" prefix
+// that reads as four copies of the word once they sit side by side.
+const char* sortLabelFor(const library::SortOrder order) {
+  switch (order) {
+    case library::SortOrder::DateDesc:
+      return tr(STR_LIBRARY_TAB_RECENT);
+    case library::SortOrder::TitleAsc:
+      return tr(STR_LIBRARY_TAB_TITLE_AZ);
+    case library::SortOrder::TitleDesc:
+      return tr(STR_LIBRARY_TAB_TITLE_ZA);
+    case library::SortOrder::AuthorAsc:
+      return tr(STR_LIBRARY_TAB_AUTHOR);
+  }
+  return "";
 }
 
 const char* LibraryListActivity::sortOrderLabel() const {
@@ -191,7 +208,10 @@ void LibraryListActivity::measureRows() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   titleLineH = renderer.getLineHeight(UI_10_FONT_ID);
   authorLineH = renderer.getLineHeight(SMALL_FONT_ID);
-  listTop = metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput) + metrics.verticalSpacing;
+  // The sort strip sits between the header and the list, and takes its height
+  // from the list rather than overlaying it.
+  tabsTop = metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput) + metrics.verticalSpacing;
+  listTop = tabsTop + LIBRARY_TABS_HEIGHT;
   listHeight = renderer.getScreenHeight() - metrics.buttonHintsHeight - metrics.verticalSpacing - listTop;
 }
 
@@ -244,11 +264,19 @@ void LibraryListActivity::loop() {
   // paging is free — which matters at 69 books, where scrolling one row at a time
   // is 34 presses to the middle and paging is 5.
   if (mappedInput.wasReleased(MappedInputManager::Button::Right) && count > 0) {
-    nextPage();
+    if (tabsFocused) {
+      cycleSortOrder(/*forward=*/true);
+    } else {
+      nextPage();
+    }
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Left) && count > 0) {
-    previousPage();
+    if (tabsFocused) {
+      cycleSortOrder(/*forward=*/false);
+    } else {
+      previousPage();
+    }
     return;
   }
 
@@ -261,7 +289,12 @@ void LibraryListActivity::loop() {
   // within the page; at an edge they turn it and land on the far row, so the
   // reader never loses the sense of a fixed frame.
   if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
-    if (selectedIndex > topIndex) {
+    if (tabsFocused) {
+      // already at the top
+    } else if (selectedIndex == 0) {
+      tabsFocused = true;
+      requestUpdate();
+    } else if (selectedIndex > topIndex) {
       selectedIndex--;
       requestUpdate();
     } else if (topIndex > 0) {
@@ -269,12 +302,42 @@ void LibraryListActivity::loop() {
     }
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Down) && count > 0) {
-    if (selectedIndex < topIndex + visibleRows - 1 && selectedIndex < count - 1) {
+    if (tabsFocused) {
+      tabsFocused = false;
+      requestUpdate();
+    } else if (selectedIndex < topIndex + visibleRows - 1 && selectedIndex < count - 1) {
       selectedIndex++;
       requestUpdate();
     } else if (topIndex + visibleRows < count) {
       nextPage();
     }
+  }
+}
+
+// The sort strip: every mode visible at once, the active one underlined. On a
+// panel that refreshes whole, showing the alternatives costs nothing per frame
+// and saves a menu round-trip to discover them.
+void LibraryListActivity::drawSortTabs(const int top) {
+  const int right = renderer.getScreenWidth() - LIBRARY_SIDE_PADDING;
+  const int lineH = renderer.getLineHeight(SMALL_FONT_ID);
+  // drawText takes the TOP of the text, not its baseline, so the rules below sit
+  // under the glyphs rather than through them.
+  const int textY = top + 2;
+  const int ruleY = textY + lineH + 1;
+  int x = LIBRARY_SIDE_PADDING;
+
+  for (int i = 0; i < kSortTabCount; i++) {
+    const char* label = sortLabelFor(kSortTabs[i]);
+    const int w = renderer.getTextWidth(SMALL_FONT_ID, label);
+    if (x + w > right) break;
+    renderer.drawText(SMALL_FONT_ID, x, textY, label);
+    if (kSortTabs[i] == sortOrder) {
+      // Underline marks the active mode; a second rule marks that the strip has
+      // the focus and is about to consume Left/Right.
+      renderer.fillRect(x, ruleY, w, 1, true);
+      if (tabsFocused) renderer.fillRect(x, ruleY + 2, w, 1, true);
+    }
+    x += w + 16;
   }
 }
 
@@ -291,6 +354,8 @@ void LibraryListActivity::render(RenderLock&&) {
   if (index.bookCount() == 0) {
     renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_LIBRARY_EMPTY));
   } else {
+    measureRows();
+    if (!degraded) drawSortTabs(tabsTop);
     drawRows();
   }
 
