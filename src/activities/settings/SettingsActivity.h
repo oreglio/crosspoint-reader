@@ -32,6 +32,8 @@ enum class SettingAction {
   ControlsSideButtons,
   SystemDevice,
   SystemFilesCache,
+  SystemLibrary,
+  RebuildLibraryIndex,
   SystemReadingStats,
   SystemGlobalStats,
   Network,
@@ -241,6 +243,7 @@ class SettingsActivity final : public Activity {
   std::vector<SettingInfo> systemSettings;
   std::vector<SettingInfo> systemDeviceSettings;
   std::vector<SettingInfo> systemFilesCacheSettings;
+  std::vector<SettingInfo> systemLibrarySettings;
   std::vector<SettingInfo> systemReadingStatsSettings;
   std::vector<SettingInfo> systemGlobalStatsSettings;
   const std::vector<SettingInfo>* currentSettings = nullptr;

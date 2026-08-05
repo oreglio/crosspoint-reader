@@ -1,3 +1,7 @@
+#include <LibraryBuilder.h>
+#include <LibraryIndexFile.h>
+
+#include "activities/home/BookActions.h"
 #include "SettingsActivity.h"
 
 #include <BoardConfig.h>
@@ -261,6 +265,7 @@ void SettingsActivity::rebuildSettingsLists() {
   systemSettings.clear();
   systemDeviceSettings.clear();
   systemFilesCacheSettings.clear();
+  systemLibrarySettings.clear();
   systemReadingStatsSettings.clear();
   systemGlobalStatsSettings.clear();
 
@@ -286,6 +291,7 @@ void SettingsActivity::rebuildSettingsLists() {
   systemSettings = buildSystemSettingsParentList(allSettings);
   systemDeviceSettings = buildSystemDeviceSettingsList(allSettings);
   systemFilesCacheSettings = buildSystemFilesCacheSettingsList(allSettings);
+  systemLibrarySettings = buildSystemLibrarySettingsList(allSettings);
   systemReadingStatsSettings = buildSystemReadingStatsSettingsList(allSettings);
   systemGlobalStatsSettings = buildSystemGlobalStatsSettingsList(allSettings);
   controlsSettings = buildControlsSettingsParentList(allSettings);
@@ -365,6 +371,9 @@ void SettingsActivity::setCurrentSettingsForCategory() {
           break;
         case SettingAction::SystemFilesCache:
           currentSettings = &systemFilesCacheSettings;
+          break;
+        case SettingAction::SystemLibrary:
+          currentSettings = &systemLibrarySettings;
           break;
         case SettingAction::SystemReadingStats:
           currentSettings = &systemReadingStatsSettings;
@@ -930,6 +939,30 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::Network:
         startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false), resultHandler);
         break;
+      case SettingAction::RebuildLibraryIndex: {
+        // Blocking, with a popup. Measured on a real 69-book card the walk is
+        // well under a second; the reader asked for it, so a progress popup is
+        // more honest than a background task whose effects appear later without
+        // explanation.
+        GUI.drawPopup(renderer, tr(STR_LIBRARY_REBUILDING));
+        uint16_t carried = 0;
+        {
+          library::LibraryIndexFile previous;
+          if (previous.open(library::libraryIndexPath())) carried = previous.header().nextFirstSeen;
+        }
+        library::BuildStats stats;
+        const bool ok = library::buildLibraryIndex("/", carried, stats);
+        if (ok) {
+          LOG_INF("LIB", "rebuild: %u books (%u new, %u renamed, %u removed) in %ums",
+                  static_cast<unsigned>(stats.books), static_cast<unsigned>(stats.added),
+                  static_cast<unsigned>(stats.renamed), static_cast<unsigned>(stats.removed),
+                  static_cast<unsigned>(stats.walkMs));
+        }
+        BookActions::drawToast(renderer, ok ? tr(STR_LIBRARY_REBUILD_DONE) : tr(STR_LIBRARY_REBUILD_FAILED));
+        delay(1200);
+        requestUpdate(true);
+        break;
+      }
       case SettingAction::BackupStats:
         startActivityForResult(std::make_unique<BackupStatsActivity>(renderer, mappedInput), resultHandler);
         break;
