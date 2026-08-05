@@ -49,3 +49,7 @@ dist-publish/
 /CMakeLists.txt
 /dependencies.lock
 /sdkconfig.*
+
+# Built firmware images: 6 MB each, reproducible from a tag, and not bit-identical
+# between builds anyway — ESP-IDF stamps each one.
+firmware/
