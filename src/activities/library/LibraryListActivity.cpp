@@ -344,18 +344,21 @@ void LibraryListActivity::drawLetterGrid() {
     const int cy = top + (i / kLetterCols) * cellH;
     const bool present = (lettersPresent & (1u << i)) != 0;
 
+    // The pill and the glyph share one centre, so the letter sits in the middle
+    // of its square rather than in a corner of it.
+    const int pillW = cell - 6;
+    const int pillH = cellH - 6;
+    const int pillX = cx + (cell - pillW) / 2;
     if (i == letterCursor) {
-      renderer.fillRoundedRect(cx + 2, cy, cell - 6, cellH - 6, 4, Color::Black);
+      renderer.fillRoundedRect(pillX, cy, pillW, pillH, 4, Color::Black);
     }
     char label[2] = {static_cast<char>('A' + i), 0};
-    const int tw = renderer.getTextWidth(UI_10_FONT_ID, label);
-    // A letter no book starts with is drawn, not hidden: a gap would make the
-    // grid's shape shift and cost the reader their place in the alphabet.
-    if (present || i == letterCursor) {
-      renderer.drawText(UI_10_FONT_ID, cx + (cell - tw) / 2, cy + 4, label, i != letterCursor);
-    } else {
-      renderer.drawText(SMALL_FONT_ID, cx + (cell - tw) / 2, cy + 6, label, true);
-    }
+    // A letter no book starts with is drawn, not hidden: a gap would shift the
+    // grid's shape and cost the reader their place in the alphabet.
+    const int fontId = (present || i == letterCursor) ? UI_10_FONT_ID : SMALL_FONT_ID;
+    const int tw = renderer.getTextWidth(fontId, label);
+    const int th = renderer.getLineHeight(fontId);
+    renderer.drawText(fontId, pillX + (pillW - tw) / 2, cy + (pillH - th) / 2, label, i != letterCursor);
   }
 }
 
@@ -431,18 +434,12 @@ void LibraryListActivity::loop() {
     if (mappedInput.wasReleased(MappedInputManager::Button::Down)) delta = kLetterCols;
     if (mappedInput.wasReleased(MappedInputManager::Button::Up)) delta = -kLetterCols;
     if (delta != 0) {
-      // Step over letters no book starts with. Landing on one and pressing
-      // Confirm sends the reader to where that letter WOULD be, which is a
-      // correct answer to a question they did not mean to ask. Skipping keeps
-      // every press on the grid meaningful — and if the shelf somehow has no
-      // letters at all, the loop still terminates on the starting cell.
-      const int step = delta > 0 ? 1 : -1;
-      int next = letterCursor;
-      for (int guard = 0; guard < kLetterCount; guard++) {
-        next = (next + step + kLetterCount) % kLetterCount;
-        if (lettersPresent & (1u << next)) break;
-      }
-      letterCursor = next;
+      // Plain movement, including onto letters no book starts with. Skipping them
+      // was tried and reverted: the skip walked one cell at a time, so Down —
+      // which must travel a whole row — moved sideways instead, and the grid
+      // stopped being two-dimensional. An empty letter still jumps to where it
+      // would fall, which is a defensible answer and a far smaller cost.
+      letterCursor = (letterCursor + delta + kLetterCount) % kLetterCount;
       requestUpdate();
     }
     return;
@@ -457,12 +454,6 @@ void LibraryListActivity::loop() {
       // whose every choice would land somewhere arbitrary.
       computeLettersPresent();
       letterCursor = 0;
-      for (int i = 0; i < kLetterCount; i++) {
-        if (lettersPresent & (1u << i)) {
-          letterCursor = i;
-          break;
-        }
-      }
       letterGrid = true;
       requestUpdate();
     }
