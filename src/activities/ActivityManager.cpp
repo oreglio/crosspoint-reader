@@ -20,6 +20,7 @@
 #include "home/AlertActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
+#include "library/LibraryListActivity.h"
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
 #include "home/RecentBooksGridActivity.h"
@@ -340,6 +341,10 @@ void ActivityManager::goToSettings(const bool dismissOnUpSwipe) {
 
 void ActivityManager::goToFileBrowser(std::string path) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
+}
+
+void ActivityManager::goToLibrary() {
+  replaceActivity(std::make_unique<LibraryListActivity>(renderer, mappedInput));
 }
 
 void ActivityManager::goToRecentBooks() {

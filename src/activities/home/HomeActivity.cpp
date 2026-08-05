@@ -51,6 +51,7 @@ constexpr int HOME_BOOK_SWAP_RECENT_COUNT = 2;
 
 enum class HomeMenuAction {
   BrowseFiles,
+  LibraryShelf,
   ContinueReading,
   RecentBooks,
   OpdsBrowser,
@@ -255,6 +256,7 @@ const char* savedItemsLabel(bool hasBookmarks, bool hasClippings) {
 void appendHomeMenuItems(HomeMenuEntries& items, bool hasOpdsServers, bool hasReadingStats, bool hasBookmarks,
                          bool hasClippings) {
   items.push({tr(STR_BROWSE_FILES), Folder, HomeMenuAction::BrowseFiles});
+  items.push({tr(STR_LIBRARY), Library, HomeMenuAction::LibraryShelf});
   items.push({tr(STR_MENU_RECENT_BOOKS), Recent, HomeMenuAction::RecentBooks});
 
   if (hasOpdsServers) {
@@ -279,6 +281,7 @@ HomeMenuEntries buildHomeMenuItems(bool hasOpdsServers, bool hasReadingStats, bo
 
 HomeMenuEntries buildMinimalMenuItems(bool hasOpdsServers, bool hasReadingStats, bool hasBookmarks, bool hasClippings) {
   HomeMenuEntries items;
+  items.push({tr(STR_LIBRARY), Library, HomeMenuAction::LibraryShelf});
   items.push({tr(STR_MENU_RECENT_BOOKS), Recent, HomeMenuAction::RecentBooks});
 
   if (hasOpdsServers) {
@@ -1438,6 +1441,9 @@ void HomeActivity::loop() {
           case HomeMenuAction::BrowseFiles:
             onFileBrowserOpen();
             break;
+          case HomeMenuAction::LibraryShelf:
+            onLibraryOpen();
+            break;
           case HomeMenuAction::RecentBooks:
             onRecentsOpen();
             break;
@@ -1644,6 +1650,9 @@ void HomeActivity::loop() {
     switch (action) {
       case HomeMenuAction::BrowseFiles:
         onFileBrowserOpen();
+        break;
+      case HomeMenuAction::LibraryShelf:
+        onLibraryOpen();
         break;
       case HomeMenuAction::ContinueReading:
         onContinueReading();
@@ -2099,6 +2108,8 @@ void HomeActivity::onSelectBook(const std::string& path) {
 }
 
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
+
+void HomeActivity::onLibraryOpen() { activityManager.goToLibrary(); }
 
 void HomeActivity::onContinueReading() {
   if (recentBooks.empty()) return;
