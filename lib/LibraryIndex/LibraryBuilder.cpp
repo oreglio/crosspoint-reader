@@ -170,6 +170,10 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
   ParsedName parsed = parseFilename(stem);
   bool titleFromBook = false;
   bool authorFromBook = false;
+  // Which of the two metadata paths supplied the author, so the record can say so
+  // rather than claiming the cache for everything.
+  bool authorFromOpf = false;
+  bool opfTooLarge = false;
 
   // A book the reader has already opened carries its own title and author in a
   // cache beside it. Reading that is a small file read; building it is the
@@ -194,6 +198,7 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
     if (!titleFromBook && !authorFromBook) {
       BookMetadata meta;
       const bool read = readBookMetadata(fullPath, meta);
+      opfTooLarge = meta.opfTooLarge;
       if (!read) LOG_DBG("LIBIDX", "no metadata for %s", fullPath.c_str());
       if (read) {
         if (!meta.title.empty()) {
@@ -203,6 +208,7 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
         if (!meta.author.empty()) {
           parsed.author = meta.author;
           authorFromBook = true;
+          authorFromOpf = true;
         }
       }
     }
@@ -212,7 +218,20 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
   // The author may still be absent here. M2 fills it from the book's own
   // metadata; until then the row shows the title alone rather than guessing.
   std::string author = parsed.author;
-  ClixAuthorProvenance provenance = author.empty() ? CLIX_AUTHOR_UNKNOWN : CLIX_AUTHOR_FROM_CACHE;
+  // Was labelled FROM_CACHE for every author, including ones parsed out of a
+  // filename or read from a package document. A provenance that is always the
+  // same value is worse than none: it invites a reader to trust it.
+  // Was FROM_CACHE for every author, including ones guessed from a filename. A
+  // provenance that is always the same value is worse than none: it invites a
+  // reader to trust it.
+  //
+  // A filename-derived author maps to UNKNOWN, which the two spare bits leave no
+  // room to distinguish — and which is honest, because this field separates
+  // sources that can be trusted from a name pulled out of "Title - Author.epub"
+  // by pattern, where the pattern is a guess.
+  ClixAuthorProvenance provenance = authorFromOpf  ? CLIX_AUTHOR_FROM_OPF
+                                    : authorFromBook ? CLIX_AUTHOR_FROM_CACHE
+                                                     : CLIX_AUTHOR_UNKNOWN;
 
   // A parent folder becomes an author only below the top level. Without that
   // gate, a card organised by genre prints "Romans" and "Study" as authors —
@@ -250,7 +269,7 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
   if (entry.titleLen > 0) memcpy(entry.title, shownTitle.data(), entry.titleLen);
   entry.record.foldLen = static_cast<uint8_t>(std::min(folded.size(), CLIX_FOLD_BYTES));
   entry.record.authorKeyLen = static_cast<uint8_t>(std::min(key.size(), CLIX_AUTHOR_KEY_BYTES));
-  entry.record.flags = makeRecordFlags(formatForName(name), provenance, titleFromBook, false);
+  entry.record.flags = makeRecordFlags(formatForName(name), provenance, titleFromBook, opfTooLarge);
   memcpy(entry.record.fold, folded.data(), entry.record.foldLen);
   memcpy(entry.record.authorKey, key.data(), entry.record.authorKeyLen);
   memcpy(entry.name, name.data(), entry.record.nameLen);
