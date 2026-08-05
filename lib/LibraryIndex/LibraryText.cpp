@@ -436,4 +436,35 @@ bool matchesQuery(const std::string_view haystack, const std::string_view needle
   return true;
 }
 
+std::string surnameKey(const std::string_view displayAuthor) {
+  const std::string folded = fold(displayAuthor);
+  if (folded.empty()) return {};
+
+  size_t lastStart = std::string::npos;
+  size_t lastEnd = folded.size();
+  size_t i = folded.size();
+  while (i > 0) {
+    i--;
+    if (folded[i] != ' ') {
+      if (lastStart == std::string::npos) lastEnd = i + 1;
+      lastStart = i;
+    } else if (lastStart != std::string::npos) {
+      break;
+    }
+  }
+  if (lastStart == std::string::npos) return {};
+
+  std::string key;
+  key.reserve(folded.size() + 1);
+  key.append(folded, lastStart, lastEnd - lastStart);
+  // The given names follow, so two people sharing a surname stay in a stable,
+  // readable order rather than whichever the disk walk happened to produce.
+  if (lastStart > 0) {
+    key.push_back(' ');
+    key.append(folded, 0, lastStart);
+    while (!key.empty() && key.back() == ' ') key.pop_back();
+  }
+  return key;
+}
+
 }  // namespace library

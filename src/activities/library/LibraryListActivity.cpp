@@ -287,7 +287,14 @@ char LibraryListActivity::letterOf(const library::ClixRecord& record) {
   // display letter there gives M, the scan meets it early, and every letter from
   // C onward stops on that one row.
   if (sortOrder == library::SortOrder::AuthorAsc) {
-    return record.authorKeyLen == 0 ? '\0' : record.authorKey[0];
+    // The shelf is ordered by surname now, so the jump reads the same key. It is
+    // derived from the displayed name, which after harmonisation is one string
+    // per author — so the letters ascend down the list, which is what makes the
+    // scan valid.
+    std::string author;
+    if (!index.readAuthor(record, author)) return '\0';
+    const std::string key = library::surnameKey(author);
+    return key.empty() ? '\0' : key[0];
   }
   return record.foldLen == 0 ? '\0' : record.fold[0];
 }

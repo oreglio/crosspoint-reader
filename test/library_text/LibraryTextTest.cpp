@@ -297,3 +297,34 @@ TEST(CleanPersonName, MultipleCommasAreLeftAlone) {
 TEST(CleanPersonName, DanglingCommaIsNotAnInversion) {
   EXPECT_EQ(library::cleanPersonName("Tintera,"), "Tintera");
 }
+
+// --- surnameKey --------------------------------------------------------------
+
+TEST(SurnameKey, SurnameLeadsThenGivenNames) {
+  EXPECT_EQ(library::surnameKey("Blake Crouch"), "crouch blake");
+  EXPECT_EQ(library::surnameKey("Alex Michaelides"), "michaelides alex");
+}
+
+TEST(SurnameKey, SingleWordKeysOnItself) {
+  EXPECT_EQ(library::surnameKey("Voltaire"), "voltaire");
+}
+
+TEST(SurnameKey, AccentsAreFolded) {
+  EXPECT_EQ(library::surnameKey("Paul Éluard"), "eluard paul");
+}
+
+TEST(SurnameKey, ThreeWordNamesTakeTheLast) {
+  EXPECT_EQ(library::surnameKey("John C. Lennox"), "lennox john c");
+}
+
+TEST(SurnameKey, EmptyStaysEmpty) {
+  EXPECT_EQ(library::surnameKey(""), "");
+}
+
+// The whole point of keying off the DISPLAY name: the spelling vote has already
+// made every book by one author show one name, so a group cannot land in two
+// places even though "Ian Manook" and "Manook Ian" both exist in the wild.
+TEST(SurnameKey, HarmonisedDisplayNameKeepsAGroupTogether) {
+  EXPECT_EQ(library::surnameKey("Ian Manook"), library::surnameKey("Ian Manook"));
+  EXPECT_NE(library::surnameKey("Ian Manook"), library::surnameKey("Manook Ian"));
+}

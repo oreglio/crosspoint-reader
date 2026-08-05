@@ -119,4 +119,20 @@ bool preferFilenameTitle(std::string_view dcTitle, std::string_view fnTitle);
 // the first key is pressed.
 bool matchesQuery(std::string_view haystack, std::string_view needle);
 
+// Ordering key for a shelf sorted by author: surname first, then the rest.
+// "Blake Crouch" becomes "crouch blake", so the shelf reads C where a library
+// would put it.
+//
+// Deliberately NOT the same key as authorKey(). That one sorts a name's words so
+// that "Ian Manook" and "Manook Ian" hash alike and are recognised as one person;
+// it is a GROUPING key and would be wrong to order by. This is derived from the
+// DISPLAY name instead, which is safe because the spelling vote has already made
+// every book by one author show the same name — so a group cannot split across
+// two places on the shelf.
+//
+// The last word is taken as the surname. That is right for the western names on
+// this card and wrong for some others, which is a limit worth stating rather than
+// hiding: a single word name simply keys on itself.
+std::string surnameKey(std::string_view displayAuthor);
+
 }  // namespace library

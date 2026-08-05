@@ -10,6 +10,8 @@
 #include <cstring>
 #include <vector>
 
+#include <cstddef>
+
 #include <Epub.h>
 #include <FsHelpers.h>
 
@@ -496,6 +498,43 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
       }
       runStart = runEnd;
     }
+  }
+
+  // --- re-sort by surname --------------------------------------------------
+  //
+  // The pass above had to run in authorKey order, because that is what puts one
+  // author's books in a single run for the spelling vote. But authorKey sorts a
+  // name's WORDS — the property that lets "Ian Manook" and "Manook Ian" be
+  // recognised as one person — so ordering by it files Blake Crouch under B.
+  //
+  // Now that every book carries its canonical display name, the shelf is ordered
+  // by surname, as a library would. Keying off the canonical name rather than the
+  // raw one is what keeps a group whole: all of a group's books resolve to the
+  // same string, so they cannot split across two places.
+  if (authorSort && authorRankOf && canonicalFrom && n > 1) {
+    for (uint16_t i = 0; i < n; i++) {
+      const uint16_t src = canonicalFrom[i];
+      uint8_t authorLen = 0;
+      char author[STAGE_AUTHOR_BYTES] = {};
+      stage.seekSet(static_cast<uint64_t>(src) * STAGE_STRIDE + offsetof(StagedEntry, authorLen));
+      stage.read(reinterpret_cast<uint8_t*>(&authorLen), sizeof(authorLen));
+      if (authorLen > 0) {
+        stage.seekSet(static_cast<uint64_t>(src) * STAGE_STRIDE + offsetof(StagedEntry, author));
+        stage.read(reinterpret_cast<uint8_t*>(author), std::min<size_t>(authorLen, sizeof(author)));
+      }
+
+      const std::string key = authorLen == 0 ? std::string() : surnameKey(std::string_view(author, authorLen));
+      if (key.empty()) {
+        // 0xFF outranks every folded byte, so unknown authors stay at the end.
+        memset(authorSort[i].key, 0xFF, sizeof(authorSort[i].key));
+      } else {
+        memset(authorSort[i].key, 0, sizeof(authorSort[i].key));
+        memcpy(authorSort[i].key, key.data(), std::min(key.size(), sizeof(authorSort[i].key)));
+      }
+      authorSort[i].ordinal = i;
+    }
+    std::sort(authorSort.get(), authorSort.get() + n, sortKeyLess);
+    for (uint16_t k = 0; k < n; k++) authorRankOf[authorSort[k].ordinal] = k;
   }
 
   // --- arrival order -------------------------------------------------------
