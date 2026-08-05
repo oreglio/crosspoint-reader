@@ -24,7 +24,10 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback, void*, s
 
 namespace {
 #ifndef CROSSINK_OTA_RELEASE_URL
-#define CROSSINK_OTA_RELEASE_URL "https://api.github.com/repos/uxjulia/CrossInk/releases/latest"
+// This fork's own releases. Left pointing at upstream, an update would fetch
+// CrossInk's build and overwrite the Library with a firmware that has never heard
+// of it — silently, since the OTA check gives no sign of which repository it asked.
+#define CROSSINK_OTA_RELEASE_URL "https://api.github.com/repos/oreglio/CrossInkLibrary/releases/latest"
 #endif
 
 constexpr char latestReleaseUrl[] = CROSSINK_OTA_RELEASE_URL;
