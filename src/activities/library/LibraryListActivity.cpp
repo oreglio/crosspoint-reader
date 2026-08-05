@@ -346,8 +346,12 @@ void LibraryListActivity::drawLetterGrid() {
   // Both modes shown, not just the active one. Printing only the current choice
   // hides the fact that there IS a choice — the same reason the sort strip lists
   // every mode. On a panel that refreshes whole, the second label is free.
-  const char* labels[2] = {tr(STR_LIBRARY_JUMP_SURNAME), tr(STR_LIBRARY_JUMP_GIVEN)};
-  const int active = jumpByGivenName ? 1 : 0;
+  // First name before last, because the words themselves carry that order and
+  // reading them the other way round jars. "Last name" rather than "surname":
+  // parallel vocabulary, and the plainer of the two for anyone reading English as
+  // a second language.
+  const char* labels[2] = {tr(STR_LIBRARY_JUMP_GIVEN), tr(STR_LIBRARY_JUMP_SURNAME)};
+  const int active = jumpByGivenName ? 0 : 1;
   const int gap = 20;
   int labelW[2];
   for (int i = 0; i < 2; i++) labelW[i] = renderer.getTextWidth(SMALL_FONT_ID, labels[i]);
