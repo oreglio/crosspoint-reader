@@ -51,6 +51,7 @@ struct BuildStats {
   uint16_t added = 0;      // matched nothing, not even by size
   uint16_t renamed = 0;    // matched a leftover entry by size alone
   uint16_t removed = 0;    // previous entry no book claimed
+  uint16_t enriched = 0;   // took its title or author from the book rather than the filename
   bool ranksDegraded = false;
   bool booksAtRoot = false;
 };
@@ -64,8 +65,14 @@ using BuildProgressFn = bool (*)(uint16_t booksSoFar, const char* currentPath, v
 // Walk `rootPath`, write `/.crosspoint/library.idx`, and report what happened.
 // `previousNextFirstSeen` carries the monotonic counter across rebuilds so
 // "recently added" ordering survives; pass 0 on a first build.
+// `readMetadata` makes the walk prefer the title and author held INSIDE each
+// book over the ones its filename suggests. It only reads caches that already
+// exist — a book the reader has never opened keeps its filename — because
+// building that cache is the reader's own full indexing pass and would take
+// minutes across a library.
 bool buildLibraryIndex(const char* rootPath, uint16_t previousNextFirstSeen, BuildStats& stats,
-                       BuildProgressFn onProgress = nullptr, void* progressCtx = nullptr);
+                       bool readMetadata = false, BuildProgressFn onProgress = nullptr,
+                       void* progressCtx = nullptr);
 
 // Paths, exposed so the activity and the tests agree on them.
 const char* libraryIndexPath();

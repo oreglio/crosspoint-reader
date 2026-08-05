@@ -10,6 +10,9 @@
 #include <cstring>
 #include <vector>
 
+#include <Epub.h>
+#include <FsHelpers.h>
+
 #include "LibraryIndexFile.h"
 #include "LibraryText.h"
 
@@ -119,6 +122,8 @@ struct WalkState {
   uint16_t unreadableSkipped = 0;
   bool booksAtRoot = false;
   bool aborted = false;
+  bool readMetadata = false;
+  uint16_t enriched = 0;
   HalFile folders;  // folder section, staged separately then copied in
   BuildProgressFn onProgress = nullptr;
   void* progressCtx = nullptr;
@@ -140,10 +145,30 @@ int findPrior(WalkState& st, const uint32_t nameHash, const uint32_t size) {
 }
 
 void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize, const uint16_t folderId,
-                 const std::string& parentBasename, const int depth) {
+                 const std::string& parentBasename, const int depth, const std::string& fullPath) {
   StagedEntry entry{};
   const std::string stem = stemOf(name);
-  const ParsedName parsed = parseFilename(stem);
+  ParsedName parsed = parseFilename(stem);
+  bool titleFromBook = false;
+
+  // A book the reader has already opened carries its own title and author in a
+  // cache beside it. Reading that is a small file read; building it is the
+  // reader's whole indexing pass, so buildIfMissing stays false and a book never
+  // opened simply keeps the name it has on disk.
+  if (st.readMetadata && FsHelpers::hasEpubExtension(name)) {
+    Epub epub(fullPath, CACHE_DIR);
+    if (epub.load(false, true, Epub::XLocationLoadMode::Skip)) {
+      if (!epub.getTitle().empty()) {
+        parsed.title = epub.getTitle();
+        titleFromBook = true;
+      }
+      if (!epub.getAuthor().empty()) {
+        parsed.author = epub.getAuthor();
+        titleFromBook = true;
+      }
+    }
+  }
+  if (titleFromBook) st.enriched++;
 
   // The author may still be absent here. M2 fills it from the book's own
   // metadata; until then the row shows the title alone rather than guessing.
@@ -181,7 +206,7 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
   entry.record.nameLen = static_cast<uint8_t>(std::min<size_t>(name.size(), STAGE_NAME_BYTES));
   entry.record.foldLen = static_cast<uint8_t>(std::min(folded.size(), CLIX_FOLD_BYTES));
   entry.record.authorKeyLen = static_cast<uint8_t>(std::min(key.size(), CLIX_AUTHOR_KEY_BYTES));
-  entry.record.flags = makeRecordFlags(formatForName(name), provenance, false, false);
+  entry.record.flags = makeRecordFlags(formatForName(name), provenance, titleFromBook, false);
   memcpy(entry.record.fold, folded.data(), entry.record.foldLen);
   memcpy(entry.record.authorKey, key.data(), entry.record.authorKeyLen);
   memcpy(entry.name, name.data(), entry.record.nameLen);
@@ -259,7 +284,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
       folderEmitted = true;
       if (depth == 0) st.booksAtRoot = true;
     }
-    stageRecord(st, name, size, myFolderId, basename, depth);
+    stageRecord(st, name, size, myFolderId, basename, depth, path + "/" + name);
   }
   dir.close();
 
@@ -544,7 +569,7 @@ const char* libraryIndexPath() { return INDEX_PATH; }
 const char* libraryStagePath() { return STAGE_PATH; }
 
 bool buildLibraryIndex(const char* rootPath, const uint16_t previousNextFirstSeen, BuildStats& stats,
-                       const BuildProgressFn onProgress, void* progressCtx) {
+                       const bool readMetadata, const BuildProgressFn onProgress, void* progressCtx) {
   const uint32_t startMs = millis();
   stats = BuildStats{};
 
@@ -592,6 +617,7 @@ bool buildLibraryIndex(const char* rootPath, const uint16_t previousNextFirstSee
   st.nextFirstSeen = previousNextFirstSeen;
   st.prior = priorList.get();
   st.priorCount = priorList ? priorCount : 0;
+  st.readMetadata = readMetadata;
   st.onProgress = onProgress;
   st.progressCtx = progressCtx;
 
@@ -668,6 +694,7 @@ bool buildLibraryIndex(const char* rootPath, const uint16_t previousNextFirstSee
   stats.unreadableSkipped = st.unreadableSkipped;
   stats.booksAtRoot = st.booksAtRoot;
   stats.unchanged = st.reused;
+  stats.enriched = st.enriched;
 
   // --- title order -----------------------------------------------------------
   // Read the staged fold prefixes back and sort ordinals. Only 14 bytes per book

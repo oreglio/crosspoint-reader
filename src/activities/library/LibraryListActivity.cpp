@@ -73,7 +73,7 @@ bool LibraryListActivity::rebuildIndex() {
     if (previous.open(library::libraryIndexPath())) carriedFirstSeen = previous.header().nextFirstSeen;
   }
   library::BuildStats stats;
-  const bool ok = library::buildLibraryIndex("/", carriedFirstSeen, stats);
+  const bool ok = library::buildLibraryIndex("/", carriedFirstSeen, stats, SETTINGS.libraryUseMetadata != 0);
   if (ok) {
     LOG_INF("LIB", "reconciled: %u unchanged, %u added, %u renamed, %u removed (%u dup, %u unreadable)",
             static_cast<unsigned>(stats.unchanged), static_cast<unsigned>(stats.added),

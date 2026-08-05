@@ -951,12 +951,12 @@ void SettingsActivity::toggleCurrentSetting() {
           if (previous.open(library::libraryIndexPath())) carried = previous.header().nextFirstSeen;
         }
         library::BuildStats stats;
-        const bool ok = library::buildLibraryIndex("/", carried, stats);
+        const bool ok = library::buildLibraryIndex("/", carried, stats, SETTINGS.libraryUseMetadata != 0);
         if (ok) {
-          LOG_INF("LIB", "rebuild: %u books (%u new, %u renamed, %u removed) in %ums",
+          LOG_INF("LIB", "rebuild: %u books (%u new, %u renamed, %u removed, %u enriched) in %ums",
                   static_cast<unsigned>(stats.books), static_cast<unsigned>(stats.added),
                   static_cast<unsigned>(stats.renamed), static_cast<unsigned>(stats.removed),
-                  static_cast<unsigned>(stats.walkMs));
+                  static_cast<unsigned>(stats.enriched), static_cast<unsigned>(stats.walkMs));
         }
         BookActions::drawToast(renderer, ok ? tr(STR_LIBRARY_REBUILD_DONE) : tr(STR_LIBRARY_REBUILD_FAILED));
         delay(1200);
