@@ -216,3 +216,62 @@ TEST(LibraryMetadataGuard, NeverAppliedToTheTitleSegment) {
   EXPECT_EQ(parseFilename("1984").title, "1984");
   EXPECT_EQ(parseFilename("1984 -- Orwell, George").title, "1984");
 }
+
+// --- matchesQuery ------------------------------------------------------------
+//
+// Cases taken from the maintainer's own 60-book card, because the accented and
+// apostrophised titles there are exactly what a naive matcher gets wrong.
+
+TEST(MatchesQuery, EmptyQueryMatchesEverything) {
+  EXPECT_TRUE(library::matchesQuery(library::fold("Dark Matter"), ""));
+}
+
+TEST(MatchesQuery, WholeWordMatches) {
+  EXPECT_TRUE(library::matchesQuery(library::fold("Dark Matter"), library::fold("matter")));
+}
+
+TEST(MatchesQuery, PrefixOfOneWordIsEnough) {
+  EXPECT_TRUE(library::matchesQuery(library::fold("Dark Matter"), library::fold("mat")));
+}
+
+// The point of the whole design: six keypresses instead of ten, on a panel where
+// each one costs a full repaint.
+TEST(MatchesQuery, EveryWordMayBeAbbreviated) {
+  EXPECT_TRUE(library::matchesQuery(library::fold("Dark Matter"), library::fold("dar mat")));
+}
+
+TEST(MatchesQuery, WordsNeedNotBeInOrder) {
+  EXPECT_TRUE(library::matchesQuery(library::fold("Dark Matter"), library::fold("matter dark")));
+}
+
+TEST(MatchesQuery, EveryWordMustHit) {
+  EXPECT_FALSE(library::matchesQuery(library::fold("Dark Matter"), library::fold("dark blue")));
+}
+
+// A prefix, not a substring: "atter" is inside "matter" but starts no word.
+TEST(MatchesQuery, MidWordDoesNotMatch) {
+  EXPECT_FALSE(library::matchesQuery(library::fold("Dark Matter"), library::fold("atter")));
+}
+
+TEST(MatchesQuery, AccentsAreIgnoredOnBothSides) {
+  EXPECT_TRUE(library::matchesQuery(library::fold("L'inconsolé"), library::fold("inconsole")));
+  EXPECT_TRUE(library::matchesQuery(library::fold("L'inconsole"), library::fold("inconsolé")));
+  EXPECT_TRUE(library::matchesQuery(library::fold("Éluard"), library::fold("eluard")));
+}
+
+TEST(MatchesQuery, ApostropheSplitsWords) {
+  EXPECT_TRUE(library::matchesQuery(library::fold("Le couple d'à côté"), library::fold("cote")));
+}
+
+TEST(MatchesQuery, CaseIsIgnored) {
+  EXPECT_TRUE(library::matchesQuery(library::fold("The Silent Patient"), library::fold("SILENT")));
+}
+
+// The stored fold is capped at 96 bytes, so a query word beyond that cannot be
+// found. Asserted rather than left implicit: it is the one place a search can
+// honestly fail to find a book that is really there.
+TEST(MatchesQuery, LongTitlesAreOnlySearchableWithinTheStoredFold) {
+  const std::string longTitle(120, 'a');
+  const std::string folded = library::fold(longTitle + " needle").substr(0, 96);
+  EXPECT_FALSE(library::matchesQuery(folded, library::fold("needle")));
+}

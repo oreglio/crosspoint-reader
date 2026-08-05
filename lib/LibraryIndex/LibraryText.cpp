@@ -376,4 +376,43 @@ bool preferFilenameTitle(const std::string_view dcTitle, const std::string_view 
   return !isStopTail(extra[count - 1]);
 }
 
+
+// fold() keeps the apostrophe, which is right for sorting — "L'inconsole" belongs
+// under L. For searching it is wrong: in French the word worth typing is the one
+// AFTER the apostrophe, so "inconsole" must reach "L'inconsole" and "cote" must
+// reach "d'a cote". Treating it as a word boundary here leaves the sort untouched.
+bool isWordBreak(const char c) { return c == ' ' || c == '\''; }
+
+bool matchesQuery(const std::string_view haystack, const std::string_view needle) {
+  if (needle.empty()) return true;
+
+  // Walk the query one word at a time, and for each one scan the book's words for
+  // a prefix hit. Both strings are at most a couple of hundred bytes and this
+  // runs once per book per keypress, so a plain scan is cheaper than anything
+  // that would need building first.
+  size_t qs = 0;
+  while (qs < needle.size()) {
+    while (qs < needle.size() && isWordBreak(needle[qs])) qs++;
+    if (qs >= needle.size()) break;
+    size_t qe = qs;
+    while (qe < needle.size() && !isWordBreak(needle[qe])) qe++;
+    const std::string_view word = needle.substr(qs, qe - qs);
+
+    bool found = false;
+    size_t hs = 0;
+    while (hs < haystack.size() && !found) {
+      while (hs < haystack.size() && isWordBreak(haystack[hs])) hs++;
+      if (hs >= haystack.size()) break;
+      if (haystack.compare(hs, word.size(), word) == 0) {
+        found = true;
+        break;
+      }
+      while (hs < haystack.size() && !isWordBreak(haystack[hs])) hs++;
+    }
+    if (!found) return false;
+    qs = qe;
+  }
+  return true;
+}
+
 }  // namespace library

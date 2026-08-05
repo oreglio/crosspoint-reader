@@ -102,4 +102,21 @@ std::string authorKey(std::string_view author);
 // mid-phrase truncation ("...a new science of") from replacing a complete title.
 bool preferFilenameTitle(std::string_view dcTitle, std::string_view fnTitle);
 
+// Does a book match what has been typed so far?
+//
+// Both sides are already folded — accents stripped, case dropped, punctuation
+// turned to spaces — so "inconsole" finds "L'inconsolé" and "eluard" finds
+// "Éluard". `haystack` is the record's stored fold; `needle` is the query put
+// through the same fold.
+//
+// Every query word must PREFIX some word of the book. That is the rule that fits
+// the hardware: with no partial refresh, each keypress costs a full ~185 ms panel
+// repaint, so the reader wants to stop typing as early as possible. "dar mat"
+// — six keys — finds "Dark Matter", where a plain substring test would demand the
+// whole of one word and give nothing for the effort of a second.
+//
+// An empty query matches everything, so the list is the unfiltered shelf before
+// the first key is pressed.
+bool matchesQuery(std::string_view haystack, std::string_view needle);
+
 }  // namespace library
