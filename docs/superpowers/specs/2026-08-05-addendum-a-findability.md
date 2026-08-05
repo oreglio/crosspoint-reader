@@ -546,3 +546,63 @@ Additions to §15, all decided against on measurement:
 - **Fuzzy / edit-distance matching** for the `Pachinko` / `Min Lee Jin-Pachonko` typo pair and the `Dans son silence` / `The Silent Patient` translation pair. Two cases in 69; the human resolves them, and a title-sorted flat list already puts the first pair adjacent, which is the delete-the-copy affordance.
 - **Non-Latin folding.** The damage is baked in at build time and metadata-first makes it marginally worse (`dc:title` can be in a script the filename transliterated). Recorded so a future fix knows it must bump `foldVersion` and rebuild.
 - **Cover thumbnails.** Separate spec. Recognition-by-cover is the strongest browse mechanism for physical books and nearly worthless here — these are exports of books the reader has never seen as objects.
+---
+
+## State at 2026-08-05, and what is not yet built
+
+Everything below M2 is committed on `feat/library` and verified: 39 host tests,
+16 format tests, simulator builds, smoke test passes. Nothing has been installed
+on a device.
+
+### Built
+
+Index build with reconciliation (renames keep their arrival number), metadata
+enrichment from the book's own cache and from its package document, a shelf with
+wrapped titles and author groups, sorting by title/author/recent with a focusable
+strip, search over titles and authors, and an A-Z jump grid.
+
+### Decided but not built
+
+**A first-name / surname toggle above the A-Z grid.** Chosen over guessing which
+word is the surname, because no reliable rule exists — "Qiu Xiaolong" puts the
+surname first and nothing in the string says so. The reader says which word they
+mean.
+
+The non-obvious constraint: the existing jump scans for the first row AT OR PAST
+the chosen letter, which is only valid while the letters ascend down the list.
+Ordered by surname and jumping by first name, they do not. First-name mode
+therefore needs an EXACT-match scan for the first row whose given name starts with
+the letter — correct in any order, at the cost of landing on the first such book
+in shelf order rather than at the head of a block. The dimmed set is per mode: the
+letters present as first names are not those present as surnames.
+
+**Disabling keyboard keys that lead to no result**, the way a car GPS does. Worth
+more here than in a car: every keypress costs a full ~185 ms panel repaint, so a
+dead-end key charges the reader twice.
+
+Two routes. Adding an optional filter to KeyboardEntryActivity is about twenty
+lines but touches a file shared with upstream, whose rebase surface is deliberately
+kept near 170 lines; an optional parameter keeps any conflict trivial. Writing a
+second keyboard inside the Library shares nothing but duplicates an existing one
+and invites the two to diverge. The filter is the recommendation.
+
+Computing the allowed set is not a plain trie walk, because the match rule is
+"every typed word prefixes some word of the book, in any order". For each book
+still matching, take the character following the partial word being typed. One
+pass over the shelf, not twenty-six.
+
+### Known defects
+
+- One book of sixty yields no metadata; its package document is not read. Its
+  title stays the filename. Worth a look at whether it trips a size gate or is one
+  of the archives with a corrupt deflate stream.
+- "Qiu Xiaolong" files under X. The surname is taken as the last word, which is
+  right for the western names here and wrong for surname-first conventions. The
+  toggle above is the mitigation, not a fix.
+- Search cannot find a word past the 96-byte stored fold. Asserted in the test
+  suite so it fails visibly rather than quietly.
+
+### Before installing on hardware
+
+`CROSSINK_OTA_RELEASE_URL` (`src/network/OtaUpdater.cpp:26`) still points at
+upstream. Repoint it first, or an update will overwrite this fork.
