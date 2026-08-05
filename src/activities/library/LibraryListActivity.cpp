@@ -387,12 +387,21 @@ void LibraryListActivity::drawLetterGrid() {
       renderer.fillRoundedRect(pillX, cy, pillW, pillH, 4, Color::Black);
     }
     char label[2] = {static_cast<char>('A' + i), 0};
-    // A letter no book starts with is drawn, not hidden: a gap would shift the
+    // One size for every letter. A letter no book starts with used to be drawn in
+    // a smaller font, there being no grey on a 1-bit panel — but that reads as
+    // inconsistent typography rather than as unavailable. It is greyed instead by
+    // dithering white over the drawn glyph, which turns off every other pixel and
+    // is how 1-bit interfaces have always made grey.
+    const int tw = renderer.getTextWidth(UI_10_FONT_ID, label);
+    const int th = renderer.getLineHeight(UI_10_FONT_ID);
+    const int tx = pillX + (pillW - tw) / 2;
+    const int ty = cy + (pillH - th) / 2;
+    renderer.drawText(UI_10_FONT_ID, tx, ty, label, i != letterCursor);
+    // A letter is still DRAWN when no book has it: removing it would shift the
     // grid's shape and cost the reader their place in the alphabet.
-    const int fontId = (present || i == letterCursor) ? UI_10_FONT_ID : SMALL_FONT_ID;
-    const int tw = renderer.getTextWidth(fontId, label);
-    const int th = renderer.getLineHeight(fontId);
-    renderer.drawText(fontId, pillX + (pillW - tw) / 2, cy + (pillH - th) / 2, label, i != letterCursor);
+    if (!present && i != letterCursor) {
+      renderer.fillRectDither(tx, ty, tw, th, Color::White);
+    }
   }
 }
 
