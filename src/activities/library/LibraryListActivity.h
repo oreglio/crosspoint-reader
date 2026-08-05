@@ -19,8 +19,15 @@
 // Rows are built only for the visible window, so nothing proportional to the
 // library is held: the index streams from SD and the screen keeps at most a
 // page of strings.
-// Left and right inset of the dotted row rule, in pixels.
-inline constexpr int LIBRARY_SEPARATOR_INSET = 12;
+// Row layout. Rows are drawn by hand rather than through fui::list because that
+// widget caps the label at one line whenever a subtitle is present
+// (components/lists/list.h:445, :449), which makes a wrapped title and an
+// aligned author column mutually exclusive. This screen needs both.
+inline constexpr int LIBRARY_TITLE_LINES = 2;
+inline constexpr int LIBRARY_ICON_SIZE = 24;
+inline constexpr int LIBRARY_ICON_GAP = 10;
+inline constexpr int LIBRARY_SIDE_PADDING = 12;
+inline constexpr int LIBRARY_ROW_PADDING = 10;
 
 class LibraryListActivity final : public Activity {
  public:
@@ -33,24 +40,23 @@ class LibraryListActivity final : public Activity {
 
  private:
   using UiApp = freeink::ui::FreeInkApp<20, 4>;
-  static constexpr freeink::ui::ActionId ACTION_ROW = 1;
-
   // Text for one visible row, owned for the duration of a render.
   struct RowText {
     std::string title;
     std::string author;
   };
 
-  static void listScreen(UiApp::ScreenType& screen, void* user);
-  static void onRowEvent(const freeink::ui::ActionEvent& event, void* user);
-  void buildListScreen(UiApp::ScreenType& screen);
 
   bool openIndex();
   // Walk the card and write a fresh index. Blocking, with a popup: at ~70 books
   // it is well under a second, and it only runs when the index is missing or the
   // user asks.
   bool rebuildIndex();
-  void drawRowSeparators();
+  void measureRows();
+  int rowHeightFor(int titleLines, bool hasAuthor) const;
+  bool rowTextFor(int entry, std::string& title, std::string& author);
+  void drawRows();
+  void drawPositionReadout();
   void openSelectedBook();
   void cycleSortOrder();
   const char* sortOrderLabel() const;
@@ -66,9 +72,10 @@ class LibraryListActivity final : public Activity {
   int visibleRows = 1;
   // Row geometry captured while building the screen, so the separators drawn
   // afterwards land exactly on the widget's own row boundaries.
-  int lastListTop = 0;
-  int lastRowStep = 0;
-  bool uiReady = false;
+  int listTop = 0;
+  int listHeight = 0;
+  int titleLineH = 0;
+  int authorLineH = 0;
   bool indexReady = false;
   // Set when the walk finished but the sort did not, so the screen can say the
   // order is discovery order rather than silently showing a wrong one.

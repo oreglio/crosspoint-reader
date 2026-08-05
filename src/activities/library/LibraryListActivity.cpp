@@ -11,6 +11,7 @@
 #include "components/TouchHeaderBackButton.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
+#include "components/icons/listIcons.h"
 #include "components/UiAppHelpers.h"
 
 namespace fui = freeink::ui;
@@ -34,10 +35,7 @@ void LibraryListActivity::onEnter() {
   selectedIndex = 0;
   topIndex = 0;
   visibleRows = 1;
-  uiReady = false;
   app.setTheme(uiThemeTokens(uiTarget));
-  app.on(ACTION_ROW, &LibraryListActivity::onRowEvent, this);
-  app.setScreen(&LibraryListActivity::listScreen, this);
 
   // Optimistic open: if an index exists, paint from it immediately and let the
   // user decide when to refresh. Only a missing or unreadable index forces the
@@ -80,14 +78,6 @@ bool LibraryListActivity::rebuildIndex() {
             static_cast<unsigned>(stats.duplicatesDropped), static_cast<unsigned>(stats.unreadableSkipped));
   }
   return ok;
-}
-
-void LibraryListActivity::onRowEvent(const fui::ActionEvent& event, void* user) {
-  auto* self = static_cast<LibraryListActivity*>(user);
-  if (event.value < 0 || event.value >= static_cast<int16_t>(self->index.bookCount())) return;
-  self->selectedIndex = event.value;
-  self->app.clearTapFlash();
-  self->openSelectedBook();
 }
 
 void LibraryListActivity::openSelectedBook() {
@@ -141,84 +131,44 @@ const char* LibraryListActivity::sortOrderLabel() const {
   return "";
 }
 
-void LibraryListActivity::listScreen(UiApp::ScreenType& screen, void* user) {
-  static_cast<LibraryListActivity*>(user)->buildListScreen(screen);
+// Row geometry, computed from the live renderer so it follows the UI font-size
+// setting. Two title lines plus one author line, uniform for every row: uniform
+// is what keeps the author at the same x and y on every row, which is the whole
+// reason this screen exists.
+// Height of one row, given how many title lines it actually needs. Rows are
+// variable: reserving a second title line for a one-line title leaves a hole
+// between the title and its own author, which reads as a layout bug.
+//
+// The author still sits at a fixed LEFT edge on every row — that is the column
+// the eye sweeps. Its vertical position follows its title, which is what makes
+// the pair read as one object.
+int LibraryListActivity::rowHeightFor(const int titleLines, const bool hasAuthor) const {
+  return titleLineH * titleLines + (hasAuthor ? authorLineH : 0) + LIBRARY_ROW_PADDING;
 }
 
-void LibraryListActivity::buildListScreen(UiApp::ScreenType& screen) {
+void LibraryListActivity::measureRows() {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  screen.setContentMargin(
-      fui::Insets{static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput) +
-                                       metrics.verticalSpacing),
-                  0, static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
+  titleLineH = renderer.getLineHeight(UI_10_FONT_ID);
+  authorLineH = renderer.getLineHeight(SMALL_FONT_ID);
+  listTop = metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput) + metrics.verticalSpacing;
+  listHeight = renderer.getScreenHeight() - metrics.buttonHintsHeight - metrics.verticalSpacing - listTop;
+}
 
-  const int count = static_cast<int>(index.bookCount());
-  fui::ListProps props;
-  props.selectedIndex = static_cast<int16_t>(selectedIndex);
-  props.action = ACTION_ROW;
-  props.inputMask = fui::InputTouch;
-  props.labelText = screen.theme().bodyText;
-  // One line for the title, one for the author, always. A wrapped title would
-  // push the author column out of alignment, which is the one property this
-  // screen exists to provide; the renderer ellipsises on measured width instead.
-  // One line, and it has to stay one line. FreeInkUI sizes the label band as
-  // exactly lineHeight(labelFont) whenever a subtitle is present
-  // (components/lists/list.h:269-279), so a second title line is drawn outside
-  // its band and lands on top of the author. A wrapped title and a fixed author
-  // column are mutually exclusive in this widget; the column wins, because it is
-  // the thing that makes the list scannable. Long titles ellipsise on measured
-  // width, which stays correct at every theme and UI scale.
-  // The author gets its own, visibly smaller style. With both lines at the same
-  // weight the rows read as one undifferentiated block and it stops being
-  // obvious which line is the title — the separation is what makes the column
-  // scannable, which is the entire point of the two-slot row.
-  props.subtitleText = screen.theme().smallText;
-  props.subtitleText.maxLines = 1;
-  // Remember the geometry so render() can rule between rows: the list widget has
-  // no separator of its own, and reproducing its layout after the fact is the
-  // only way to add one without editing shared SDK code.
-  lastListTop = screen.body().y;
-  lastRowStep = 0;  // filled in below, once configureUiList has sized the row
-  const auto rows = configureUiList(props, screen.theme(), screen.body(), UiListRowType::WithSubtitle);
-  visibleRows = rows > 0 ? rows : 1;
-  lastRowStep = props.rowHeight + props.rowGap;
-  topIndex = scrollListBy(topIndex, 0, visibleRows, count);
-
-  // Materialise only the visible window. Titles and authors are derived here
-  // rather than stored, so the index keeps one copy of each name.
-  const int drawCount = std::min(visibleRows, count - topIndex);
-  rowText.assign(drawCount <= 0 ? 0 : static_cast<size_t>(drawCount), RowText{});
-  uiItems.clear();
-  uiItems.reserve(rowText.size());
-
-  for (int i = 0; i < drawCount; i++) {
-    const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(topIndex + i));
-    library::ClixRecord record{};
-    std::string name;
-    if (ordinal != 0xFFFF && index.readRecord(ordinal, record) && index.readName(record, name)) {
-      const library::ParsedName parsed = library::parseFilename(stemOf(name));
-      rowText[i].title = parsed.title;
-      rowText[i].author = library::cleanPersonName(parsed.author);
-    }
-    if (rowText[i].title.empty()) rowText[i].title = tr(STR_LIBRARY_UNKNOWN_TITLE);
-
-    fui::ListItem item;
-    // A book glyph on every row anchors the eye at a fixed left edge, so a row
-    // reads as one object rather than two loose lines.
-    item.icon = listIconFor(Book, 24);
-    item.label = rowText[i].title.c_str();
-    // An empty subtitle still reserves the line, so rows stay a uniform height
-    // and the author column stays where the eye expects it.
-    item.subtitle = rowText[i].author.c_str();
-    item.actionValue = static_cast<int16_t>(topIndex + i);
-    uiItems.push_back(item);
+// Title and author for one entry, read straight from the index. Only ever called
+// for rows about to be drawn, so at most a screenful of strings exists at once.
+bool LibraryListActivity::rowTextFor(const int entry, std::string& title, std::string& author) {
+  title.clear();
+  author.clear();
+  const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(entry));
+  library::ClixRecord record{};
+  std::string name;
+  if (ordinal != 0xFFFF && index.readRecord(ordinal, record) && index.readName(record, name)) {
+    const library::ParsedName parsed = library::parseFilename(stemOf(name));
+    title = parsed.title;
+    author = library::cleanPersonName(parsed.author);
   }
-
-  props.items = uiItems.data();
-  props.count = static_cast<uint16_t>(uiItems.size());
-  props.topIndex = 0;  // the window is already the visible slice
-  props.selectedIndex = static_cast<int16_t>(selectedIndex - topIndex);
-  screen.list(props);
+  if (title.empty()) title = tr(STR_LIBRARY_UNKNOWN_TITLE);
+  return true;
 }
 
 void LibraryListActivity::loop() {
@@ -226,15 +176,6 @@ void LibraryListActivity::loop() {
     finishAfterBackPress();
     return;
   }
-  if (uiReady) {
-    const fui::InputSnapshot snap = touchSnapshotFrom(mappedInput);
-    if (snap.touchPressed || snap.touchReleased) {
-      const auto event = app.route(snap);
-      if (app.invalidated()) requestUpdate();
-      if (event) return;
-    }
-  }
-
   const int count = static_cast<int>(index.bookCount());
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
@@ -251,6 +192,23 @@ void LibraryListActivity::loop() {
   if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= 800) {
     cycleSortOrder();
     requestUpdate(true);
+    return;
+  }
+
+  // Left and Right page. On this hardware ButtonNavigator maps them as aliases of
+  // Up and Down (util/ButtonNavigator.h:47-53), so the second axis is unused and
+  // paging is free — which matters at 69 books, where scrolling one row at a time
+  // is 34 presses to the middle and paging is 5.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Right) && count > 0) {
+    selectedIndex = std::min(count - 1, selectedIndex + visibleRows);
+    topIndex = followListSelection(selectedIndex, topIndex, visibleRows, count);
+    requestUpdate();
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left) && count > 0) {
+    selectedIndex = std::max(0, selectedIndex - visibleRows);
+    topIndex = followListSelection(selectedIndex, topIndex, visibleRows, count);
+    requestUpdate();
     return;
   }
 
@@ -279,28 +237,89 @@ void LibraryListActivity::render(RenderLock&&) {
   if (index.bookCount() == 0) {
     renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_LIBRARY_EMPTY));
   } else {
-    uiReady = false;
-    app.render();
-    uiReady = true;
-    drawRowSeparators();
+    drawRows();
   }
 
+  drawPositionReadout();
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }
 
-void LibraryListActivity::drawRowSeparators() {
-  if (lastRowStep <= 0) return;
-  const int drawn = std::min(visibleRows, static_cast<int>(index.bookCount()) - topIndex);
+void LibraryListActivity::drawRows() {
+  measureRows();
+  const int count = static_cast<int>(index.bookCount());
+  if (topIndex > selectedIndex) topIndex = selectedIndex;
   const int width = renderer.getScreenWidth();
-  // Dotted, not solid: on a 1-bit panel every-other-pixel is how you get a rule
-  // that reads as grey. A solid black line would weigh more than the text it is
-  // meant to separate.
-  for (int row = 1; row < drawn; row++) {
-    const int y = lastListTop + row * lastRowStep - 1;
-    for (int x = LIBRARY_SEPARATOR_INSET; x < width - LIBRARY_SEPARATOR_INSET; x += 2) {
-      renderer.drawPixel(x, y, true);
+  const int textX = LIBRARY_SIDE_PADDING + LIBRARY_ICON_SIZE + LIBRARY_ICON_GAP;
+  const int textW = width - textX - LIBRARY_SIDE_PADDING;
+
+  // Rows have content-dependent heights, so the page is filled by accumulating
+  // them rather than by dividing the band. A row is only drawn if it fits whole:
+  // a half-drawn row at the bottom edge would look like a rendering fault.
+  std::string title;
+  std::string author;
+  int y = listTop;
+  int drawn = 0;
+  for (int entry = topIndex; entry < count; entry++) {
+    rowTextFor(entry, title, author);
+    const auto lines = renderer.wrappedText(UI_10_FONT_ID, title.c_str(), textW, LIBRARY_TITLE_LINES);
+    const int height = rowHeightFor(static_cast<int>(lines.size()), !author.empty());
+    if (drawn > 0 && y + height > listTop + listHeight) break;
+
+    if (entry == selectedIndex) {
+      renderer.fillRoundedRect(LIBRARY_SIDE_PADDING / 2, y, width - LIBRARY_SIDE_PADDING, height - 2, 6,
+                               Color::LightGray);
+    }
+    renderer.drawIcon(icon_book_24_bits, LIBRARY_SIDE_PADDING, y + (height - LIBRARY_ICON_SIZE) / 2,
+                      LIBRARY_ICON_SIZE);
+
+    int textY = y + LIBRARY_ROW_PADDING / 2;
+    for (const auto& line : lines) {
+      renderer.drawText(UI_10_FONT_ID, textX, textY, line.c_str(), true);
+      textY += titleLineH;
+    }
+    if (!author.empty()) {
+      const std::string fitted = renderer.truncatedText(SMALL_FONT_ID, author.c_str(), textW);
+      renderer.drawText(SMALL_FONT_ID, textX, textY, fitted.c_str(), true);
+    }
+
+    y += height;
+    drawn++;
+
+    // Dotted, not solid: on a 1-bit panel every-other-pixel is how a rule reads
+    // grey. A solid line would outweigh the text it separates.
+    if (entry + 1 < count && y + LIBRARY_ROW_PADDING < listTop + listHeight) {
+      for (int x = LIBRARY_SIDE_PADDING; x < width - LIBRARY_SIDE_PADDING; x += 2) {
+        renderer.drawPixel(x, y - 1, true);
+      }
     }
   }
+
+  // Paging and Up/Down both need to know how much of the list one screen holds.
+  // It is only knowable after drawing, since it depends on the titles on screen.
+  visibleRows = drawn > 0 ? drawn : 1;
+  if (selectedIndex >= topIndex + visibleRows) topIndex = selectedIndex - visibleRows + 1;
+}
+
+// "3/6" at the bottom right. Rows are variable height, so a page is not a fixed
+// number of books and the count has to be estimated from what the current screen
+// actually holds — an honest approximation is worth more here than a precise
+// number nobody can act on. It also tells the user how far the list goes, which
+// a scrollbar on a 1-bit panel says far less clearly.
+void LibraryListActivity::drawPositionReadout() {
+  const int count = static_cast<int>(index.bookCount());
+  if (count <= 0 || visibleRows <= 0) return;
+
+  const int page = selectedIndex / visibleRows + 1;
+  const int pages = (count + visibleRows - 1) / visibleRows;
+  if (pages <= 1) return;
+
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%d/%d", page, pages);
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int width = renderer.getTextWidth(SMALL_FONT_ID, buf);
+  const int x = renderer.getScreenWidth() - width - LIBRARY_SIDE_PADDING;
+  const int y = renderer.getScreenHeight() - metrics.buttonHintsHeight - renderer.getLineHeight(SMALL_FONT_ID);
+  renderer.drawText(SMALL_FONT_ID, x, y, buf, true);
 }
