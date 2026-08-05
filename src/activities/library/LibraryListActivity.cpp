@@ -237,6 +237,9 @@ int LibraryListActivity::rowFor(const int entry) const {
 // the cost of the panel repaint that will follow it anyway.
 void LibraryListActivity::applyFilter() {
   filtered.clear();
+  // Cleared even on the empty-query path: dropping a filter changes the list just
+  // as much as applying one.
+  pageStarts.clear();
   if (query.empty()) return;
 
   // Folded the same way the stored folds were, articles removed included —
@@ -488,23 +491,23 @@ void LibraryListActivity::loop() {
       if (mappedInput.wasReleased(MappedInputManager::Button::Left) ||
           mappedInput.wasReleased(MappedInputManager::Button::Right)) {
         jumpByGivenName = !jumpByGivenName;
+        // The letters present as first names are not those present as surnames.
+        // The cursor is on the mode line, not on a letter, so nothing needs
+        // re-seating here — Down does that when it enters the grid.
         computeLettersPresent();
-        // The letters present as first names are not those present as surnames,
-        // so the cursor may be left pointing at a slot that is now blank.
-        // letterCursor is -1 on the mode line, and shifting by a negative is
-        // undefined — it also stole focus into the grid as a side effect.
-        if (letterCursor >= 0 && !(lettersPresent & (1u << letterCursor))) {
-          for (int i = 0; i < kLetterCount; i++) {
-            if (lettersPresent & (1u << i)) {
-              letterCursor = i;
-              break;
-            }
-          }
-        }
         requestUpdate();
       }
       if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+        // Land on a letter that exists. Dropping onto "a" when no book starts
+        // with one puts the cursor on a blank cell, which is the state the grid
+        // is built to never show.
         letterCursor = 0;
+        for (int i = 0; i < kLetterCount; i++) {
+          if (lettersPresent & (1u << i)) {
+            letterCursor = i;
+            break;
+          }
+        }
         requestUpdate();
       }
       return;
@@ -549,6 +552,9 @@ void LibraryListActivity::loop() {
     filtered.clear();
     selectedIndex = 0;
     topIndex = 0;
+    // Boundaries measured against the filtered list mean nothing once the whole
+    // shelf is back.
+    pageStarts.clear();
     requestUpdate();
     return;
   }

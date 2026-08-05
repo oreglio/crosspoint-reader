@@ -99,6 +99,14 @@ bool LibraryIndexFile::readRecord(const uint16_t ordinal, ClixRecord& out) {
   // it at each call site would mean fixing it again at the next one.
   out.foldLen = static_cast<uint8_t>(std::min<size_t>(out.foldLen, CLIX_FOLD_BYTES));
   out.authorKeyLen = static_cast<uint8_t>(std::min<size_t>(out.authorKeyLen, CLIX_AUTHOR_KEY_BYTES));
+  // nameOff is u32 and every reader adds a length to it before comparing against
+  // the section size. A forged value near the top of the range wraps that sum and
+  // passes the bounds check it was supposed to fail, so it is rejected here
+  // instead — the one place that can, before any arithmetic touches it.
+  if (out.nameOff > head.nameLen) {
+    out.nameLen = 0;
+    out.nameOff = 0;
+  }
   return true;
 }
 
