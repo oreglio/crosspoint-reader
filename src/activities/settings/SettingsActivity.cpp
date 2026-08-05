@@ -950,6 +950,13 @@ void SettingsActivity::toggleCurrentSetting() {
           library::LibraryIndexFile previous;
           if (previous.open(library::libraryIndexPath())) carried = previous.header().nextFirstSeen;
         }
+        // Say something before blocking. This walks every folder and, with
+        // metadata on, opens every book — 2060 books measured at several seconds
+        // — and it ran with no indication at all, so the device read as frozen.
+        // The Library screen already does this on its own first build; the button
+        // that exists to trigger the same work did not.
+        GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+
         library::BuildStats stats;
         const bool ok = library::buildLibraryIndex("/", carried, stats, SETTINGS.libraryUseMetadata != 0);
         if (ok) {
