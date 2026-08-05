@@ -322,11 +322,9 @@ void LibraryListActivity::drawSortTabs(const int top) {
   const int lineH = renderer.getLineHeight(SMALL_FONT_ID);
   const int height = lineH + 8;
 
-  // Same shape as the Settings tab bar: a light band flush under the header, the
-  // active tab as a filled pill. Settings builds it through fui::Screen, which
-  // this activity does not use — it draws its own rows so the title can wrap —
-  // so the look is reproduced rather than shared.
-  renderer.fillRectDither(0, top, width, height, Color::LightGray);
+  // No band fill. On a 1-bit panel the dithered grey is a literal checkerboard,
+  // and it is the same pattern the selected row uses — two things competing for
+  // the eye with one texture. The pill alone carries the state.
 
   // Equal-width slots, as in Settings, so the tabs do not shift as labels change.
   const int slot = width / kSortTabCount;
@@ -384,13 +382,31 @@ void LibraryListActivity::drawRows() {
   // a half-drawn row at the bottom edge would look like a rendering fault.
   std::string title;
   std::string author;
+  std::string previousAuthor;
+  // Sorted by author, the permutation already places one author's books
+  // consecutively, so grouping costs one comparison per row and no extra pass.
+  // The author then appears once above the run instead of under every title,
+  // which is what makes the shelf answer "what else has this person written".
+  const bool grouped = sortOrder == library::SortOrder::AuthorAsc;
+  const int groupH = grouped ? authorLineH + LIBRARY_ROW_PADDING : 0;
+
   int y = listTop;
   int drawn = 0;
   for (int entry = topIndex; entry < count; entry++) {
     rowTextFor(entry, title, author);
     const auto lines = renderer.wrappedText(UI_10_FONT_ID, title.c_str(), textW, LIBRARY_TITLE_LINES);
-    const int height = rowHeightFor(static_cast<int>(lines.size()), !author.empty());
-    if (drawn > 0 && y + height > listTop + listHeight) break;
+    const int height = rowHeightFor(static_cast<int>(lines.size()), !grouped && !author.empty());
+    // The first row of a page always carries its heading: without it a page can
+    // open on books whose author was named on the page before.
+    const bool startsGroup = grouped && !author.empty() && (drawn == 0 || author != previousAuthor);
+    previousAuthor = author;
+    if (drawn > 0 && y + height + (startsGroup ? groupH : 0) > listTop + listHeight) break;
+
+    if (startsGroup) {
+      const std::string heading = renderer.truncatedText(SMALL_FONT_ID, author.c_str(), textW);
+      renderer.drawText(SMALL_FONT_ID, LIBRARY_SIDE_PADDING, y + LIBRARY_ROW_PADDING / 2, heading.c_str(), true);
+      y += groupH;
+    }
 
     if (entry == selectedIndex) {
       renderer.fillRoundedRect(LIBRARY_SIDE_PADDING / 2, y, width - LIBRARY_SIDE_PADDING, height - 2, 6,
@@ -404,7 +420,7 @@ void LibraryListActivity::drawRows() {
       renderer.drawText(UI_10_FONT_ID, textX, textY, line.c_str(), true);
       textY += titleLineH;
     }
-    if (!author.empty()) {
+    if (!grouped && !author.empty()) {
       const std::string fitted = renderer.truncatedText(SMALL_FONT_ID, author.c_str(), textW);
       renderer.drawText(SMALL_FONT_ID, textX, textY, fitted.c_str(), true);
     }
