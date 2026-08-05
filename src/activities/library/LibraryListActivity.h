@@ -60,6 +60,7 @@ class LibraryListActivity final : public Activity {
   void nextPage();
   void previousPage(bool selectLast = false);
   void openSelectedBook();
+  void openSortMenu();
   void cycleSortOrder();
   const char* sortOrderLabel() const;
 

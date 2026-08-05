@@ -12,6 +12,7 @@
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
 #include "components/icons/listIcons.h"
+#include "activities/util/OptionSelectionActivity.h"
 #include "components/UiAppHelpers.h"
 
 namespace fui = freeink::ui;
@@ -96,6 +97,44 @@ void LibraryListActivity::openSelectedBook() {
   index.close();
   indexReady = false;
   activityManager.goToReader(std::move(path));
+}
+
+void LibraryListActivity::openSortMenu() {
+  std::vector<std::string> options{tr(STR_LIBRARY_SORT_RECENT), tr(STR_LIBRARY_SORT_TITLE_AZ),
+                                   tr(STR_LIBRARY_SORT_TITLE_ZA), tr(STR_LIBRARY_SORT_AUTHOR)};
+  const auto current = static_cast<uint8_t>(sortOrder == library::SortOrder::DateDesc    ? 0
+                                            : sortOrder == library::SortOrder::TitleAsc  ? 1
+                                            : sortOrder == library::SortOrder::TitleDesc ? 2
+                                                                                         : 3);
+  startActivityForResult(
+      std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "LibrarySort", StrId::STR_LIBRARY_SORT_TITLE,
+                                                std::move(options), current),
+      [this](const ActivityResult& result) {
+        if (result.isCancelled) {
+          requestUpdate(true);
+          return;
+        }
+        switch (std::get<OptionSelectionResult>(result.data).index) {
+          case 1:
+            sortOrder = library::SortOrder::TitleAsc;
+            break;
+          case 2:
+            sortOrder = library::SortOrder::TitleDesc;
+            break;
+          case 3:
+            sortOrder = library::SortOrder::AuthorAsc;
+            break;
+          default:
+            sortOrder = library::SortOrder::DateDesc;
+            break;
+        }
+        // A new order invalidates every remembered page boundary: the same
+        // ordinal is now somewhere else entirely.
+        pageStarts.clear();
+        selectedIndex = 0;
+        topIndex = 0;
+        requestUpdate(true);
+      });
 }
 
 void LibraryListActivity::cycleSortOrder() {
@@ -186,12 +225,12 @@ void LibraryListActivity::loop() {
     openSelectedBook();
     return;
   }
-  // Left and Right are aliases of Up and Down on this hardware, so the sort
-  // control lives on a Confirm hold rather than a second axis that does not
-  // exist.
+  // A Confirm hold opens the sort menu. It is a small selection screen rather
+  // than a value cycled in place, because that is how this codebase changes an
+  // enum everywhere else (OptionSelectionActivity, used by Settings) — and
+  // because Left and Right are already spent on paging.
   if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= 800) {
-    cycleSortOrder();
-    requestUpdate(true);
+    openSortMenu();
     return;
   }
 
