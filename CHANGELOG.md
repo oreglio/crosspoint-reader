@@ -2,6 +2,10 @@
 
 ### Added
 
+- A `Library` shelf on the home screen, listing every book on the card in one place regardless of the folders they sit in. Titles wrap over up to three lines instead of being cut short, rows carry the author beneath the title, and Left/Right turn pages while Up/Down move the selection. Sort by title, author or recently added from the `Sort` menu.
+- `Settings > System > Library` with a `Use book metadata` switch and a `Rebuild index` button. With metadata on, the shelf shows the title and author a book carries inside itself rather than whatever its filename happens to say — on a typical library that is a 23-character title in place of a 148-character filename, and correctly accented. Books never opened are read straight from the EPUB; books already opened cost only a cache read. One spelling is chosen per author across the whole library, so the same person does not appear three ways.
+- Rebuilding recognises books that were renamed or moved and keeps their place in `Recently added`, rather than treating them as new arrivals.
+
 - `File Browser Display` gains a `Full Name` option in `Settings > System > Files & Cache`, wrapping file names over enough lines that long names are no longer cut short with an ellipsis. Rows are taller, so fewer books are listed per screen than in `2 Lines`.
 
 ## [v1.5.0] - 2026-08-04

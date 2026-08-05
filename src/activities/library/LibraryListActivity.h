@@ -23,7 +23,7 @@
 // widget caps the label at one line whenever a subtitle is present
 // (components/lists/list.h:445, :449), which makes a wrapped title and an
 // aligned author column mutually exclusive. This screen needs both.
-inline constexpr int LIBRARY_TITLE_LINES = 2;
+inline constexpr int LIBRARY_TITLE_LINES = 3;
 inline constexpr int LIBRARY_ICON_SIZE = 24;
 inline constexpr int LIBRARY_ICON_GAP = 10;
 inline constexpr int LIBRARY_SIDE_PADDING = 12;
