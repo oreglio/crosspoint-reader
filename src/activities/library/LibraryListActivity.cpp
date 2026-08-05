@@ -431,7 +431,18 @@ void LibraryListActivity::loop() {
     if (mappedInput.wasReleased(MappedInputManager::Button::Down)) delta = kLetterCols;
     if (mappedInput.wasReleased(MappedInputManager::Button::Up)) delta = -kLetterCols;
     if (delta != 0) {
-      letterCursor = (letterCursor + delta + kLetterCount) % kLetterCount;
+      // Step over letters no book starts with. Landing on one and pressing
+      // Confirm sends the reader to where that letter WOULD be, which is a
+      // correct answer to a question they did not mean to ask. Skipping keeps
+      // every press on the grid meaningful — and if the shelf somehow has no
+      // letters at all, the loop still terminates on the starting cell.
+      const int step = delta > 0 ? 1 : -1;
+      int next = letterCursor;
+      for (int guard = 0; guard < kLetterCount; guard++) {
+        next = (next + step + kLetterCount) % kLetterCount;
+        if (lettersPresent & (1u << next)) break;
+      }
+      letterCursor = next;
       requestUpdate();
     }
     return;
@@ -446,6 +457,12 @@ void LibraryListActivity::loop() {
       // whose every choice would land somewhere arbitrary.
       computeLettersPresent();
       letterCursor = 0;
+      for (int i = 0; i < kLetterCount; i++) {
+        if (lettersPresent & (1u << i)) {
+          letterCursor = i;
+          break;
+        }
+      }
       letterGrid = true;
       requestUpdate();
     }
