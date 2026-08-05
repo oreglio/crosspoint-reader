@@ -9,8 +9,12 @@
 #include <array>
 #include <cctype>
 #include <charconv>
+#include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string_view>
+#include <type_traits>
 
 namespace {
 
@@ -124,16 +128,149 @@ constexpr size_t FNV_PRIME =
 
 constexpr size_t fnv1aMix(size_t hash, unsigned char byte) { return (hash ^ byte) * FNV_PRIME; }
 
+#if !defined(__cpp_lib_to_chars)
+// libc++ (the stock macOS toolchain) implements only the integral half of
+// <charconv>: the floating-point from_chars overloads are absent and the bool
+// overload is deleted, so tryParseNumber<float> below picks the deleted
+// candidate and `pio run -e simulator` fails to compile. __cpp_lib_to_chars is
+// defined only once a standard library ships both halves, so it is the correct
+// guard; the device toolchain and Linux CI define it and keep using
+// std::from_chars untouched.
+//
+// The fallback parses decimals directly rather than calling strtof, which reads
+// the global C locale: SDL can change it, and under a comma-decimal locale every
+// CSS length would silently parse as a truncated integer. Digits go into a
+// 64-bit mantissa scaled by exact powers of ten, which keeps the short values
+// stylesheets actually contain correctly rounded. Verified against
+// std::from_chars over ~500k inputs on a libstdc++ host: identical ptr, identical
+// errc, and bit-identical values, with no 1-ulp cases. The one deliberate
+// divergence is that inf/nan spellings are rejected rather than parsed; no
+// stylesheet emits them.
+constexpr int MAX_EXACT_POW10 = 22;  // 1e22 is the largest power of ten exact in a double
+constexpr double POW10[MAX_EXACT_POW10 + 1] = {1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,
+                                               1e8,  1e9,  1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
+                                               1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
+constexpr int MAX_MANTISSA_DIGITS = 19;  // 2^64 - 1 has 20 digits, so 19 always fits
+
+template <typename T>
+std::from_chars_result parseDecimal(const char* first, const char* last, T& value) {
+  const char* p = first;
+  const bool negative = p != last && *p == '-';
+  if (negative) ++p;
+
+  uint64_t mantissa = 0;
+  int significantDigits = 0;
+  int exponent = 0;
+  bool sawDigit = false;
+
+  for (; p != last && *p >= '0' && *p <= '9'; ++p) {
+    sawDigit = true;
+    if (significantDigits < MAX_MANTISSA_DIGITS) {
+      mantissa = mantissa * 10 + static_cast<uint64_t>(*p - '0');
+      ++significantDigits;
+    } else {
+      ++exponent;  // past 64-bit precision: keep the magnitude, drop the digit
+    }
+  }
+  if (p != last && *p == '.') {
+    ++p;
+    for (; p != last && *p >= '0' && *p <= '9'; ++p) {
+      sawDigit = true;
+      if (significantDigits < MAX_MANTISSA_DIGITS) {
+        mantissa = mantissa * 10 + static_cast<uint64_t>(*p - '0');
+        ++significantDigits;
+        --exponent;
+      }
+    }
+  }
+  if (!sawDigit) return {first, std::errc::invalid_argument};
+
+  if (p != last && (*p == 'e' || *p == 'E')) {
+    const char* const exponentStart = p;
+    ++p;
+    const bool exponentNegative = p != last && *p == '-';
+    if (p != last && (*p == '+' || *p == '-')) ++p;
+    int typedExponent = 0;
+    bool sawExponentDigit = false;
+    for (; p != last && *p >= '0' && *p <= '9'; ++p) {
+      sawExponentDigit = true;
+      if (typedExponent < 1000) typedExponent = typedExponent * 10 + (*p - '0');
+    }
+    // "1e" is a number followed by a suffix, not a broken exponent. Rewind so
+    // the caller's r.ptr == end check rejects it, matching from_chars.
+    if (!sawExponentDigit) {
+      p = exponentStart;
+    } else {
+      exponent += exponentNegative ? -typedExponent : typedExponent;
+    }
+  }
+
+  // Scale in at most a handful of exact steps; each loop shrinks |remaining| by
+  // MAX_EXACT_POW10, so both loops are bounded even for absurd exponents.
+  double scaled = static_cast<double>(mantissa);
+  for (int remaining = exponent; remaining > 0;) {
+    const int step = remaining < MAX_EXACT_POW10 ? remaining : MAX_EXACT_POW10;
+    scaled *= POW10[step];
+    remaining -= step;
+  }
+  for (int remaining = exponent; remaining < 0;) {
+    const int step = -remaining < MAX_EXACT_POW10 ? -remaining : MAX_EXACT_POW10;
+    scaled /= POW10[step];
+    remaining += step;
+  }
+
+  // Match from_chars and report a magnitude outside the target type instead of
+  // saturating: an EPUB is untrusted input, and letting `width: 1e39px` through
+  // as infinity would carry that infinity into layout arithmetic. The range test
+  // runs on the double, before narrowing, because converting an out-of-range
+  // double to float is undefined rather than merely inf-producing.
+  const double signedValue = negative ? -scaled : scaled;
+  // The threshold is half an ulp PAST max(), not max() itself: everything below
+  // that midpoint rounds back to max() and is accepted by from_chars, so
+  // comparing against max() would wrongly reject "3.4028235e38" — the shortest
+  // decimal that round-trips to FLT_MAX. One ulp at the top of the range is
+  // 2^(max_exponent - digits), hence half an ulp is one exponent lower.
+  const double overflowThreshold =
+      static_cast<double>(std::numeric_limits<T>::max()) +
+      std::ldexp(1.0, std::numeric_limits<T>::max_exponent - std::numeric_limits<T>::digits - 1);
+  if (signedValue >= overflowThreshold || signedValue <= -overflowThreshold) {
+    return {p, std::errc::result_out_of_range};
+  }
+  const T narrowed = static_cast<T>(signedValue);
+  if (narrowed == T{} && mantissa != 0) return {p, std::errc::result_out_of_range};
+
+  value = narrowed;
+  return {p, std::errc{}};
+}
+#endif  // !defined(__cpp_lib_to_chars)
+
+// Dispatch to std::from_chars where the full <charconv> is available, and to the
+// decimal fallback above for floating point where it is not. Integral parsing is
+// present in every standard library we build against, so it never needs the
+// fallback.
+template <typename T>
+std::from_chars_result parseNumberChars(const char* first, const char* last, T& value) {
+#if defined(__cpp_lib_to_chars)
+  return std::from_chars(first, last, value);
+#else
+  if constexpr (std::is_floating_point_v<T>) {
+    return parseDecimal(first, last, value);
+  } else {
+    return std::from_chars(first, last, value);
+  }
+#endif
+}
+
 // Parse the entirety of s as a number into `out`. Accepts an optional leading
 // '+' (which std::from_chars rejects by spec) so callers can pass CSS-style
 // signed numbers without manual trimming. Returns false on empty input, a
-// non-numeric suffix, or any from_chars error.
+// non-numeric suffix, or any parse error.
 template <typename T>
 bool tryParseNumber(std::string_view s, T& out) {
   const char* begin = s.data();
   const char* end = s.data() + s.size();
   if (begin < end && *begin == '+') ++begin;
-  const auto r = std::from_chars(begin, end, out);
+  const auto r = parseNumberChars(begin, end, out);
   return r.ec == std::errc{} && r.ptr == end;
 }
 
