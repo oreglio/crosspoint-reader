@@ -381,8 +381,11 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   header.folderCount = st.folderId;
   header.nextFirstSeen = st.nextFirstSeen;
   header.totalBookBytes = st.totalBookBytes;
-  header.flags = CLIX_FLAG_WALK_COMPLETE | (stats.ranksDegraded ? CLIX_FLAG_RANKS_DEGRADED : 0) |
-                 (stats.booksAtRoot ? CLIX_FLAG_BOOKS_AT_ROOT : 0);
+  // Placeholder only. The real flags are written with the final header below,
+  // once the sorts have had their chance to fail: a walk that hit the record cap
+  // or was aborted is NOT complete, and degradations decided further down never
+  // reached this line, so an index could claim to be whole while being neither.
+  header.flags = 0;
   // The blob is the LAST section, so its size affects only selfSize — every
   // section offset is already fixed by the counts. Lay out with a placeholder
   // and correct selfSize once the blob has actually been written, since the
@@ -433,7 +436,11 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   // record carries its own authorRank. So: read the keys, sort, invert, then
   // write. Books with no key sort last in both directions, which is why
   // knownAuthorCount is recorded rather than a second array being stored.
-  auto authorSort = makeUniqueNoThrow<SortKey[]>(n == 0 ? 1 : n);
+  // Capped like the title sort. Uncapped, the author and date arrays alone peaked
+  // near 209 KB at the 4096-record ceiling — on a device with under 200 KB free,
+  // which makes the cap the difference between a degraded order and no device.
+  const bool rankable = n <= LIBRARY_MAX_SORTED;
+  auto authorSort = rankable ? makeUniqueNoThrow<SortKey[]>(n == 0 ? 1 : n) : nullptr;
   auto authorRankOf = makeUniqueNoThrow<uint16_t[]>(n == 0 ? 1 : n);
   uint16_t known = 0;
   if (authorSort && authorRankOf) {
@@ -575,7 +582,14 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   // to be SORTED rather than assumed, or "Recently added" silently degrades into
   // "the order the card enumerates in" — which is exactly the bug reconciliation
   // exists to prevent.
-  auto dateSort = makeUniqueNoThrow<SortKey[]>(n == 0 ? 1 : n);
+  auto dateSort = rankable ? makeUniqueNoThrow<SortKey[]>(n == 0 ? 1 : n) : nullptr;
+  // Said out loud, so the shelf can tell the reader its order is approximate
+  // rather than quietly presenting walk order as an alphabet.
+  if (!rankable) {
+    LOG_INF("LIBIDX", "%u books over the %u sort cap: author and date order degraded",
+            static_cast<unsigned>(n), static_cast<unsigned>(LIBRARY_MAX_SORTED));
+    stats.ranksDegraded = true;
+  }
   auto dateRankOf = makeUniqueNoThrow<uint16_t[]>(n == 0 ? 1 : n);
   if (dateSort && dateRankOf) {
     for (uint16_t i = 0; i < n; i++) {
@@ -654,6 +668,13 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   header.nameLen = blobWritten;
   header.selfSize = header.nameStart + blobWritten;
   stage.close();
+
+  // Now that every sort has run, say what this index actually is. A walk stopped
+  // by the record cap or by an abort is not complete, and a reader that trusts
+  // WALK_COMPLETE would silently show a partial shelf as if it were the whole one.
+  header.flags = (st.aborted || st.books >= CLIX_MAX_RECORDS ? 0 : CLIX_FLAG_WALK_COMPLETE) |
+                 (stats.ranksDegraded ? CLIX_FLAG_RANKS_DEGRADED : 0) |
+                 (stats.booksAtRoot ? CLIX_FLAG_BOOKS_AT_ROOT : 0);
 
   out.seekSet(0);
   out.write(reinterpret_cast<const uint8_t*>(&header), sizeof(header));
