@@ -132,7 +132,11 @@ void LibraryListActivity::openSortMenu() {
             break;
         }
         // A new order invalidates every remembered page boundary: the same
-        // ordinal is now somewhere else entirely.
+        // ordinal is now somewhere else entirely. It also invalidates the filter,
+        // which holds POSITIONS in the old order — cycleSortOrder refilters and
+        // this path did not, so sorting while a search was active left the shelf
+        // showing whichever books happened to sit at those positions.
+        applyFilter();
         pageStarts.clear();
         selectedIndex = 0;
         topIndex = 0;
@@ -342,6 +346,7 @@ void LibraryListActivity::jumpToLetter(const char letter) {
     if (hit) {
       selectedIndex = entry;
       topIndex = entry;
+      pageStarts.clear();
       return;
     }
   }
@@ -486,21 +491,9 @@ void LibraryListActivity::loop() {
   }
   const int count = rowCount();
 
-  // Back clears the filter before it leaves. A shelf showing 7 of 60 books is a
-  // state the reader must be able to undo, and giving it the press they would
-  // reach for anyway costs no screen space and needs no explaining.
-  if (!query.empty() && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    query.clear();
-    filtered.clear();
-    selectedIndex = 0;
-    topIndex = 0;
-    requestUpdate();
-    return;
-  }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    finishAfterBackPress();
-    return;
-  }
+  // The grid owns every button while it is open, so its block runs FIRST. Sitting
+  // below the Back handlers, its own Back was unreachable: Back left the activity
+  // with the grid still on screen.
   if (letterGrid) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       letterGrid = false;
@@ -531,7 +524,9 @@ void LibraryListActivity::loop() {
         computeLettersPresent();
         // The letters present as first names are not those present as surnames,
         // so the cursor may be left pointing at a slot that is now blank.
-        if (!(lettersPresent & (1u << letterCursor))) {
+        // letterCursor is -1 on the mode line, and shifting by a negative is
+        // undefined — it also stole focus into the grid as a side effect.
+        if (letterCursor >= 0 && !(lettersPresent & (1u << letterCursor))) {
           for (int i = 0; i < kLetterCount; i++) {
             if (lettersPresent & (1u << i)) {
               letterCursor = i;
@@ -579,6 +574,21 @@ void LibraryListActivity::loop() {
     return;
   }
 
+  // Back clears the filter before it leaves. A shelf showing 7 of 60 books is a
+  // state the reader must be able to undo, and giving it the press they would
+  // reach for anyway costs no screen space and needs no explaining.
+  if (!query.empty() && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    query.clear();
+    filtered.clear();
+    selectedIndex = 0;
+    topIndex = 0;
+    requestUpdate();
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    finishAfterBackPress();
+    return;
+  }
   if (tabsFocused && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (tabCursor == kSearchTab) {
       openSearch();
