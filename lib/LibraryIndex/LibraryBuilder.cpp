@@ -76,6 +76,15 @@ bool isBookName(const std::string& name) {
 // card written on a Mac shows every book twice.
 bool isHiddenOrSidecar(const char* name) { return name[0] == '.'; }
 
+// Join without doubling the separator. The walk starts at "/", so a naive
+// concatenation yields "//SciFi/book.epub": tolerated by the filesystem, but it
+// is also the string handed to Epub and ZipFile, and to the cache-path hash that
+// has to match the one the reader computed when it opened the same book.
+std::string joinPath(const std::string& dir, const std::string& name) {
+  if (dir.empty() || dir == "/") return "/" + name;
+  return dir + "/" + name;
+}
+
 std::string stemOf(const std::string& name) {
   const size_t dot = name.find_last_of('.');
   return (dot == std::string::npos || dot == 0) ? name : name.substr(0, dot);
@@ -151,6 +160,7 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
   const std::string stem = stemOf(name);
   ParsedName parsed = parseFilename(stem);
   bool titleFromBook = false;
+  bool authorFromBook = false;
 
   // A book the reader has already opened carries its own title and author in a
   // cache beside it. Reading that is a small file read; building it is the
@@ -167,29 +177,36 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
       }
       if (!epub.getAuthor().empty()) {
         parsed.author = epub.getAuthor();
-        titleFromBook = true;
+        authorFromBook = true;
       }
     }
     // Otherwise inflate the package document. Two small entries out of the zip,
     // not the seconds-per-book indexing pass that would build the cache above.
-    if (!titleFromBook) {
+    if (!titleFromBook && !authorFromBook) {
       BookMetadata meta;
-      if (readBookMetadata(fullPath, meta)) {
+      const bool read = readBookMetadata(fullPath, meta);
+      if (!read) LOG_DBG("LIBIDX", "no metadata for %s", fullPath.c_str());
+      if (read) {
         if (!meta.title.empty()) {
           parsed.title = meta.title;
           titleFromBook = true;
         }
         if (!meta.author.empty()) {
           parsed.author = meta.author;
-          titleFromBook = true;
+          authorFromBook = true;
         }
       }
     }
   }
-  if (titleFromBook) st.enriched++;
+  if (titleFromBook || authorFromBook) st.enriched++;
 
   // The author may still be absent here. M2 fills it from the book's own
   // metadata; until then the row shows the title alone rather than guessing.
+  // What the row shows. The filename is the fallback, not the preference: once
+  // the book has told us its own title, the 148-character median of these
+  // filenames is strictly worse to read and worse to sort.
+  const std::string& displayName = titleFromBook ? parsed.title : name;
+
   std::string author = parsed.author;
   ClixAuthorProvenance provenance = author.empty() ? CLIX_AUTHOR_UNKNOWN : CLIX_AUTHOR_FROM_CACHE;
 
@@ -221,13 +238,13 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
     entry.record.firstSeen = FIRST_SEEN_UNRESOLVED;
   }
   entry.record.folderId = folderId;
-  entry.record.nameLen = static_cast<uint8_t>(std::min<size_t>(name.size(), STAGE_NAME_BYTES));
+  entry.record.nameLen = static_cast<uint8_t>(std::min<size_t>(displayName.size(), STAGE_NAME_BYTES));
   entry.record.foldLen = static_cast<uint8_t>(std::min(folded.size(), CLIX_FOLD_BYTES));
   entry.record.authorKeyLen = static_cast<uint8_t>(std::min(key.size(), CLIX_AUTHOR_KEY_BYTES));
   entry.record.flags = makeRecordFlags(formatForName(name), provenance, titleFromBook, false);
   memcpy(entry.record.fold, folded.data(), entry.record.foldLen);
   memcpy(entry.record.authorKey, key.data(), entry.record.authorKeyLen);
-  memcpy(entry.name, name.data(), entry.record.nameLen);
+  memcpy(entry.name, displayName.data(), entry.record.nameLen);
 
   const std::string displayAuthor = cleanPersonName(author);
   entry.authorLen = static_cast<uint8_t>(std::min(displayAuthor.size(), STAGE_AUTHOR_BYTES));
@@ -302,7 +319,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
       folderEmitted = true;
       if (depth == 0) st.booksAtRoot = true;
     }
-    stageRecord(st, name, size, myFolderId, basename, depth, path + "/" + name);
+    stageRecord(st, name, size, myFolderId, basename, depth, joinPath(path, name));
   }
   dir.close();
 
@@ -315,7 +332,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
   // SdFat on hardware allows only one open reader at a time per path, and a
   // deep tree would otherwise hold a handle per level.
   for (const std::string& sub : subdirs) {
-    walk(st, path + "/" + sub, depth + 1);
+    walk(st, joinPath(path, sub), depth + 1);
     if (st.aborted) return;
   }
 }

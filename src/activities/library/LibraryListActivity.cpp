@@ -204,9 +204,12 @@ bool LibraryListActivity::rowTextFor(const int entry, std::string& title, std::s
   library::ClixRecord record{};
   std::string name;
   if (ordinal != 0xFFFF && index.readRecord(ordinal, record) && index.readName(record, name)) {
-    const library::ParsedName parsed = library::parseFilename(stemOf(name));
-    title = parsed.title;
-    author = library::cleanPersonName(parsed.author);
+    // The build already decided both fields — from the book's own metadata when
+    // it has any, and with one spelling chosen per author across the library.
+    // Re-parsing the name here would throw that away, and only works while the
+    // name still looks like "Title - Author".
+    if (!index.readAuthor(record, author)) author.clear();
+    title = name;
   }
   if (title.empty()) title = tr(STR_LIBRARY_UNKNOWN_TITLE);
   return true;

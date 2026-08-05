@@ -99,6 +99,21 @@ bool LibraryIndexFile::readName(const ClixRecord& record, std::string& out) {
   return readAt(head.nameStart + record.nameOff, out.data(), record.nameLen);
 }
 
+bool LibraryIndexFile::readAuthor(const ClixRecord& record, std::string& out) {
+  out.clear();
+  if (!opened || record.nameLen == 0) return false;
+  const uint32_t lenAt = record.nameOff + record.nameLen;
+  if (lenAt + 1 > head.nameLen) return false;
+
+  uint8_t authorLen = 0;
+  if (!readAt(head.nameStart + lenAt, &authorLen, sizeof(authorLen))) return false;
+  if (authorLen == 0) return false;
+  if (lenAt + 1 + authorLen > head.nameLen) return false;
+
+  out.resize(authorLen);
+  return readAt(head.nameStart + lenAt + 1, out.data(), authorLen);
+}
+
 bool LibraryIndexFile::readPath(const ClixRecord& record, std::string& out) {
   out.clear();
   if (!opened || record.folderId >= head.folderCount) return false;

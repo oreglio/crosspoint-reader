@@ -52,6 +52,11 @@ class LibraryIndexFile {
   // Display basename, exactly as it sits on the card. This is the only string
   // the UI draws, and it is never shortened on disk.
   bool readName(const ClixRecord& record, std::string& out);
+  // The author the build settled on, stored right after the name. Reading it
+  // rather than re-deriving it from the name is what makes the metadata pass and
+  // the spelling harmonisation visible: neither survives a filename that no
+  // longer carries "Title - Author".
+  bool readAuthor(const ClixRecord& record, std::string& out);
 
   // Absolute path of the book, rebuilt from its folder record.
   bool readPath(const ClixRecord& record, std::string& out);
