@@ -275,10 +275,20 @@ void walk(WalkState& st, const std::string& path, const int depth) {
   }
   dir.rewindDirectory();
 
-  // Names already staged from THIS directory. A damaged FAT can enumerate the
-  // same entry twice; the second one would be a phantom book the user cannot
-  // open. Bounded by the directory's own book count, and freed on return.
-  std::vector<std::string> seen;
+  // Names already staged from THIS directory, as 4-byte hashes rather than the
+  // names themselves. A damaged FAT can enumerate the same entry twice; the
+  // second one would be a phantom book the user cannot open.
+  //
+  // Hashes because the names do not fit. Two thousand books in one flat folder —
+  // the figure LibraryFormat.h cites as the case to survive — is about 360 KB of
+  // std::string against a device that has under 200 KB free, and std::vector grows
+  // by throwing, so the failure is abort() and a reboot loop on every rebuild
+  // rather than a degraded scan. At four bytes each the same folder costs 8 KB.
+  //
+  // A collision would drop a real book. At 2000 entries against a 32-bit space
+  // that is under one chance in two thousand, and it costs one book its shelf
+  // entry, against a certain crash — but it is a trade, not a free win.
+  std::vector<uint32_t> seen;
   std::vector<std::string> subdirs;
 
   const std::string basename = path.substr(path.find_last_of('/') + 1);
@@ -311,11 +321,12 @@ void walk(WalkState& st, const std::string& path, const int depth) {
       st.unreadableSkipped++;
       continue;
     }
-    if (std::find(seen.begin(), seen.end(), name) != seen.end()) {
+    const uint32_t nameHash = fnv1a32(name.data(), name.size());
+    if (std::find(seen.begin(), seen.end(), nameHash) != seen.end()) {
       st.duplicatesDropped++;
       continue;
     }
-    seen.push_back(name);
+    seen.push_back(nameHash);
 
     if (!folderEmitted) {
       // Folders are emitted lazily, so only directories that actually hold a
