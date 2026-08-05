@@ -23,10 +23,18 @@
 
 namespace library {
 
-// Largest package document this will inflate. The design spec's 16 KB rejected 5
-// of 64 real books, one of them 44 KB, because publishers pad the manifest with
-// one entry per file in the archive.
-inline constexpr size_t LIBRARY_OPF_MAX_INFLATED = 65536;
+// How much of a package document is kept in memory.
+//
+// It used to be 64 KB, which aborted the device: a std::string growing toward
+// that size asks for roughly 96 KB contiguous while it still holds the old
+// buffer, against a largest-free-block of about 69 KB — and std::string allocates
+// by throwing, which on this platform means abort() and a reboot loop.
+//
+// 8 KB is enough because the fields wanted, dc:title and dc:creator, sit in the
+// <metadata> block at the very top of the file. Everything after it is the
+// manifest, which is what makes some of these documents 44 KB, and which is read
+// and discarded for nothing. The reader now stops at </metadata>.
+inline constexpr size_t LIBRARY_OPF_MAX_INFLATED = 8192;
 // container.xml is a fixed, tiny file; anything larger is not one.
 inline constexpr size_t LIBRARY_CONTAINER_MAX_INFLATED = 8192;
 

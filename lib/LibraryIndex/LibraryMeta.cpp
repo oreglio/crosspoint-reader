@@ -4,8 +4,11 @@
 #include <Print.h>
 #include <ZipFile.h>
 
+#include <Memory.h>
+
 #include <algorithm>
 #include <cstring>
+#include <string_view>
 
 namespace library {
 namespace {
@@ -16,35 +19,50 @@ namespace {
 // a bound. Unbounded would be a real hazard: uncompressedSize comes from the
 // archive itself, so a malformed or hostile EPUB could otherwise ask for an
 // arbitrary allocation on a device with tens of kilobytes to spare.
+// Collects an inflated entry into ONE buffer allocated up front.
+//
+// Up front and nothrow, both deliberately. A std::string that grows re-allocates
+// while still holding the old block, so filling 64 KB needed ~96 KB contiguous on
+// a heap whose largest free block was 69 KB — and std::string allocates by
+// throwing, which here means abort() and a reboot loop. That is a crash the
+// maintainer hit on a real card. A single fixed buffer cannot fragment, and a
+// failure to get it is a returned false rather than a dead device.
 class BoundedSink final : public Print {
  public:
-  explicit BoundedSink(const size_t cap) : cap(cap) { text.reserve(1024); }
+  explicit BoundedSink(const size_t cap) : cap(cap) { buffer = makeUniqueNoThrow<char[]>(cap); }
 
-  size_t write(const uint8_t b) override {
-    if (text.size() >= cap) {
-      overflowed = true;
-      return 0;
+  bool ok() const { return buffer != nullptr; }
+
+  size_t write(const uint8_t b) override { return write(&b, 1); }
+
+  size_t write(const uint8_t* data, const size_t size) override {
+    if (!buffer) return 0;
+    const size_t room = cap > used ? cap - used : 0;
+    const size_t take = std::min(size, room);
+    if (take > 0) {
+      memcpy(buffer.get() + used, data, take);
+      used += take;
     }
-    text.push_back(static_cast<char>(b));
-    return 1;
+    if (take < size) overflowed = true;
+    // Everything wanted lives in <metadata>; the manifest that follows is why
+    // some of these run to 44 KB. Stopping here is what makes 8 KB sufficient.
+    if (!done && used >= kMetadataEnd.size()) {
+      const std::string_view seen(buffer.get(), used);
+      if (seen.find(kMetadataEnd) != std::string_view::npos) done = true;
+    }
+    return take;
   }
 
-  size_t write(const uint8_t* buffer, const size_t size) override {
-    if (text.size() + size > cap) {
-      overflowed = true;
-      const size_t room = cap > text.size() ? cap - text.size() : 0;
-      text.append(reinterpret_cast<const char*>(buffer), room);
-      return room;
-    }
-    text.append(reinterpret_cast<const char*>(buffer), size);
-    return size;
-  }
+  std::string text() const { return buffer ? std::string(buffer.get(), used) : std::string(); }
 
-  std::string text;
   bool overflowed = false;
+  bool done = false;
 
  private:
+  static constexpr std::string_view kMetadataEnd{"</metadata>"};
+  std::unique_ptr<char[]> buffer;
   size_t cap;
+  size_t used = 0;
 };
 
 // Find `name` as an element, tolerating a namespace prefix ("dc:title") and
@@ -157,12 +175,20 @@ bool inflateBounded(ZipFile& zip, const char* entry, const size_t maxInflated, s
   }
 
   BoundedSink sink(maxInflated);
-  if (!zip.readFileToStream(entry, sink, 1024)) return false;
-  if (sink.overflowed) {
+  if (!sink.ok()) {
+    LOG_ERR("LIBMETA", "no room for a %u-byte buffer", static_cast<unsigned>(maxInflated));
+    return false;
+  }
+  // allowEarlyStop, so a 44 KB manifest is never inflated once the metadata block
+  // has gone by.
+  zip.readFileToStream(entry, sink, 1024, /*allowEarlyStop=*/true);
+  out = sink.text();
+  // Overflow is only a failure if the metadata block never arrived: past
+  // </metadata> there is nothing left worth reading.
+  if (sink.overflowed && !sink.done) {
     tooLarge = true;
     return false;
   }
-  out = std::move(sink.text);
   return !out.empty();
 }
 
