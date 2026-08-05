@@ -440,6 +440,14 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   // the old loop never advanced past it — the device simply hung mid-rebuild with
   // no message, which is worse than any error.
   bool writeFailed = false;
+  // Every write goes through here. Checking them one by one was the alternative,
+  // and the review found the ones that had been missed — a short write on a full
+  // card leaves a file that still passes the header check because the header was
+  // written last and describes what was intended, not what landed.
+  const auto put = [&out, &writeFailed](const void* data, const size_t len) {
+    if (writeFailed) return;
+    if (out.write(static_cast<const uint8_t*>(data), len) != static_cast<int>(len)) writeFailed = true;
+  };
   const auto padTo = [&out, &writeFailed](const uint32_t target) {
     static const uint8_t zeros[64] = {0};
     while (out.position() < target) {
@@ -453,7 +461,7 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   };
 
   // Header placeholder; rewritten below once authorRank/dateRank are known.
-  out.write(reinterpret_cast<const uint8_t*>(&header), sizeof(header));
+  put(&header, sizeof(header));
   padTo(header.folderStart);
 
   {
@@ -461,7 +469,7 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
     if (Storage.openFileForRead("LIBIDX", folderStagePath, folders)) {
       uint8_t buf[256];
       size_t got = 0;
-      while ((got = folders.read(buf, sizeof(buf))) > 0) out.write(buf, got);
+      while ((got = folders.read(buf, sizeof(buf))) > 0) put(buf, static_cast<size_t>(got));
       folders.close();
     }
   }
@@ -650,16 +658,29 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   // order, but the name blob below is written in title order, so a staged offset
   // points at whatever name happened to be staged at that position — which
   // renders as the tail of one name glued to the head of the next.
+  // One pair of staging buffers on the heap, reused by both emit loops. As
+  // locals they were 768 bytes each, so 1.5 KB of stack inside a function running
+  // on a 4 KB task — the kind of margin that survives a test library and fails on
+  // someone else's. On the heap the allocation is checked; on the stack an
+  // overflow is a silent corruption.
+  auto staged = makeUniqueNoThrow<StagedEntry[]>(2);
+  if (!staged) {
+    LOG_ERR("LIBIDX", "staging buffers alloc failed");
+    out.close();
+    Storage.remove(NEW_PATH);
+    return false;
+  }
+  StagedEntry& entry = staged[0];
+  StagedEntry& canonical = staged[1];
+
   uint32_t nameCursor = 0;
   for (uint16_t i = 0; i < n; i++) {
-    StagedEntry entry{};
     stage.seekSet(static_cast<uint64_t>(order[i]) * STAGE_STRIDE);
     stage.read(reinterpret_cast<uint8_t*>(&entry), STAGE_STRIDE);
     entry.record.nameOff = nameCursor;
     // The blob holds the basename, then one length byte, then the chosen author
-    // spelling. Keeping them adjacent means no second offset has to live in the
-    // record, which is exactly full at 128 bytes.
-    StagedEntry canonical{};
+    // spelling, then the title. Keeping them adjacent means no second offset has
+    // to live in the record, which is exactly full at 128 bytes.
     const uint16_t from = canonicalFrom ? canonicalFrom[i] : i;
     stage.seekSet(static_cast<uint64_t>(order[from]) * STAGE_STRIDE);
     stage.read(reinterpret_cast<uint8_t*>(&canonical), STAGE_STRIDE);
@@ -667,35 +688,33 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
     if (resolvedFirstSeen) entry.record.firstSeen = resolvedFirstSeen[order[i]];
     entry.record.dateRank = dateRankOf ? dateRankOf[i] : i;
     entry.record.authorRank = authorRankOf ? authorRankOf[i] : i;
-    out.write(reinterpret_cast<const uint8_t*>(&entry.record), sizeof(ClixRecord));
+    put(&entry.record, sizeof(ClixRecord));
   }
   padTo(header.permStart);
 
   for (uint16_t k = 0; k < n; k++) {
     const uint16_t ordinal = authorSort ? authorSort[k].ordinal : k;
-    out.write(reinterpret_cast<const uint8_t*>(&ordinal), sizeof(ordinal));
+    put(&ordinal, sizeof(ordinal));
   }
   for (uint16_t k = 0; k < n; k++) {
     const uint16_t ordinal = dateSort ? dateSort[k].ordinal : newOrdinalOf[k];
-    out.write(reinterpret_cast<const uint8_t*>(&ordinal), sizeof(ordinal));
+    put(&ordinal, sizeof(ordinal));
   }
   padTo(header.nameStart);
 
   uint32_t blobWritten = 0;
   for (uint16_t i = 0; i < n; i++) {
-    StagedEntry entry{};
     stage.seekSet(static_cast<uint64_t>(order[i]) * STAGE_STRIDE);
     stage.read(reinterpret_cast<uint8_t*>(&entry), STAGE_STRIDE);
-    out.write(reinterpret_cast<const uint8_t*>(entry.name), entry.record.nameLen);
+    put(entry.name, entry.record.nameLen);
 
-    StagedEntry canonical{};
     const uint16_t from = canonicalFrom ? canonicalFrom[i] : i;
     stage.seekSet(static_cast<uint64_t>(order[from]) * STAGE_STRIDE);
     stage.read(reinterpret_cast<uint8_t*>(&canonical), STAGE_STRIDE);
-    out.write(&canonical.authorLen, 1);
-    if (canonical.authorLen > 0) out.write(reinterpret_cast<const uint8_t*>(canonical.author), canonical.authorLen);
-    out.write(&entry.titleLen, 1);
-    if (entry.titleLen > 0) out.write(reinterpret_cast<const uint8_t*>(entry.title), entry.titleLen);
+    put(&canonical.authorLen, 1);
+    if (canonical.authorLen > 0) put(canonical.author, canonical.authorLen);
+    put(&entry.titleLen, 1);
+    if (entry.titleLen > 0) put(entry.title, entry.titleLen);
     blobWritten += blobBytesFor(entry, canonical);
   }
   header.nameLen = blobWritten;
@@ -715,7 +734,7 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
                  (stats.booksAtRoot ? CLIX_FLAG_BOOKS_AT_ROOT : 0);
 
   out.seekSet(0);
-  out.write(reinterpret_cast<const uint8_t*>(&header), sizeof(header));
+  put(&header, sizeof(header));
   // The file is only as long as it claims if every write landed. A full card
   // fails them silently, and the result passes the header check while carrying
   // zeros — an index that looks valid and is not.
