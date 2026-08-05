@@ -253,6 +253,15 @@ void LibraryListActivity::applyFilter() {
     if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) continue;
     if (library::matchesQuery(std::string_view(record.fold, record.foldLen), needle)) {
       filtered.push_back(static_cast<uint16_t>(row));
+      continue;
+    }
+    // The stored fold covers the title only, so the author has to be read and
+    // folded here. That is the search most worth having: the reader who knows the
+    // author usually also knows where the book is, while "alice" finding Alice
+    // Hunter is the case the shelf exists to answer.
+    std::string author;
+    if (index.readAuthor(record, author) && library::matchesQuery(library::fold(author), needle)) {
+      filtered.push_back(static_cast<uint16_t>(row));
     }
   }
   selectedIndex = 0;
