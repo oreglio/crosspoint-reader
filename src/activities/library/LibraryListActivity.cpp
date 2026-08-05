@@ -279,13 +279,15 @@ constexpr int kLetterCount = 26;
 // title fold in author order — which the first cut did — sent "Alice Hunter" to
 // wherever her book's title happened to fall.
 char LibraryListActivity::letterOf(const library::ClixRecord& record) {
+  // Must be the key the rows are ORDERED by, not the text they display. The jump
+  // scans for the first row at or past the chosen letter, which is only valid
+  // while the letters ascend — and the displayed name does not always ascend with
+  // the sort. "Manook Ian" is filed under I, because authorKey sorts a name's
+  // words so that "Ian Manook" and "Manook Ian" group as one person; reading the
+  // display letter there gives M, the scan meets it early, and every letter from
+  // C onward stops on that one row.
   if (sortOrder == library::SortOrder::AuthorAsc) {
-    std::string author;
-    if (index.readAuthor(record, author)) {
-      const std::string folded = library::fold(author);
-      return folded.empty() ? '\0' : folded[0];
-    }
-    return '\0';
+    return record.authorKeyLen == 0 ? '\0' : record.authorKey[0];
   }
   return record.foldLen == 0 ? '\0' : record.fold[0];
 }
