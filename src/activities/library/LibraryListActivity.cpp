@@ -406,9 +406,34 @@ void LibraryListActivity::drawLetterGrid() {
   }
 }
 
+// Which letters could still lead to a book, unioned across the shelf. Runs once
+// per keystroke, on a press that ends in a full panel repaint regardless, so the
+// pass is invisible beside what it saves: a key that leads nowhere costs the
+// reader a flash and then a correction.
+uint32_t LibraryListActivity::allowedLettersFor(void* ctx, const std::string& text) {
+  auto* self = static_cast<LibraryListActivity*>(ctx);
+  const std::string needle = library::fold(text, /*stripArticle=*/false);
+  const int total = static_cast<int>(self->index.bookCount());
+  uint32_t mask = 0;
+  for (int row = 0; row < total; row++) {
+    const uint16_t ordinal = self->index.ordinalForRow(self->sortOrder, static_cast<uint16_t>(row));
+    library::ClixRecord record{};
+    if (ordinal == 0xFFFF || !self->index.readRecord(ordinal, record)) continue;
+    mask |= library::nextLetterMask(std::string_view(record.fold, record.foldLen), needle);
+    // Authors are searchable too, so their letters must stay pressable.
+    std::string author;
+    if (self->index.readAuthor(record, author)) {
+      mask |= library::nextLetterMask(library::fold(author), needle);
+    }
+  }
+  return mask;
+}
+
 void LibraryListActivity::openSearch() {
-  startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_LIBRARY_SEARCH), query,
-                                                                 48, InputType::Text),
+  auto keyboard = std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_LIBRARY_SEARCH), query, 48,
+                                                          InputType::Text);
+  keyboard->setAllowedLettersFilter(&LibraryListActivity::allowedLettersFor, this);
+  startActivityForResult(std::move(keyboard),
                          [this](const ActivityResult& result) {
                            if (result.isCancelled) return;
                            query = std::get<KeyboardResult>(result.data).text;
