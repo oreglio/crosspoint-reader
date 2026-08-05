@@ -27,9 +27,14 @@ constexpr size_t NAME_BUF_SIZE = 512;
 // One staged entry: the record as far as the filename can fill it, followed by
 // the display name. Fixed stride keeps the second pass a seek rather than a scan.
 constexpr size_t STAGE_NAME_BYTES = 255;
+constexpr size_t STAGE_AUTHOR_BYTES = 128;
 struct StagedEntry {
   ClixRecord record;
   char name[STAGE_NAME_BYTES];
+  // Display spelling as this one filename gave it. The spelling actually shown
+  // is chosen later, across every book by the same person.
+  uint8_t authorLen;
+  char author[STAGE_AUTHOR_BYTES];
 };
 constexpr size_t STAGE_STRIDE = sizeof(StagedEntry);
 
@@ -124,6 +129,10 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
   memcpy(entry.record.fold, folded.data(), entry.record.foldLen);
   memcpy(entry.record.authorKey, key.data(), entry.record.authorKeyLen);
   memcpy(entry.name, name.data(), entry.record.nameLen);
+
+  const std::string displayAuthor = cleanPersonName(author);
+  entry.authorLen = static_cast<uint8_t>(std::min(displayAuthor.size(), STAGE_AUTHOR_BYTES));
+  memcpy(entry.author, displayAuthor.data(), entry.authorLen);
 
   st.stage.write(reinterpret_cast<const uint8_t*>(&entry), STAGE_STRIDE);
   st.nameBytes += entry.record.nameLen;
@@ -238,7 +247,12 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   header.totalBookBytes = st.totalBookBytes;
   header.flags = CLIX_FLAG_WALK_COMPLETE | (stats.ranksDegraded ? CLIX_FLAG_RANKS_DEGRADED : 0) |
                  (stats.booksAtRoot ? CLIX_FLAG_BOOKS_AT_ROOT : 0);
-  layoutSections(header, st.folderBytes, st.nameBytes);
+  // The blob is the LAST section, so its size affects only selfSize — every
+  // section offset is already fixed by the counts. Lay out with a placeholder
+  // and correct selfSize once the blob has actually been written, since the
+  // author spelling each record ends up carrying is not known until the
+  // one-spelling-per-person pass has run.
+  layoutSections(header, st.folderBytes, 0);
   (void)previousNextFirstSeen;
 
   HalFile stage;
@@ -305,6 +319,70 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   }
   header.knownAuthorCount = known;
 
+  // --- one spelling per person --------------------------------------------
+  //
+  // The author KEY already merges "Xiaolong, Qiu", "Qiu Xiaolong_" and
+  // "Qiu Xiaolong [Xiaolong, Qiu]" into one identity, because its tokens are
+  // sorted. The displayed STRING is still whatever each filename happened to
+  // carry, so one person appears under several spellings in the same list.
+  //
+  // Fix: within each key group show the spelling that occurs most often, ties
+  // broken by the shortest and then alphabetically. It never invents or reorders
+  // a name — it picks one of the strings that actually exist — which is what
+  // keeps "Qiu Xiaolong" and "Min Jin Lee" safe from a forename/surname rule
+  // that would confidently get them backwards.
+  //
+  // authorSort is already grouped: books by one person are contiguous in it. So
+  // this is one walk over the runs, holding only the current run's spellings.
+  auto canonicalFrom = makeUniqueNoThrow<uint16_t[]>(n == 0 ? 1 : n);
+  if (canonicalFrom) {
+    for (uint16_t i = 0; i < n; i++) canonicalFrom[i] = i;
+  }
+  if (canonicalFrom && authorSort && n > 1) {
+    uint16_t runStart = 0;
+    while (runStart < n) {
+      uint16_t runEnd = runStart + 1;
+      while (runEnd < n && memcmp(authorSort[runEnd].key, authorSort[runStart].key,
+                                  sizeof(authorSort[runStart].key)) == 0) {
+        runEnd++;
+      }
+      // A run of one has nothing to reconcile, and the unknown-author run (key
+      // all 0xFF) must not be collapsed onto one arbitrary empty string.
+      const bool unknownRun = static_cast<unsigned char>(authorSort[runStart].key[0]) == 0xFF;
+      if (!unknownRun && runEnd - runStart > 1) {
+        uint16_t bestOrdinal = authorSort[runStart].ordinal;
+        int bestScore = -1;
+        size_t bestLen = 0;
+        std::string bestText;
+        for (uint16_t a = runStart; a < runEnd; a++) {
+          StagedEntry ea{};
+          stage.seekSet(static_cast<uint64_t>(order[authorSort[a].ordinal]) * STAGE_STRIDE);
+          stage.read(reinterpret_cast<uint8_t*>(&ea), STAGE_STRIDE);
+          if (ea.authorLen == 0) continue;
+          const std::string textA(ea.author, ea.authorLen);
+
+          int score = 0;
+          for (uint16_t b = runStart; b < runEnd; b++) {
+            StagedEntry eb{};
+            stage.seekSet(static_cast<uint64_t>(order[authorSort[b].ordinal]) * STAGE_STRIDE);
+            stage.read(reinterpret_cast<uint8_t*>(&eb), STAGE_STRIDE);
+            if (eb.authorLen == ea.authorLen && memcmp(eb.author, ea.author, ea.authorLen) == 0) score++;
+          }
+          const bool better = score > bestScore || (score == bestScore && textA.size() < bestLen) ||
+                              (score == bestScore && textA.size() == bestLen && textA < bestText);
+          if (better) {
+            bestScore = score;
+            bestLen = textA.size();
+            bestText = textA;
+            bestOrdinal = authorSort[a].ordinal;
+          }
+        }
+        for (uint16_t a = runStart; a < runEnd; a++) canonicalFrom[authorSort[a].ordinal] = bestOrdinal;
+      }
+      runStart = runEnd;
+    }
+  }
+
   // Records, in title order, with both ranks and the name offset filled in.
   //
   // nameOff MUST be recomputed here. The walk assigns offsets in discovery
@@ -317,7 +395,16 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
     stage.seekSet(static_cast<uint64_t>(order[i]) * STAGE_STRIDE);
     stage.read(reinterpret_cast<uint8_t*>(&entry), STAGE_STRIDE);
     entry.record.nameOff = nameCursor;
-    nameCursor += entry.record.nameLen;
+    // The blob holds the basename, then one length byte, then the chosen author
+    // spelling. Keeping them adjacent means no second offset has to live in the
+    // record, which is exactly full at 128 bytes.
+    StagedEntry canonical{};
+    const uint16_t from = canonicalFrom ? canonicalFrom[i] : i;
+    stage.seekSet(static_cast<uint64_t>(order[from]) * STAGE_STRIDE);
+    stage.read(reinterpret_cast<uint8_t*>(&canonical), STAGE_STRIDE);
+    // Must match the blob loop below exactly, or every name after the first
+    // divergence renders as a slice of its neighbours.
+    nameCursor += entry.record.nameLen + 1u + canonical.authorLen;
     // firstSeen is handed out sequentially during the walk and carried across
     // rebuilds, so the position in first-seen order is the offset from the value
     // this build started at — not the raw counter.
@@ -339,12 +426,23 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   }
   padTo(header.nameStart);
 
+  uint32_t blobWritten = 0;
   for (uint16_t i = 0; i < n; i++) {
     StagedEntry entry{};
     stage.seekSet(static_cast<uint64_t>(order[i]) * STAGE_STRIDE);
     stage.read(reinterpret_cast<uint8_t*>(&entry), STAGE_STRIDE);
     out.write(reinterpret_cast<const uint8_t*>(entry.name), entry.record.nameLen);
+
+    StagedEntry canonical{};
+    const uint16_t from = canonicalFrom ? canonicalFrom[i] : i;
+    stage.seekSet(static_cast<uint64_t>(order[from]) * STAGE_STRIDE);
+    stage.read(reinterpret_cast<uint8_t*>(&canonical), STAGE_STRIDE);
+    out.write(&canonical.authorLen, 1);
+    if (canonical.authorLen > 0) out.write(reinterpret_cast<const uint8_t*>(canonical.author), canonical.authorLen);
+    blobWritten += entry.record.nameLen + 1u + canonical.authorLen;
   }
+  header.nameLen = blobWritten;
+  header.selfSize = header.nameStart + blobWritten;
   stage.close();
 
   out.seekSet(0);

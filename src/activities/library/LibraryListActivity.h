@@ -57,6 +57,8 @@ class LibraryListActivity final : public Activity {
   bool rowTextFor(int entry, std::string& title, std::string& author);
   void drawRows();
   void drawPositionReadout();
+  void nextPage();
+  void previousPage(bool selectLast = false);
   void openSelectedBook();
   void cycleSortOrder();
   const char* sortOrderLabel() const;
@@ -74,6 +76,9 @@ class LibraryListActivity final : public Activity {
   // afterwards land exactly on the widget's own row boundaries.
   int listTop = 0;
   int listHeight = 0;
+  // First entry of each page visited on the way here, so going back lands on the
+  // same boundaries the reader came through.
+  std::vector<uint16_t> pageStarts;
   int titleLineH = 0;
   int authorLineH = 0;
   bool indexReady = false;

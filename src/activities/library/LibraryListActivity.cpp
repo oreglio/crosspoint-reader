@@ -200,27 +200,37 @@ void LibraryListActivity::loop() {
   // paging is free — which matters at 69 books, where scrolling one row at a time
   // is 34 presses to the middle and paging is 5.
   if (mappedInput.wasReleased(MappedInputManager::Button::Right) && count > 0) {
-    selectedIndex = std::min(count - 1, selectedIndex + visibleRows);
-    topIndex = followListSelection(selectedIndex, topIndex, visibleRows, count);
-    requestUpdate();
+    nextPage();
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Left) && count > 0) {
-    selectedIndex = std::max(0, selectedIndex - visibleRows);
-    topIndex = followListSelection(selectedIndex, topIndex, visibleRows, count);
-    requestUpdate();
+    previousPage();
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Up) && selectedIndex > 0) {
-    selectedIndex--;
-    topIndex = followListSelection(selectedIndex, topIndex, visibleRows, count);
-    requestUpdate();
+  // Scrolling keeps the selection inside the window, using the row count the last
+  // frame actually held. One frame stale and self-correcting, which is the only
+  // honest option when row heights depend on the titles being shown.
+  // The list PAGES, it does not scroll. On e-ink moving one row costs the same
+  // full-panel refresh as turning a whole page, so scrolling spends the panel's
+  // most expensive operation on its smallest possible result. Up and Down move
+  // within the page; at an edge they turn it and land on the far row, so the
+  // reader never loses the sense of a fixed frame.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
+    if (selectedIndex > topIndex) {
+      selectedIndex--;
+      requestUpdate();
+    } else if (topIndex > 0) {
+      previousPage(/*selectLast=*/true);
+    }
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Down) && selectedIndex < count - 1) {
-    selectedIndex++;
-    topIndex = followListSelection(selectedIndex, topIndex, visibleRows, count);
-    requestUpdate();
+  if (mappedInput.wasReleased(MappedInputManager::Button::Down) && count > 0) {
+    if (selectedIndex < topIndex + visibleRows - 1 && selectedIndex < count - 1) {
+      selectedIndex++;
+      requestUpdate();
+    } else if (topIndex + visibleRows < count) {
+      nextPage();
+    }
   }
 }
 
@@ -296,30 +306,72 @@ void LibraryListActivity::drawRows() {
     }
   }
 
-  // Paging and Up/Down both need to know how much of the list one screen holds.
-  // It is only knowable after drawing, since it depends on the titles on screen.
+  // Report how much this screen held, for the next input pass to page by. Do NOT
+  // adjust topIndex here: loop() already scrolled it to contain the selection
+  // before asking for this frame, and correcting it afterwards meant the frame
+  // just drawn could omit the selected row — which is what made Up/Down followed
+  // by Left/Right jump somewhere unrelated.
   visibleRows = drawn > 0 ? drawn : 1;
-  if (selectedIndex >= topIndex + visibleRows) topIndex = selectedIndex - visibleRows + 1;
+  // previousPage() aims past the end because a page's size is only known once it
+  // has been measured; clamp now that it has been.
+  if (selectedIndex >= topIndex + visibleRows) selectedIndex = topIndex + visibleRows - 1;
+  if (selectedIndex >= count) selectedIndex = count - 1;
 }
 
-// "3/6" at the bottom right. Rows are variable height, so a page is not a fixed
-// number of books and the count has to be estimated from what the current screen
-// actually holds — an honest approximation is worth more here than a precise
-// number nobody can act on. It also tells the user how far the list goes, which
-// a scrollbar on a 1-bit panel says far less clearly.
+// "12/69" at the bottom right: which book is selected, out of how many.
+//
+// NOT a page count. Rows are variable height, so how many fit depends on the
+// titles currently on screen — a page total derived from that grows and shrinks
+// as you scroll, which is exactly the "6/6 then 8/8" the first version produced.
+// The book position is stable by construction, and it answers the question the
+// reader actually has: how far in am I, and how much is left.
 void LibraryListActivity::drawPositionReadout() {
   const int count = static_cast<int>(index.bookCount());
-  if (count <= 0 || visibleRows <= 0) return;
+  if (count <= 0) return;
 
-  const int page = selectedIndex / visibleRows + 1;
-  const int pages = (count + visibleRows - 1) / visibleRows;
-  if (pages <= 1) return;
-
-  char buf[16];
-  snprintf(buf, sizeof(buf), "%d/%d", page, pages);
+  // "12/60 books", not "2/6". Rows are variable height, so how many fit depends
+  // on the titles currently on screen; a page total derived from that grows and
+  // shrinks as you scroll. Real pages would mean wrapping every title up front,
+  // once per sort order — the per-render cost this screen is built to avoid, for
+  // a number that answers a smaller question than "how far in am I".
+  char buf[32];
+  snprintf(buf, sizeof(buf), tr(STR_LIBRARY_POSITION), selectedIndex + 1, count);
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int width = renderer.getTextWidth(SMALL_FONT_ID, buf);
   const int x = renderer.getScreenWidth() - width - LIBRARY_SIDE_PADDING;
   const int y = renderer.getScreenHeight() - metrics.buttonHintsHeight - renderer.getLineHeight(SMALL_FONT_ID);
   renderer.drawText(SMALL_FONT_ID, x, y, buf, true);
+}
+
+// Page boundaries are content-dependent, so they cannot be computed from an
+// index — a page holds as many rows as its own titles allow. They are therefore
+// remembered as the reader moves forward, which makes going back exact rather
+// than an estimate that would drift on every turn.
+void LibraryListActivity::nextPage() {
+  const int count = static_cast<int>(index.bookCount());
+  const int next = topIndex + visibleRows;
+  if (next >= count) return;
+  if (pageStarts.empty()) pageStarts.push_back(0);
+  pageStarts.push_back(next);
+  topIndex = next;
+  selectedIndex = topIndex;
+  requestUpdate();
+}
+
+void LibraryListActivity::previousPage(const bool selectLast) {
+  if (topIndex <= 0) return;
+  if (pageStarts.size() > 1) {
+    pageStarts.pop_back();
+    topIndex = pageStarts.back();
+  } else {
+    // No recorded history — the reader jumped here by some other route. Fall back
+    // to a screenful back; it may not land on a boundary this pass, but the next
+    // render re-measures and nothing is lost.
+    topIndex = std::max(0, topIndex - visibleRows);
+    pageStarts.assign(1, topIndex);
+  }
+  // selectLast is only known to be right after the render that measures this
+  // page, so aim past the end and let drawRows clamp it.
+  selectedIndex = selectLast ? topIndex + visibleRows - 1 : topIndex;
+  requestUpdate();
 }
