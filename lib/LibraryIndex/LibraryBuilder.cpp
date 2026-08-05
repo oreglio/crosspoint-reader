@@ -363,6 +363,22 @@ void walk(WalkState& st, const std::string& path, const int depth) {
 // leaves the previous index intact rather than a header claiming records that
 // were never written. The header goes down twice: once as a placeholder, and
 // once for real when the counts are known — the Dictionary.cpp idiom.
+// The one place that says how many bytes a book occupies in the name blob.
+//
+// Two loops need this number — the record loop, to set each nameOff, and the blob
+// loop, to write the bytes — and they used to compute it separately with a comment
+// telling the next person to keep them in step. They did not stay in step: adding
+// the title field in v3 updated the blob loop only, so every record after the
+// first pointed short by the accumulated title lengths. Names rendered as slices
+// of their neighbours, and since readPath reads the same slot, the books could not
+// be opened. selfSize stayed self-consistent, so the index passed validation and
+// would not have repaired itself.
+//
+// A shared function makes that class of bug impossible rather than fixed.
+uint32_t blobBytesFor(const StagedEntry& entry, const StagedEntry& canonical) {
+  return entry.record.nameLen + 1u + canonical.authorLen + 1u + entry.titleLen;
+}
+
 bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order,
                const uint16_t* resolvedFirstSeen, BuildStats& stats) {
   const uint16_t n = st.books;
@@ -628,9 +644,7 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
     const uint16_t from = canonicalFrom ? canonicalFrom[i] : i;
     stage.seekSet(static_cast<uint64_t>(order[from]) * STAGE_STRIDE);
     stage.read(reinterpret_cast<uint8_t*>(&canonical), STAGE_STRIDE);
-    // Must match the blob loop below exactly, or every name after the first
-    // divergence renders as a slice of its neighbours.
-    nameCursor += entry.record.nameLen + 1u + canonical.authorLen;
+    nameCursor += blobBytesFor(entry, canonical);
     if (resolvedFirstSeen) entry.record.firstSeen = resolvedFirstSeen[order[i]];
     entry.record.dateRank = dateRankOf ? dateRankOf[i] : i;
     entry.record.authorRank = authorRankOf ? authorRankOf[i] : i;
@@ -663,7 +677,7 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
     if (canonical.authorLen > 0) out.write(reinterpret_cast<const uint8_t*>(canonical.author), canonical.authorLen);
     out.write(&entry.titleLen, 1);
     if (entry.titleLen > 0) out.write(reinterpret_cast<const uint8_t*>(entry.title), entry.titleLen);
-    blobWritten += entry.record.nameLen + 1u + canonical.authorLen + 1u + entry.titleLen;
+    blobWritten += blobBytesFor(entry, canonical);
   }
   header.nameLen = blobWritten;
   header.selfSize = header.nameStart + blobWritten;

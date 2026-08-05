@@ -163,16 +163,15 @@ std::string collapseWhitespace(const std::string& in) {
 
 bool inflateBounded(ZipFile& zip, const char* entry, const size_t maxInflated, std::string& out, bool& tooLarge) {
   tooLarge = false;
-  // Cheap pre-check: the size comes from the central directory, so an oversized
-  // entry is rejected without touching its deflate stream. ZipFile keeps the
-  // compressed size private, so this gates on the inflated one — the sink below
-  // is the hard stop either way, and it is what makes a lying or corrupt header
-  // harmless.
-  size_t inflatedSize = 0;
-  if (zip.getInflatedFileSize(entry, &inflatedSize) && inflatedSize > maxInflated) {
-    tooLarge = true;
-    return false;
-  }
+  // No size pre-check. There used to be one, and it undid the whole point of the
+  // early stop: a package document is often larger than the cap because of its
+  // manifest, and rejecting it up front threw away a title and author that sit in
+  // the first few hundred bytes. A real 44 KB document on the maintainer's card
+  // was silently losing both.
+  //
+  // The sink is the bound. It never allocates more than the cap, stops at
+  // </metadata>, and a header that lies about its size cannot make it allocate
+  // more.
 
   BoundedSink sink(maxInflated);
   if (!sink.ok()) {
