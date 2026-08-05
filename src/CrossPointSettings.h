@@ -201,6 +201,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   enum FILE_BROWSER_DISPLAY {
     FILE_BROWSER_DISPLAY_1_LINE = 0,
     FILE_BROWSER_DISPLAY_2_LINES = 1,
+    // Appended, never inserted: persisted settings store the raw value, and a
+    // firmware without this option falls back to the default via
+    // isEnumRawValueAllowed() instead of reinterpreting it as another mode.
+    FILE_BROWSER_DISPLAY_FULL = 2,
     FILE_BROWSER_DISPLAY_COUNT
   };
 

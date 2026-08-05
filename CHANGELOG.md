@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Added
+
+- `File Browser Display` gains a `Full Name` option in `Settings > System > Files & Cache`, wrapping file names over enough lines that long names are no longer cut short with an ellipsis. Rows are taller, so fewer books are listed per screen than in `2 Lines`.
+
 ## [v1.5.0] - 2026-08-04
 
 ### Added

@@ -39,8 +39,46 @@ constexpr size_t INDEX_THRESHOLD = 200;
 constexpr uint32_t FILE_BROWSER_APPEND_MIN_FREE_AFTER_ALLOC = 48U * 1024U;
 constexpr uint32_t FILE_BROWSER_APPEND_MIN_MAX_ALLOC_AFTER_ALLOC = 16U * 1024U;
 
+// Label lines a file-browser row shows in FILE_BROWSER_DISPLAY_FULL. Four lines
+// hold roughly 180 characters at the X3/X4 list width, above the 150-byte limit
+// the firmware's own file transfer enforces, so names it can create always fit.
+// The FreeInkUI list uses one uniform row height, so this is a flat cost on
+// every row: raising it shows longer names and fewer books at once.
+constexpr int FILE_BROWSER_FULL_ROW_LINES = 4;
+
 bool usesTwoLineFileBrowserRows() {
   return SETTINGS.fileBrowserDisplay == CrossPointSettings::FILE_BROWSER_DISPLAY_2_LINES;
+}
+
+// True when rows are taller than one line, whatever the reason. Drives the
+// subtitle row type and the larger icon.
+bool usesMultiLineFileBrowserRows() {
+  return SETTINGS.fileBrowserDisplay != CrossPointSettings::FILE_BROWSER_DISPLAY_1_LINE;
+}
+
+int fileBrowserLabelMaxLines() {
+  switch (SETTINGS.fileBrowserDisplay) {
+    case CrossPointSettings::FILE_BROWSER_DISPLAY_FULL:
+      return FILE_BROWSER_FULL_ROW_LINES;
+    case CrossPointSettings::FILE_BROWSER_DISPLAY_2_LINES:
+      return 2;
+    default:
+      return 1;
+  }
+}
+
+// Row height for `lines` label lines. Derived from the theme's own one-line and
+// two-line metrics rather than font internals, so it follows the UI font-size
+// setting and each theme's spacing: every line past the second costs the same as
+// the step from one line to two. Both the renderer and the touch hit-test call
+// this, so a row can never be drawn at one height and hit-tested at another.
+int16_t fileBrowserRowHeightFor(const freeink::ui::ThemeTokens& tokens, const int lines) {
+  const int16_t singleLine = uiListRowHeight(tokens, UiListRowType::SingleLine);
+  const int16_t twoLine = uiListRowHeight(tokens, UiListRowType::WithSubtitle);
+  if (lines <= 1) return singleLine;
+  if (lines <= 2) return twoLine;
+  const int perExtraLine = std::max<int>(1, twoLine - singleLine);
+  return static_cast<int16_t>(twoLine + (lines - 2) * perExtraLine);
 }
 
 bool isDefaultSleepFolderPath(const std::string& path) { return path == "/sleep" || path == "/.sleep"; }
@@ -831,8 +869,7 @@ void FileBrowserActivity::loop() {
   const int contentBottom = renderer.getScreenHeight() - metrics.buttonHintsHeight -
                             renderer.getLineHeight(SMALL_FONT_ID) - metrics.verticalSpacing;
   const auto tokens = uiThemeTokens(uiTarget);
-  const auto rowType = usesTwoLineFileBrowserRows() ? UiListRowType::WithSubtitle : UiListRowType::SingleLine;
-  const int rowStep = uiListRowHeight(tokens, rowType) + tokens.listRowGap;
+  const int rowStep = fileBrowserRowHeightFor(tokens, fileBrowserLabelMaxLines()) + tokens.listRowGap;
   const int listSize = static_cast<int>(entryCount());
   int touchX = 0;
   int touchY = 0;
@@ -1051,10 +1088,14 @@ void FileBrowserActivity::buildListScreen(UiApp::ScreenType& screen) {
   }
 
   fui::ListProps props;
-  const bool twoLineRows = usesTwoLineFileBrowserRows();
-  const auto rowType = twoLineRows ? UiListRowType::WithSubtitle : UiListRowType::SingleLine;
+  const bool multiLineRows = usesMultiLineFileBrowserRows();
+  const int labelMaxLines = fileBrowserLabelMaxLines();
+  const auto rowType = multiLineRows ? UiListRowType::WithSubtitle : UiListRowType::SingleLine;
   props.labelText = screen.theme().bodyText;
-  props.labelText.maxLines = twoLineRows ? 2 : 1;
+  props.labelText.maxLines = labelMaxLines;
+  // Set the height before configureUiList so it keeps ours instead of deriving a
+  // two-line one; listVisibleRows then sizes the window to whatever fits.
+  props.rowHeight = fileBrowserRowHeightFor(screen.theme(), labelMaxLines);
   const fui::Rect listRect = screen.body();
   const auto rows = configureUiList(props, screen.theme(), listRect, rowType);
   visibleRows = rows > 0 ? rows : 1;
@@ -1079,7 +1120,7 @@ void FileBrowserActivity::buildListScreen(UiApp::ScreenType& screen) {
     fui::ListItem item;
     item.label = names[i].c_str();
     if (!values[i].empty()) item.value = values[i].c_str();
-    item.icon = listIconFor(UITheme::getFileIcon(entry), twoLineRows ? 32 : 24);
+    item.icon = listIconFor(UITheme::getFileIcon(entry), multiLineRows ? 32 : 24);
     item.actionValue = static_cast<int16_t>(entryIndex);
     items.push_back(item);
   }
