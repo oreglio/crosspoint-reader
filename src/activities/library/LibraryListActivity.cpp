@@ -343,13 +343,29 @@ void LibraryListActivity::drawLetterGrid() {
   const int rows = (kLetterCount + kLetterCols - 1) / kLetterCols;
   const int cellH = listHeight / (rows + 1);
   const int top = listTop + cellH / 2;
-  // The mode line sits above the grid, in space the grid was leaving empty.
-  const char* modeLabel = jumpByGivenName ? tr(STR_LIBRARY_JUMP_GIVEN) : tr(STR_LIBRARY_JUMP_SURNAME);
-  const int modeW = renderer.getTextWidth(SMALL_FONT_ID, modeLabel);
-  const int modeX = (width - modeW) / 2;
-  renderer.drawText(SMALL_FONT_ID, modeX, listTop + 2, modeLabel, true);
-  if (letterCursor < 0) {
-    renderer.fillRect(modeX, listTop + 2 + renderer.getLineHeight(SMALL_FONT_ID) + 1, modeW, 1, true);
+  // Both modes shown, not just the active one. Printing only the current choice
+  // hides the fact that there IS a choice — the same reason the sort strip lists
+  // every mode. On a panel that refreshes whole, the second label is free.
+  const char* labels[2] = {tr(STR_LIBRARY_JUMP_SURNAME), tr(STR_LIBRARY_JUMP_GIVEN)};
+  const int active = jumpByGivenName ? 1 : 0;
+  const int gap = 20;
+  int labelW[2];
+  for (int i = 0; i < 2; i++) labelW[i] = renderer.getTextWidth(SMALL_FONT_ID, labels[i]);
+  const int modeH = renderer.getLineHeight(SMALL_FONT_ID);
+  int mx = (width - (labelW[0] + labelW[1] + gap)) / 2;
+  const int modeY = listTop + 2;
+
+  for (int i = 0; i < 2; i++) {
+    const bool on = i == active;
+    // Focused, the active choice inverts — the strongest signal this panel has
+    // that Left/Right are about to change it. Unfocused it keeps an underline, so
+    // the line stays quiet while the grid holds attention.
+    if (on && letterCursor < 0) {
+      renderer.fillRoundedRect(mx - 5, modeY - 2, labelW[i] + 10, modeH + 4, 4, Color::Black);
+    }
+    renderer.drawText(SMALL_FONT_ID, mx, modeY, labels[i], !(on && letterCursor < 0));
+    if (on && letterCursor >= 0) renderer.fillRect(mx, modeY + modeH + 1, labelW[i], 1, true);
+    mx += labelW[i] + gap;
   }
 
   // Centre the block itself. Laying it out from the left margin left the last
