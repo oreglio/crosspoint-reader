@@ -387,22 +387,17 @@ void LibraryListActivity::drawLetterGrid() {
     const int pillW = cell - 6;
     const int pillH = cellH - 6;
     const int pillX = cx + (cell - pillW) / 2;
-    // A letter with no books keeps an OUTLINED cursor instead of a filled one.
-    // The distinction appears exactly when it is needed — while the reader is on
-    // the key, about to press it — and never at the cost of legibility.
+    // A letter no book starts with is simply not drawn. Its slot stays empty and
+    // nothing moves, because the grid's positions come from the alphabet's index
+    // and not from what happens to be painted — the earlier worry about losing
+    // one's place was unfounded.
+    if (!present) continue;
     if (i == letterCursor) {
-      if (present) {
-        renderer.fillRoundedRect(pillX, cy, pillW, pillH, 4, Color::Black);
-      } else {
-        renderer.drawRoundedRect(pillX, cy, pillW, pillH, 1, 4, true);
-      }
+      renderer.fillRoundedRect(pillX, cy, pillW, pillH, 4, Color::Black);
     }
-    // Every letter drawn the same, at full size and full black. Two earlier
-    // attempts at marking absence in the glyph itself both failed on a 1-bit
-    // panel: a smaller font read as inconsistent typography, and dithering the
-    // glyph erased it outright, since strokes at this size are one or two pixels
-    // wide and removing every other one leaves nothing. Availability is carried by
-    // the cursor and by Confirm instead, where it costs no legibility.
+    // Three attempts at showing an unavailable letter failed on a 1-bit panel: a
+    // smaller font read as inconsistent typography, dithering the glyph erased it,
+    // and an outlined cursor said nothing legible. Not drawing it says it plainly.
     char label[2] = {static_cast<char>('A' + i), 0};
     const int tw = renderer.getTextWidth(UI_10_FONT_ID, label);
     const int th = renderer.getLineHeight(UI_10_FONT_ID);
@@ -490,6 +485,16 @@ void LibraryListActivity::loop() {
           mappedInput.wasReleased(MappedInputManager::Button::Right)) {
         jumpByGivenName = !jumpByGivenName;
         computeLettersPresent();
+        // The letters present as first names are not those present as surnames,
+        // so the cursor may be left pointing at a slot that is now blank.
+        if (!(lettersPresent & (1u << letterCursor))) {
+          for (int i = 0; i < kLetterCount; i++) {
+            if (lettersPresent & (1u << i)) {
+              letterCursor = i;
+              break;
+            }
+          }
+        }
         requestUpdate();
       }
       if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
@@ -512,12 +517,19 @@ void LibraryListActivity::loop() {
       delta = -kLetterCols;
     }
     if (delta != 0) {
-      // Plain movement, including onto letters no book starts with. Skipping them
-      // was tried and reverted: the skip walked one cell at a time, so Down —
-      // which must travel a whole row — moved sideways instead, and the grid
-      // stopped being two-dimensional. An empty letter still jumps to where it
-      // would fall, which is a defensible answer and a far smaller cost.
-      letterCursor = (letterCursor + delta + kLetterCount) % kLetterCount;
+      // Skip cells with nothing drawn in them — the cursor must never sit on a
+      // blank. Keeping the SAME delta is what makes this safe: an earlier attempt
+      // stepped by one regardless of direction, so Down walked sideways and the
+      // grid stopped being two-dimensional. Down still travels a whole row, it
+      // just keeps travelling until it finds a letter.
+      int next = letterCursor;
+      for (int guard = 0; guard < kLetterCount; guard++) {
+        next = (next + delta + kLetterCount) % kLetterCount;
+        if (lettersPresent & (1u << next)) {
+          letterCursor = next;
+          break;
+        }
+      }
       requestUpdate();
     }
     return;
@@ -533,6 +545,12 @@ void LibraryListActivity::loop() {
       jumpByGivenName = false;
       computeLettersPresent();
       letterCursor = 0;
+      for (int i = 0; i < kLetterCount; i++) {
+        if (lettersPresent & (1u << i)) {
+          letterCursor = i;
+          break;
+        }
+      }
       letterGrid = true;
       requestUpdate();
     }
