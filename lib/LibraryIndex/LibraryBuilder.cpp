@@ -283,8 +283,8 @@ void walk(WalkState& st, const std::string& path, const int depth) {
 // leaves the previous index intact rather than a header claiming records that
 // were never written. The header goes down twice: once as a placeholder, and
 // once for real when the counts are known — the Dictionary.cpp idiom.
-bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order, BuildStats& stats,
-               const uint16_t previousNextFirstSeen) {
+bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order,
+               const uint16_t* resolvedFirstSeen, BuildStats& stats) {
   const uint16_t n = st.books;
 
   // newOrdinalOf[stagingIndex] = position in title order. Needed because both
@@ -454,9 +454,10 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
       stage.seekSet(static_cast<uint64_t>(order[i]) * STAGE_STRIDE);
       stage.read(reinterpret_cast<uint8_t*>(&r), sizeof(r));
       // Big-endian into the key so memcmp orders numerically.
+      const uint16_t seen = resolvedFirstSeen ? resolvedFirstSeen[order[i]] : r.firstSeen;
       memset(dateSort[i].key, 0, sizeof(dateSort[i].key));
-      dateSort[i].key[0] = static_cast<char>(r.firstSeen >> 8);
-      dateSort[i].key[1] = static_cast<char>(r.firstSeen & 0xFF);
+      dateSort[i].key[0] = static_cast<char>(seen >> 8);
+      dateSort[i].key[1] = static_cast<char>(seen & 0xFF);
       dateSort[i].ordinal = i;
     }
     if (n > 1) std::sort(dateSort.get(), dateSort.get() + n, sortKeyLess);
@@ -487,6 +488,7 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
     // Must match the blob loop below exactly, or every name after the first
     // divergence renders as a slice of its neighbours.
     nameCursor += entry.record.nameLen + 1u + canonical.authorLen;
+    if (resolvedFirstSeen) entry.record.firstSeen = resolvedFirstSeen[order[i]];
     entry.record.dateRank = dateRankOf ? dateRankOf[i] : i;
     entry.record.authorRank = authorRankOf ? authorRankOf[i] : i;
     out.write(reinterpret_cast<const uint8_t*>(&entry.record), sizeof(ClixRecord));
@@ -607,6 +609,11 @@ bool buildLibraryIndex(const char* rootPath, const uint16_t previousNextFirstSee
 
   // --- second pass: renames, then genuinely new books ----------------------
   //
+  // Resolved into RAM, never by rewriting the staging file: openFileForWrite
+  // opens with O_TRUNC (SDCardManager.cpp:308), so reopening the staging file to
+  // patch it empties it, and every record read afterwards comes back blank.
+  // Two bytes per book is a cheaper price than that failure mode.
+  //
   // A book that matched nothing by (name, size) is either renamed or new. Match
   // it against the leftover previous entries by SIZE alone: across a real
   // library, two different books sharing a byte-exact size is implausible, and
@@ -614,45 +621,45 @@ bool buildLibraryIndex(const char* rootPath, const uint16_t previousNextFirstSee
   // re-read. A content hash would settle it properly but would read ~12 KB per
   // book on every single verification, to decide a case that arises when someone
   // renames a file.
+  auto resolvedFirstSeen = makeUniqueNoThrow<uint16_t[]>(st.books == 0 ? 1 : st.books);
+  if (!resolvedFirstSeen) {
+    LOG_ERR("LIBIDX", "firstSeen array alloc failed");
+    Storage.remove(STAGE_PATH);
+    Storage.remove(folderStagePath.c_str());
+    return false;
+  }
   if (!st.aborted && st.books > 0) {
-    HalFile fix;
-    if (Storage.openFileForWrite("LIBIDX", STAGE_PATH, fix)) {
+    HalFile read;
+    if (Storage.openFileForRead("LIBIDX", STAGE_PATH, read)) {
       for (uint16_t i = 0; i < st.books; i++) {
         ClixRecord r{};
-        fix.seekSet(static_cast<uint64_t>(i) * STAGE_STRIDE);
-        if (fix.read(reinterpret_cast<uint8_t*>(&r), sizeof(r)) != static_cast<int>(sizeof(r))) break;
-        if (r.firstSeen != FIRST_SEEN_UNRESOLVED) continue;
-
+        read.seekSet(static_cast<uint64_t>(i) * STAGE_STRIDE);
+        if (read.read(reinterpret_cast<uint8_t*>(&r), sizeof(r)) != static_cast<int>(sizeof(r))) break;
+        if (r.firstSeen != FIRST_SEEN_UNRESOLVED) {
+          resolvedFirstSeen[i] = r.firstSeen;
+          continue;
+        }
         int renamed = -1;
-        for (uint16_t p = 0; p < priorCount; p++) {
-          if (!priorList[p].matched && priorList[p].size == r.fileSize) {
-            renamed = p;
+        for (uint16_t q = 0; q < priorCount; q++) {
+          if (priorList && !priorList[q].matched && priorList[q].size == r.fileSize) {
+            renamed = q;
             break;
           }
         }
         if (renamed >= 0) {
           priorList[renamed].matched = true;
-          r.firstSeen = priorList[renamed].firstSeen;
+          resolvedFirstSeen[i] = priorList[renamed].firstSeen;
           stats.renamed++;
         } else {
-          r.firstSeen = st.nextFirstSeen++;
+          resolvedFirstSeen[i] = st.nextFirstSeen++;
           stats.added++;
         }
-        fix.seekSet(static_cast<uint64_t>(i) * STAGE_STRIDE);
-        fix.write(reinterpret_cast<const uint8_t*>(&r), sizeof(r));
       }
-      fix.close();
+      read.close();
     }
-    for (uint16_t p = 0; p < priorCount; p++) {
-      if (!priorList[p].matched) stats.removed++;
+    for (uint16_t q = 0; q < priorCount; q++) {
+      if (priorList && !priorList[q].matched) stats.removed++;
     }
-  }
-
-  if (st.aborted) {
-    LOG_INF("LIBIDX", "build cancelled after %u books", static_cast<unsigned>(st.books));
-    Storage.remove(STAGE_PATH);
-    Storage.remove(folderStagePath.c_str());
-    return false;
   }
 
   stats.books = st.books;
@@ -701,7 +708,7 @@ bool buildLibraryIndex(const char* rootPath, const uint16_t previousNextFirstSee
             static_cast<unsigned>(st.books), static_cast<unsigned>(LIBRARY_MAX_SORTED));
   }
 
-  const bool ok = emitIndex(folderStagePath.c_str(), st, order.get(), stats, previousNextFirstSeen);
+  const bool ok = emitIndex(folderStagePath.c_str(), st, order.get(), resolvedFirstSeen.get(), stats);
   Storage.remove(STAGE_PATH);
   Storage.remove(folderStagePath.c_str());
 
