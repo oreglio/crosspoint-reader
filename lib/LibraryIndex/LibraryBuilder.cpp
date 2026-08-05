@@ -14,6 +14,7 @@
 #include <FsHelpers.h>
 
 #include "LibraryIndexFile.h"
+#include "LibraryMeta.h"
 #include "LibraryText.h"
 
 namespace library {
@@ -156,6 +157,8 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
   // reader's whole indexing pass, so buildIfMissing stays false and a book never
   // opened simply keeps the name it has on disk.
   if (st.readMetadata && FsHelpers::hasEpubExtension(name)) {
+    // Cheap path first: a book the reader has opened already carries its title
+    // and author in a cache beside it, and reading that is one small file.
     Epub epub(fullPath, CACHE_DIR);
     if (epub.load(false, true, Epub::XLocationLoadMode::Skip)) {
       if (!epub.getTitle().empty()) {
@@ -165,6 +168,21 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
       if (!epub.getAuthor().empty()) {
         parsed.author = epub.getAuthor();
         titleFromBook = true;
+      }
+    }
+    // Otherwise inflate the package document. Two small entries out of the zip,
+    // not the seconds-per-book indexing pass that would build the cache above.
+    if (!titleFromBook) {
+      BookMetadata meta;
+      if (readBookMetadata(fullPath, meta)) {
+        if (!meta.title.empty()) {
+          parsed.title = meta.title;
+          titleFromBook = true;
+        }
+        if (!meta.author.empty()) {
+          parsed.author = meta.author;
+          titleFromBook = true;
+        }
       }
     }
   }
