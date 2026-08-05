@@ -602,6 +602,20 @@ layout into a mutable buffer owned by the activity and rewriting the flags as th
 text changes. That is the twenty-line change, and it must not alter behaviour when
 no filter is supplied — the credential keyboards have no shelf to filter against.
 
+### Tried and rejected: greying out dead keyboard keys
+
+Built, tested on device, and switched off. The mechanism works — an optional
+filter on KeyboardEntryActivity, inert for every other caller, plus a selection
+that steps over disabled keys — but the result reads as a broken keyboard. A
+letter that is visible and unreachable draws the eye repeatedly; hiding the
+letters instead was worse, since the shape of AZERTY is what the hand navigates
+by. The saved keypress is not worth either cost.
+
+`library::nextLetterMask` and `LibraryListActivity::allowedLettersFor` remain,
+tested and unused. Re-enabling is one line in openSearch. Anyone revisiting should
+start from the visual: the greying has to be unmistakable before the skipping
+feels like help rather than obstruction.
+
 ### Known defects
 
 - One book of sixty yields no metadata; its package document is not read. Its

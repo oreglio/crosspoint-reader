@@ -430,10 +430,13 @@ uint32_t LibraryListActivity::allowedLettersFor(void* ctx, const std::string& te
 }
 
 void LibraryListActivity::openSearch() {
-  auto keyboard = std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_LIBRARY_SEARCH), query, 48,
-                                                          InputType::Text);
-  keyboard->setAllowedLettersFilter(&LibraryListActivity::allowedLettersFor, this);
-  startActivityForResult(std::move(keyboard),
+  // The allowed-letters filter is deliberately NOT installed. Greying the dead
+  // keys and skipping them tested worse than plain typing: a letter you can see
+  // but cannot reach reads as a broken keyboard, and the eye keeps aiming at it.
+  // The press it saves is not worth that. allowedLettersFor and nextLetterMask
+  // are kept, tested and unused, so revisiting this costs a single line here.
+  startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_LIBRARY_SEARCH), query,
+                                                                 48, InputType::Text),
                          [this](const ActivityResult& result) {
                            if (result.isCancelled) return;
                            query = std::get<KeyboardResult>(result.data).text;
