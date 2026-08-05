@@ -387,25 +387,27 @@ void LibraryListActivity::drawLetterGrid() {
     const int pillW = cell - 6;
     const int pillH = cellH - 6;
     const int pillX = cx + (cell - pillW) / 2;
+    // A letter with no books keeps an OUTLINED cursor instead of a filled one.
+    // The distinction appears exactly when it is needed — while the reader is on
+    // the key, about to press it — and never at the cost of legibility.
     if (i == letterCursor) {
-      renderer.fillRoundedRect(pillX, cy, pillW, pillH, 4, Color::Black);
+      if (present) {
+        renderer.fillRoundedRect(pillX, cy, pillW, pillH, 4, Color::Black);
+      } else {
+        renderer.drawRoundedRect(pillX, cy, pillW, pillH, 1, 4, true);
+      }
     }
+    // Every letter drawn the same, at full size and full black. Two earlier
+    // attempts at marking absence in the glyph itself both failed on a 1-bit
+    // panel: a smaller font read as inconsistent typography, and dithering the
+    // glyph erased it outright, since strokes at this size are one or two pixels
+    // wide and removing every other one leaves nothing. Availability is carried by
+    // the cursor and by Confirm instead, where it costs no legibility.
     char label[2] = {static_cast<char>('A' + i), 0};
-    // One size for every letter. A letter no book starts with used to be drawn in
-    // a smaller font, there being no grey on a 1-bit panel — but that reads as
-    // inconsistent typography rather than as unavailable. It is greyed instead by
-    // dithering white over the drawn glyph, which turns off every other pixel and
-    // is how 1-bit interfaces have always made grey.
     const int tw = renderer.getTextWidth(UI_10_FONT_ID, label);
     const int th = renderer.getLineHeight(UI_10_FONT_ID);
-    const int tx = pillX + (pillW - tw) / 2;
-    const int ty = cy + (pillH - th) / 2;
-    renderer.drawText(UI_10_FONT_ID, tx, ty, label, i != letterCursor);
-    // A letter is still DRAWN when no book has it: removing it would shift the
-    // grid's shape and cost the reader their place in the alphabet.
-    if (!present && i != letterCursor) {
-      renderer.fillRectDither(tx, ty, tw, th, Color::White);
-    }
+    renderer.drawText(UI_10_FONT_ID, pillX + (pillW - tw) / 2, cy + (pillH - th) / 2, label,
+                      !(present && i == letterCursor));
   }
 }
 
@@ -470,7 +472,10 @@ void LibraryListActivity::loop() {
       return;
     }
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      if (letterCursor >= 0) {
+      // Refused on a letter no book has. Jumping to where it WOULD fall is a
+      // correct answer to a question the reader did not ask, and the outlined
+      // cursor has already said the key is inert.
+      if (letterCursor >= 0 && (lettersPresent & (1u << letterCursor))) {
         jumpToLetter(static_cast<char>('a' + letterCursor));
         letterGrid = false;
         requestUpdate();
