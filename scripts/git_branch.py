@@ -1,7 +1,7 @@
 """
 PlatformIO pre-build script: inject git info into version defines.
 
-  default:       1.1.0-dev+<branch>  (local development builds)
+  default:       1.1.0-dev+<branch>.<hash>  (local development builds)
   production:    1.1.0               (when $CROSSINK_RELEASE_VERSION is set)
   default RC:    1.1.0-rc+<hash>       (when $CROSSPOINT_RC_HASH is set)
   test & debug:          1.2.6-<branch>+<5-char-hash>
@@ -139,9 +139,15 @@ def inject_version(env):
             version_string = get_production_version(project_dir)
             print(f'CrossInk production build version: {version_string}')
         else:
+            # The commit goes in too. Without it every local build of a branch
+            # reports the same string, so a device cannot say which one it is
+            # running and a crash report cannot either — four different images were
+            # flashed in one afternoon, all announcing 1.5.0-dev+feat-library.
             base_version = get_crossink_version(project_dir)
             branch = get_git_branch(project_dir)
-            version_string = f'{base_version}-dev+{branch}'
+            short_hash = get_git_short_hash(project_dir)
+            suffix = f'{branch}.{short_hash}' if short_hash else branch
+            version_string = f'{base_version}-dev+{sanitize_version_component(suffix)}'
             print(f'CrossInk build version: {version_string}')
         env.Append(CPPDEFINES=[('CROSSINK_VERSION', f'\\"{version_string}\\"')])
 

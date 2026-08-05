@@ -706,7 +706,13 @@ void LibraryListActivity::render(RenderLock&&) {
   }
 
   drawPositionReadout();
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  // The bottom pair delivers Left/Right on this hardware, so labelling it
+  // "Up/Down" describes the wrong axis — it pages the list, switches tabs and
+  // steps letters, none of which is vertical. mapLabels takes previous/next
+  // precisely so the caller can say what they do here.
+  const char* prevLabel = letterGrid || tabsFocused ? tr(STR_DIR_LEFT) : tr(STR_LIBRARY_PAGE_PREV);
+  const char* nextLabel = letterGrid || tabsFocused ? tr(STR_DIR_RIGHT) : tr(STR_LIBRARY_PAGE_NEXT);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), prevLabel, nextLabel);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }
@@ -759,14 +765,19 @@ void LibraryListActivity::drawRows() {
       // while the sort follows Ch, Ch, Cr. Inverting it here makes the ordering
       // visible in the column that carries it. Only in author order: elsewhere
       // the natural spelling reads better.
-      const size_t lastSpace = author.find_last_of(' ');
-      if (lastSpace != std::string::npos && lastSpace + 1 < author.size()) {
-        author = author.substr(lastSpace + 1) + ", " + author.substr(0, lastSpace);
+      // Into a local, NOT back into `author`. Overwriting it cost the first row of
+      // every group its separator: the comparison below reads the next row's
+      // author straight from the index, so "Xiaolong, Qiu" never matched
+      // "Qiu Xiaolong" and the rows read as separate groups.
+      std::string inverted = author;
+      const size_t lastSpace = inverted.find_last_of(' ');
+      if (lastSpace != std::string::npos && lastSpace + 1 < inverted.size()) {
+        inverted = inverted.substr(lastSpace + 1) + ", " + inverted.substr(0, lastSpace);
       }
       // The first heading on a page needs no gap above it: the strip already
       // bounds the list there.
       const int gap = drawn == 0 ? 2 : groupGapAbove;
-      const std::string heading = renderer.truncatedText(SMALL_FONT_ID, author.c_str(), textW);
+      const std::string heading = renderer.truncatedText(SMALL_FONT_ID, inverted.c_str(), textW);
       renderer.drawText(SMALL_FONT_ID, LIBRARY_SIDE_PADDING, y + gap, heading.c_str(), true);
       y += authorLineH + gap + groupGapBelow;
     }
