@@ -669,6 +669,11 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   header.selfSize = header.nameStart + blobWritten;
   stage.close();
 
+  // Captured HERE, at the end of the data, and not after the header rewrite
+  // below: that rewrite seeks back to 0, so asking afterwards reports 64 — the
+  // header's own length — and every rebuild looks truncated.
+  const uint32_t written = static_cast<uint32_t>(out.position());
+
   // Now that every sort has run, say what this index actually is. A walk stopped
   // by the record cap or by an abort is not complete, and a reader that trusts
   // WALK_COMPLETE would silently show a partial shelf as if it were the whole one.
@@ -681,8 +686,6 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   // The file is only as long as it claims if every write landed. A full card
   // fails them silently, and the result passes the header check while carrying
   // zeros — an index that looks valid and is not.
-  // Captured before close(): position() on a closed handle is not meaningful.
-  const uint32_t written = static_cast<uint32_t>(out.position());
   const bool sizeMatches = written == header.selfSize;
   out.close();
 
