@@ -1,5 +1,7 @@
 #include "LibraryIndexFile.h"
 
+#include <algorithm>
+
 #include <HalStorage.h>
 #include <Logging.h>
 
@@ -88,7 +90,16 @@ uint16_t LibraryIndexFile::ordinalForRow(const SortOrder order, const uint16_t r
 
 bool LibraryIndexFile::readRecord(const uint16_t ordinal, ClixRecord& out) {
   if (!opened || ordinal >= head.bookCount) return false;
-  return readAt(recordOffset(head, ordinal), &out, sizeof(out));
+  if (!readAt(recordOffset(head, ordinal), &out, sizeof(out))) return false;
+
+  // Clamp here, at the single point every record enters the program. These
+  // lengths come off an SD card that the user can write to and that can rot: a
+  // foldLen of 255 against a 96-byte field sends a string_view 159 bytes past the
+  // end of the record, and callers build views from them without looking. Fixing
+  // it at each call site would mean fixing it again at the next one.
+  out.foldLen = static_cast<uint8_t>(std::min<size_t>(out.foldLen, CLIX_FOLD_BYTES));
+  out.authorKeyLen = static_cast<uint8_t>(std::min<size_t>(out.authorKeyLen, CLIX_AUTHOR_KEY_BYTES));
+  return true;
 }
 
 bool LibraryIndexFile::readName(const ClixRecord& record, std::string& out) {

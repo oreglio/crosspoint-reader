@@ -398,11 +398,19 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
     return false;
   }
 
-  const auto padTo = [&out](const uint32_t target) {
+  // Returns false rather than spinning. A full card makes write() return 0, and
+  // the old loop never advanced past it — the device simply hung mid-rebuild with
+  // no message, which is worse than any error.
+  bool writeFailed = false;
+  const auto padTo = [&out, &writeFailed](const uint32_t target) {
     static const uint8_t zeros[64] = {0};
     while (out.position() < target) {
       const uint32_t gap = target - static_cast<uint32_t>(out.position());
-      out.write(zeros, std::min<uint32_t>(gap, sizeof(zeros)));
+      const size_t want = std::min<uint32_t>(gap, sizeof(zeros));
+      if (out.write(zeros, want) != static_cast<int>(want)) {
+        writeFailed = true;
+        return;
+      }
     }
   };
 
@@ -649,7 +657,24 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
 
   out.seekSet(0);
   out.write(reinterpret_cast<const uint8_t*>(&header), sizeof(header));
+  // The file is only as long as it claims if every write landed. A full card
+  // fails them silently, and the result passes the header check while carrying
+  // zeros — an index that looks valid and is not.
+  // Captured before close(): position() on a closed handle is not meaningful.
+  const uint32_t written = static_cast<uint32_t>(out.position());
+  const bool sizeMatches = written == header.selfSize;
   out.close();
+
+  if (writeFailed || !sizeMatches) {
+    LOG_ERR("LIBIDX", "emit incomplete (write %s, size %u vs %u) — keeping the old index",
+            writeFailed ? "failed" : "ok", static_cast<unsigned>(written),
+            static_cast<unsigned>(header.selfSize));
+    // Leave the previous index alone. A shelf that is a rebuild out of date is
+    // worth incomparably more than none at all, and a full card is exactly when
+    // the reader can least afford to lose it.
+    Storage.remove(NEW_PATH);
+    return false;
+  }
 
   // Rename last. Until this line the previous index is still the live one.
   Storage.remove(INDEX_PATH);
