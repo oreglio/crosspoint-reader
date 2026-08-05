@@ -244,7 +244,9 @@ void LibraryListActivity::applyFilter() {
   filtered.clear();
   if (query.empty()) return;
 
-  const std::string needle = library::fold(query, /*stripArticle=*/false);
+  // Folded the same way the stored folds were, articles removed included —
+  // otherwise "the hobbit" searches for a word no record contains.
+  const std::string needle = library::fold(query, /*stripArticle=*/true);
   const int total = static_cast<int>(index.bookCount());
   filtered.reserve(static_cast<size_t>(total));
   for (int row = 0; row < total; row++) {
@@ -420,7 +422,7 @@ void LibraryListActivity::drawLetterGrid() {
 // reader a flash and then a correction.
 uint32_t LibraryListActivity::allowedLettersFor(void* ctx, const std::string& text) {
   auto* self = static_cast<LibraryListActivity*>(ctx);
-  const std::string needle = library::fold(text, /*stripArticle=*/false);
+  const std::string needle = library::fold(text, /*stripArticle=*/true);
   const int total = static_cast<int>(self->index.bookCount());
   uint32_t mask = 0;
   for (int row = 0; row < total; row++) {
@@ -468,7 +470,10 @@ bool LibraryListActivity::rowTextFor(const int entry, std::string& title, std::s
     // Re-parsing the name here would throw that away, and only works while the
     // name still looks like "Title - Author".
     if (!index.readAuthor(record, author)) author.clear();
-    title = name;
+    // The stored title when the book gave one, the filename otherwise. `name` is
+    // the filename now and must stay so: openSelectedBook rebuilds the path from
+    // it.
+    if (!index.readTitle(record, title) || title.empty()) title = name;
   }
   if (title.empty()) title = tr(STR_LIBRARY_UNKNOWN_TITLE);
   return true;
@@ -509,6 +514,9 @@ void LibraryListActivity::loop() {
       if (letterCursor >= 0 && (lettersPresent & (1u << letterCursor))) {
         jumpToLetter(static_cast<char>('a' + letterCursor));
         letterGrid = false;
+        // Hand focus back to the list, or the next Confirm reopens the grid
+        // instead of opening the book just jumped to.
+        tabsFocused = false;
         requestUpdate();
       }
       return;

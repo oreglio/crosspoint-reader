@@ -26,9 +26,13 @@
 namespace library {
 
 inline constexpr char CLIX_MAGIC[4] = {'C', 'L', 'X', '1'};
-// 2: author order became surname-first. Bumping this is the whole migration —
-// an index written by the previous version fails validation and is rebuilt.
-inline constexpr uint8_t CLIX_FORMAT_VERSION = 2;
+// 2: author order became surname-first.
+// 3: the name blob carries the book's own title after the author, and `name` went
+//    back to being the FILENAME — writing the title there broke opening a book,
+//    since the file path is rebuilt from that slot.
+// Bumping this is the whole migration: an index from an older version fails
+// validation and is rebuilt.
+inline constexpr uint8_t CLIX_FORMAT_VERSION = 3;
 
 // Bump when the fold or the article table changes. Forces fold and ranks to be
 // rebuilt while firstSeen values are preserved, so "recently added" survives.

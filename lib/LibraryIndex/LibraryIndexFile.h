@@ -57,6 +57,7 @@ class LibraryIndexFile {
   // the spelling harmonisation visible: neither survives a filename that no
   // longer carries "Title - Author".
   bool readAuthor(const ClixRecord& record, std::string& out);
+  bool readTitle(const ClixRecord& record, std::string& out);
 
   // Absolute path of the book, rebuilt from its folder record.
   bool readPath(const ClixRecord& record, std::string& out);

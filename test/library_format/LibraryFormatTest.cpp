@@ -109,7 +109,7 @@ TEST(LibraryFormatValidation, RejectsBadMagic) {
 
 TEST(LibraryFormatValidation, RejectsUnknownVersionsSeparately) {
   ClixHeader h = makeHeader(60, 116);
-  h.formatVersion = 2;
+  h.formatVersion = library::CLIX_FORMAT_VERSION + 1;
   EXPECT_EQ(validateHeader(h, h.selfSize), ClixValidity::UnknownFormatVersion);
 
   // A fold change is recoverable — firstSeen is preserved across the rebuild —

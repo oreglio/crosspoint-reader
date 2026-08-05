@@ -42,6 +42,13 @@ struct StagedEntry {
   // is chosen later, across every book by the same person.
   uint8_t authorLen;
   char author[STAGE_AUTHOR_BYTES];
+  // The title the book gives itself, kept SEPARATE from `name`. Writing it into
+  // the name slot was a defect: readPath rebuilds a book's file path from that
+  // slot, so an enriched book resolved to "/Books/Pachinko" and could not be
+  // opened, and reconciliation hashed a dirent name on one side against a stored
+  // title on the other.
+  uint8_t titleLen;
+  char title[STAGE_NAME_BYTES];
 };
 constexpr size_t STAGE_STRIDE = sizeof(StagedEntry);
 
@@ -204,11 +211,6 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
 
   // The author may still be absent here. M2 fills it from the book's own
   // metadata; until then the row shows the title alone rather than guessing.
-  // What the row shows. The filename is the fallback, not the preference: once
-  // the book has told us its own title, the 148-character median of these
-  // filenames is strictly worse to read and worse to sort.
-  const std::string& displayName = titleFromBook ? parsed.title : name;
-
   std::string author = parsed.author;
   ClixAuthorProvenance provenance = author.empty() ? CLIX_AUTHOR_UNKNOWN : CLIX_AUTHOR_FROM_CACHE;
 
@@ -240,13 +242,18 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
     entry.record.firstSeen = FIRST_SEEN_UNRESOLVED;
   }
   entry.record.folderId = folderId;
-  entry.record.nameLen = static_cast<uint8_t>(std::min<size_t>(displayName.size(), STAGE_NAME_BYTES));
+  entry.record.nameLen = static_cast<uint8_t>(std::min<size_t>(name.size(), STAGE_NAME_BYTES));
+  // Only stored when the book actually told us something; otherwise the row falls
+  // back to the filename and nothing is duplicated.
+  const std::string& shownTitle = titleFromBook ? parsed.title : std::string();
+  entry.titleLen = static_cast<uint8_t>(std::min<size_t>(shownTitle.size(), STAGE_NAME_BYTES));
+  if (entry.titleLen > 0) memcpy(entry.title, shownTitle.data(), entry.titleLen);
   entry.record.foldLen = static_cast<uint8_t>(std::min(folded.size(), CLIX_FOLD_BYTES));
   entry.record.authorKeyLen = static_cast<uint8_t>(std::min(key.size(), CLIX_AUTHOR_KEY_BYTES));
   entry.record.flags = makeRecordFlags(formatForName(name), provenance, titleFromBook, false);
   memcpy(entry.record.fold, folded.data(), entry.record.foldLen);
   memcpy(entry.record.authorKey, key.data(), entry.record.authorKeyLen);
-  memcpy(entry.name, displayName.data(), entry.record.nameLen);
+  memcpy(entry.name, name.data(), entry.record.nameLen);
 
   const std::string displayAuthor = cleanPersonName(author);
   entry.authorLen = static_cast<uint8_t>(std::min(displayAuthor.size(), STAGE_AUTHOR_BYTES));
@@ -621,7 +628,9 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
     stage.read(reinterpret_cast<uint8_t*>(&canonical), STAGE_STRIDE);
     out.write(&canonical.authorLen, 1);
     if (canonical.authorLen > 0) out.write(reinterpret_cast<const uint8_t*>(canonical.author), canonical.authorLen);
-    blobWritten += entry.record.nameLen + 1u + canonical.authorLen;
+    out.write(&entry.titleLen, 1);
+    if (entry.titleLen > 0) out.write(reinterpret_cast<const uint8_t*>(entry.title), entry.titleLen);
+    blobWritten += entry.record.nameLen + 1u + canonical.authorLen + 1u + entry.titleLen;
   }
   header.nameLen = blobWritten;
   header.selfSize = header.nameStart + blobWritten;

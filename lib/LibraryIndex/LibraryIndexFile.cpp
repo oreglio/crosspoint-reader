@@ -114,6 +114,27 @@ bool LibraryIndexFile::readAuthor(const ClixRecord& record, std::string& out) {
   return readAt(head.nameStart + lenAt + 1, out.data(), authorLen);
 }
 
+// The book's own title, after the name and the author. Absent (length 0) for a
+// book that never told us one, in which case the caller shows the filename.
+bool LibraryIndexFile::readTitle(const ClixRecord& record, std::string& out) {
+  out.clear();
+  if (!opened || record.nameLen == 0) return false;
+  uint32_t at = record.nameOff + record.nameLen;
+  if (at + 1 > head.nameLen) return false;
+
+  uint8_t authorLen = 0;
+  if (!readAt(head.nameStart + at, &authorLen, sizeof(authorLen))) return false;
+  at += 1 + authorLen;
+  if (at + 1 > head.nameLen) return false;
+
+  uint8_t titleLen = 0;
+  if (!readAt(head.nameStart + at, &titleLen, sizeof(titleLen))) return false;
+  if (titleLen == 0 || at + 1 + titleLen > head.nameLen) return false;
+
+  out.resize(titleLen);
+  return readAt(head.nameStart + at + 1, out.data(), titleLen);
+}
+
 bool LibraryIndexFile::readPath(const ClixRecord& record, std::string& out) {
   out.clear();
   if (!opened || record.folderId >= head.folderCount) return false;
