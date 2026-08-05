@@ -302,6 +302,27 @@ std::string cleanPersonName(const std::string_view author) {
     space = false;
     collapsed.push_back(c);
   }
+
+  // "Tintera, Amy" is the same person as "Amy Tintera", and publishers use both.
+  // The spelling vote cannot settle it — with one book per author there is no
+  // majority — so the inverted form is turned round here instead. Only a single
+  // comma qualifies: "Smith, John, Jr." and lists of several authors are left
+  // exactly as they are rather than being scrambled.
+  const size_t comma = collapsed.find(',');
+  if (comma != std::string::npos && collapsed.find(',', comma + 1) == std::string::npos) {
+    std::string_view last(collapsed.data(), comma);
+    std::string_view first(collapsed.data() + comma + 1, collapsed.size() - comma - 1);
+    while (!first.empty() && first.front() == ' ') first.remove_prefix(1);
+    while (!last.empty() && last.back() == ' ') last.remove_suffix(1);
+    if (!first.empty() && !last.empty()) {
+      std::string swapped;
+      swapped.reserve(collapsed.size());
+      swapped.append(first);
+      swapped.push_back(' ');
+      swapped.append(last);
+      return swapped;
+    }
+  }
   return collapsed;
 }
 

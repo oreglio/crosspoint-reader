@@ -90,6 +90,7 @@ class LibraryListActivity final : public Activity {
   // the index while drawing would re-read every record 26 times per frame.
   uint32_t lettersPresent = 0;
   void computeLettersPresent();
+  char letterOf(const library::ClixRecord& record);
   void applyFilter();
   int rowCount() const;
   int rowFor(int entry) const;

@@ -274,14 +274,30 @@ void LibraryListActivity::applyFilter() {
 constexpr int kLetterCols = 5;
 constexpr int kLetterCount = 26;
 
+// Which letter a book files under, matching the column the reader is looking at:
+// the title's when sorted by title, the author's when sorted by author. Using the
+// title fold in author order — which the first cut did — sent "Alice Hunter" to
+// wherever her book's title happened to fall.
+char LibraryListActivity::letterOf(const library::ClixRecord& record) {
+  if (sortOrder == library::SortOrder::AuthorAsc) {
+    std::string author;
+    if (index.readAuthor(record, author)) {
+      const std::string folded = library::fold(author);
+      return folded.empty() ? '\0' : folded[0];
+    }
+    return '\0';
+  }
+  return record.foldLen == 0 ? '\0' : record.fold[0];
+}
+
 void LibraryListActivity::computeLettersPresent() {
   lettersPresent = 0;
   const int total = rowCount();
   for (int entry = 0; entry < total; entry++) {
     const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
     library::ClixRecord record{};
-    if (ordinal == 0xFFFF || !index.readRecord(ordinal, record) || record.foldLen == 0) continue;
-    const char c = record.fold[0];
+    if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) continue;
+    const char c = letterOf(record);
     if (c >= 'a' && c <= 'z') lettersPresent |= 1u << (c - 'a');
   }
 }
@@ -294,8 +310,8 @@ void LibraryListActivity::jumpToLetter(const char letter) {
   for (int entry = 0; entry < total; entry++) {
     const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
     library::ClixRecord record{};
-    if (ordinal == 0xFFFF || !index.readRecord(ordinal, record) || record.foldLen == 0) continue;
-    if (record.fold[0] >= letter) {
+    if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) continue;
+    if (letterOf(record) >= letter) {
       selectedIndex = entry;
       topIndex = entry;
       return;

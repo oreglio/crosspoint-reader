@@ -275,3 +275,25 @@ TEST(MatchesQuery, LongTitlesAreOnlySearchableWithinTheStoredFold) {
   const std::string folded = library::fold(longTitle + " needle").substr(0, 96);
   EXPECT_FALSE(library::matchesQuery(folded, library::fold("needle")));
 }
+
+// --- inverted author names ---------------------------------------------------
+
+TEST(CleanPersonName, InvertedNameIsTurnedRound) {
+  EXPECT_EQ(library::cleanPersonName("Tintera, Amy"), "Amy Tintera");
+  EXPECT_EQ(library::cleanPersonName("Michaelides, Alex"), "Alex Michaelides");
+}
+
+TEST(CleanPersonName, PlainNameIsUntouched) {
+  EXPECT_EQ(library::cleanPersonName("Alice Hunter"), "Alice Hunter");
+}
+
+// Two commas mean a suffix or a list, not an inversion — leave it alone rather
+// than scramble it.
+TEST(CleanPersonName, MultipleCommasAreLeftAlone) {
+  // The trailing full stop is stripped by the existing noise rules.
+  EXPECT_EQ(library::cleanPersonName("Smith, John, Jr."), "Smith, John, Jr");
+}
+
+TEST(CleanPersonName, DanglingCommaIsNotAnInversion) {
+  EXPECT_EQ(library::cleanPersonName("Tintera,"), "Tintera");
+}
