@@ -59,6 +59,7 @@ class KeyboardEntryActivity : public Activity {
   mutable std::vector<freeink::ui::KeyboardRow> filteredRows;
   mutable freeink::ui::KeyboardLayout filteredLayout{};
   const freeink::ui::KeyboardLayout& applyFilter(const freeink::ui::KeyboardLayout& source) const;
+  bool selectionUsable() const;
 
   std::string title;
   std::string text;

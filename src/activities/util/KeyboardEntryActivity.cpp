@@ -244,6 +244,18 @@ void KeyboardEntryActivity::clampSelection() {
   if (selCol >= cols) selCol = cols > 0 ? cols - 1 : 0;
 }
 
+// With a filter in play some keys are dead, and the selection must never rest on
+// one: the SDK draws a disabled key without the selection mark, so the reader
+// would simply lose the cursor. Skipping is also what a car GPS does, and it is
+// why the greying is worth anything — a key you cannot reach costs no press.
+//
+// Inert without a filter: no key is ever disabled, so the first candidate always
+// wins and this behaves exactly as it did.
+bool KeyboardEntryActivity::selectionUsable() const {
+  const fui::KeyboardKey* key = selectedKey();
+  return key == nullptr || key->enabled;
+}
+
 void KeyboardEntryActivity::moveSelectionRow(const int delta) {
   const fui::KeyboardLayout& layout = currentLayout();
   if (layout.rowCount == 0) return;
@@ -256,6 +268,22 @@ void KeyboardEntryActivity::moveSelectionRow(const int delta) {
     selCol = selCol * newCols / oldCols;
   }
   clampSelection();
+
+  // Keep going the same way rather than sliding sideways: a row of dead keys
+  // should move the reader to the next row, not along it.
+  for (int guard = 0; guard < layout.rowCount && !selectionUsable(); guard++) {
+    selRow = (selRow + delta + layout.rowCount) % layout.rowCount;
+    clampSelection();
+  }
+  // Nothing usable in this column anywhere: settle on the nearest live key in the
+  // row rather than leaving the cursor on a dead one.
+  if (!selectionUsable()) {
+    const int cols = layout.rows[selRow].count;
+    for (int c = 0; c < cols; c++) {
+      selCol = c;
+      if (selectionUsable()) break;
+    }
+  }
 }
 
 void KeyboardEntryActivity::moveSelectionCol(const int delta) {
@@ -263,7 +291,10 @@ void KeyboardEntryActivity::moveSelectionCol(const int delta) {
   if (selRow < 0 || selRow >= layout.rowCount) return;
   const int cols = layout.rows[selRow].count;
   if (cols <= 0) return;
-  selCol = (selCol + delta + cols) % cols;
+  for (int guard = 0; guard < cols; guard++) {
+    selCol = (selCol + delta + cols) % cols;
+    if (selectionUsable()) return;
+  }
 }
 
 bool KeyboardEntryActivity::syncSelectionToValue(const int16_t value) {
