@@ -43,13 +43,6 @@ class LibraryListActivity final : public Activity {
 
  private:
   using UiApp = freeink::ui::FreeInkApp<20, 4>;
-  // Text for one visible row, owned for the duration of a render.
-  struct RowText {
-    std::string title;
-    std::string author;
-  };
-
-
   bool openIndex();
   // Walk the card and write a fresh index. Blocking, with a popup: at ~70 books
   // it is well under a second, and it only runs when the index is missing or the
@@ -80,7 +73,6 @@ class LibraryListActivity final : public Activity {
   std::string query;
   std::vector<uint16_t> filtered;
   void openSearch();
-  static uint32_t allowedLettersFor(void* ctx, const std::string& text);
   // The A-Z grid is a mode of this activity, not a separate one: it borrows the
   // same render and input pass, so it needs no lifecycle of its own.
   bool letterGrid = false;
@@ -105,8 +97,6 @@ class LibraryListActivity final : public Activity {
   library::LibraryIndexFile index;
   library::SortOrder sortOrder = library::SortOrder::DateDesc;
 
-  std::vector<RowText> rowText;
-  std::vector<freeink::ui::ListItem> uiItems;
 
   int selectedIndex = 0;
   int topIndex = 0;

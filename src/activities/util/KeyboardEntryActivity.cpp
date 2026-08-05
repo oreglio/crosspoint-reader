@@ -156,61 +156,13 @@ void KeyboardEntryActivity::onEnter() {
 
 void KeyboardEntryActivity::onExit() { Activity::onExit(); }
 
-// Copy the active layout and clear `enabled` on letters that lead nowhere. The
-// SDK's layouts are const and shared between every screen that uses this
-// keyboard, so the flags cannot be written in place.
-//
-// Only letter keys are touched. Space, backspace, shift and the symbol layers
-// stay live whatever the filter says, because disabling the key that CORRECTS a
-// mistake is how a reader gets stuck.
-const fui::KeyboardLayout& KeyboardEntryActivity::applyFilter(const fui::KeyboardLayout& source) const {
-  const uint32_t allowed = allowedLetters(allowedCtx, text);
-
-  filteredKeys.clear();
-  filteredRows.clear();
-  filteredRows.reserve(source.rowCount);
-  size_t total = 0;
-  for (uint8_t r = 0; r < source.rowCount; r++) total += source.rows[r].count;
-  filteredKeys.reserve(total);
-
-  for (uint8_t r = 0; r < source.rowCount; r++) {
-    const fui::KeyboardRow& row = source.rows[r];
-    const size_t start = filteredKeys.size();
-    for (uint8_t k = 0; k < row.count; k++) {
-      fui::KeyboardKey key = row.keys[k];
-      if (key.kind == fui::KeyKind::Normal && key.output && key.output[0] >= 'a' && key.output[0] <= 'z' &&
-          key.output[1] == '\0') {
-        key.enabled = (allowed & (1u << (key.output[0] - 'a'))) != 0;
-      }
-      filteredKeys.push_back(key);
-    }
-    filteredRows.push_back(fui::KeyboardRow{nullptr, row.count, row.insetUnits});
-    // Pointers are fixed up after the vector has finished growing; taking them
-    // during the loop would leave every row but the last dangling.
-    filteredRows.back().keys = reinterpret_cast<const fui::KeyboardKey*>(start);
-  }
-  for (auto& row : filteredRows) {
-    row.keys = filteredKeys.data() + reinterpret_cast<size_t>(row.keys);
-  }
-
-  filteredLayout.rows = filteredRows.data();
-  filteredLayout.rowCount = static_cast<uint8_t>(filteredRows.size());
-  return filteredLayout;
-}
-
 const fui::KeyboardLayout& KeyboardEntryActivity::currentLayout() const {
-  const fui::KeyboardLayout& base = [&]() -> const fui::KeyboardLayout& {
-    if (symbols) return fui::builtinKeyboardLayout(layoutId, shifted, true);
-    if (inputType == InputType::Url) {
-      if (urlPanel) return URL_SNIPPET_LAYOUT;
-      return shifted ? URL_SHIFT_LAYOUT : URL_LAYOUT;
-    }
-    return fui::builtinKeyboardLayout(layoutId, shifted, false, /*numberRow=*/true);
-  }();
-  // Without a filter this returns the shared layout untouched, so every existing
-  // caller — the network credential screens among them — is unaffected.
-  if (!allowedLetters) return base;
-  return applyFilter(base);
+  if (symbols) return fui::builtinKeyboardLayout(layoutId, shifted, true);
+  if (inputType == InputType::Url) {
+    if (urlPanel) return URL_SNIPPET_LAYOUT;
+    return shifted ? URL_SHIFT_LAYOUT : URL_LAYOUT;
+  }
+  return fui::builtinKeyboardLayout(layoutId, shifted, false, /*numberRow=*/true);
 }
 
 const fui::KeyboardKey* KeyboardEntryActivity::selectedKey() const {
@@ -244,13 +196,10 @@ void KeyboardEntryActivity::clampSelection() {
   if (selCol >= cols) selCol = cols > 0 ? cols - 1 : 0;
 }
 
-// With a filter in play some keys are dead, and the selection must never rest on
-// one: the SDK draws a disabled key without the selection mark, so the reader
-// would simply lose the cursor. Skipping is also what a car GPS does, and it is
-// why the greying is worth anything — a key you cannot reach costs no press.
-//
-// Inert without a filter: no key is ever disabled, so the first candidate always
-// wins and this behaves exactly as it did.
+// Nothing currently disables a key, so this is always true and the skipping loops
+// below settle on their first candidate. Kept because a disabled key is drawn
+// without the selection mark: anything that ever switches one off must not leave
+// the cursor sitting on it, invisible.
 bool KeyboardEntryActivity::selectionUsable() const {
   const fui::KeyboardKey* key = selectedKey();
   return key == nullptr || key->enabled;

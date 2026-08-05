@@ -467,32 +467,4 @@ std::string surnameKey(const std::string_view displayAuthor) {
   return key;
 }
 
-uint32_t nextLetterMask(const std::string_view haystack, const std::string_view needle) {
-  // Split the query into the words already finished and the one being typed.
-  size_t partialStart = needle.size();
-  while (partialStart > 0 && !isWordBreak(needle[partialStart - 1])) partialStart--;
-  const std::string_view completed = needle.substr(0, partialStart);
-  const std::string_view partial = needle.substr(partialStart);
-
-  // The finished words must already hold, or nothing this book offers is reachable.
-  if (!matchesQuery(haystack, completed)) return 0;
-
-  uint32_t mask = 0;
-  size_t hs = 0;
-  while (hs < haystack.size()) {
-    while (hs < haystack.size() && isWordBreak(haystack[hs])) hs++;
-    if (hs >= haystack.size()) break;
-    size_t he = hs;
-    while (he < haystack.size() && !isWordBreak(haystack[he])) he++;
-
-    const std::string_view word = haystack.substr(hs, he - hs);
-    if (word.size() > partial.size() && word.compare(0, partial.size(), partial) == 0) {
-      const char next = word[partial.size()];
-      if (next >= 'a' && next <= 'z') mask |= 1u << (next - 'a');
-    }
-    hs = he;
-  }
-  return mask;
-}
-
 }  // namespace library

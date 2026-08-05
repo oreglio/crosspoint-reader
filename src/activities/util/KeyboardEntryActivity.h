@@ -31,34 +31,12 @@ class KeyboardEntryActivity : public Activity {
         inputType(inputType),
         minLength(minLength) {}
 
-  // Optional: dim the letter keys that cannot lead anywhere.
-  //
-  // The caller is given the text so far and returns a bit per 'a'..'z' for the
-  // characters still worth pressing. Nothing else is affected — no filter means
-  // every existing caller behaves exactly as before, which matters because this
-  // keyboard is also where network credentials are typed and no shelf exists to
-  // filter those against.
-  using AllowedLettersFn = uint32_t (*)(void* ctx, const std::string& text);
-  void setAllowedLettersFilter(const AllowedLettersFn fn, void* ctx) {
-    allowedLetters = fn;
-    allowedCtx = ctx;
-  }
-
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
 
  private:
-  AllowedLettersFn allowedLetters = nullptr;
-  void* allowedCtx = nullptr;
-  // A mutable copy of whichever layout is active, rebuilt when the text changes.
-  // The SDK's layouts are const and shared, so the flags cannot be written in
-  // place.
-  mutable std::vector<freeink::ui::KeyboardKey> filteredKeys;
-  mutable std::vector<freeink::ui::KeyboardRow> filteredRows;
-  mutable freeink::ui::KeyboardLayout filteredLayout{};
-  const freeink::ui::KeyboardLayout& applyFilter(const freeink::ui::KeyboardLayout& source) const;
   bool selectionUsable() const;
 
   std::string title;

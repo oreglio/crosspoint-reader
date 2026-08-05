@@ -20,11 +20,6 @@ namespace fui = freeink::ui;
 
 namespace {
 
-std::string stemOf(const std::string& name) {
-  const size_t dot = name.find_last_of('.');
-  return (dot == std::string::npos || dot == 0) ? name : name.substr(0, dot);
-}
-
 }  // namespace
 
 LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -53,10 +48,6 @@ void LibraryListActivity::onEnter() {
 
 void LibraryListActivity::onExit() {
   index.close();
-  rowText.clear();
-  rowText.shrink_to_fit();
-  uiItems.clear();
-  uiItems.shrink_to_fit();
   Activity::onExit();
 }
 
@@ -421,35 +412,11 @@ void LibraryListActivity::drawLetterGrid() {
   }
 }
 
-// Which letters could still lead to a book, unioned across the shelf. Runs once
-// per keystroke, on a press that ends in a full panel repaint regardless, so the
-// pass is invisible beside what it saves: a key that leads nowhere costs the
-// reader a flash and then a correction.
-uint32_t LibraryListActivity::allowedLettersFor(void* ctx, const std::string& text) {
-  auto* self = static_cast<LibraryListActivity*>(ctx);
-  const std::string needle = library::fold(text, /*stripArticle=*/true);
-  const int total = static_cast<int>(self->index.bookCount());
-  uint32_t mask = 0;
-  for (int row = 0; row < total; row++) {
-    const uint16_t ordinal = self->index.ordinalForRow(self->sortOrder, static_cast<uint16_t>(row));
-    library::ClixRecord record{};
-    if (ordinal == 0xFFFF || !self->index.readRecord(ordinal, record)) continue;
-    mask |= library::nextLetterMask(std::string_view(record.fold, record.foldLen), needle);
-    // Authors are searchable too, so their letters must stay pressable.
-    std::string author;
-    if (self->index.readAuthor(record, author)) {
-      mask |= library::nextLetterMask(library::fold(author), needle);
-    }
-  }
-  return mask;
-}
-
 void LibraryListActivity::openSearch() {
-  // The allowed-letters filter is deliberately NOT installed. Greying the dead
-  // keys and skipping them tested worse than plain typing: a letter you can see
-  // but cannot reach reads as a broken keyboard, and the eye keeps aiming at it.
-  // The press it saves is not worth that. allowedLettersFor and nextLetterMask
-  // are kept, tested and unused, so revisiting this costs a single line here.
+  // No key filtering here on purpose. Greying out the letters that lead nowhere
+  // was built, tested on device and removed: a letter you can see but cannot reach
+  // reads as a broken keyboard, and the eye keeps returning to it. The one press
+  // it saves is not worth that. Git holds the implementation if it is revisited.
   startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_LIBRARY_SEARCH), query,
                                                                  48, InputType::Text),
                          [this](const ActivityResult& result) {
