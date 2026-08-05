@@ -90,6 +90,10 @@ class LibraryListActivity final : public Activity {
   // the index while drawing would re-read every record 26 times per frame.
   uint32_t lettersPresent = 0;
   void computeLettersPresent();
+  // Which word of a name the grid's letters refer to. No rule can tell "Qiu
+  // Xiaolong" (surname first) from "Sally Rooney" (surname last), so the reader
+  // says which they mean instead of the code guessing.
+  bool jumpByGivenName = false;
   char letterOf(const library::ClixRecord& record);
   void applyFilter();
   int rowCount() const;

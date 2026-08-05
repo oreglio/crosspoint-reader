@@ -293,6 +293,10 @@ char LibraryListActivity::letterOf(const library::ClixRecord& record) {
     // scan valid.
     std::string author;
     if (!index.readAuthor(record, author)) return '\0';
+    if (jumpByGivenName) {
+      const std::string folded = library::fold(author);
+      return folded.empty() ? '\0' : folded[0];
+    }
     const std::string key = library::surnameKey(author);
     return key.empty() ? '\0' : key[0];
   }
@@ -320,7 +324,12 @@ void LibraryListActivity::jumpToLetter(const char letter) {
     const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
     library::ClixRecord record{};
     if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) continue;
-    if (letterOf(record) >= letter) {
+    // Ordered by surname, the letters ascend, so "at or past" lands correctly
+    // even on a letter no book has. Jumping by GIVEN name they do not ascend at
+    // all — the As are scattered down the whole shelf — so that mode must match
+    // exactly, and lands on the first such book in shelf order.
+    const char c = letterOf(record);
+    if (jumpByGivenName ? c == letter : c >= letter) {
       selectedIndex = entry;
       topIndex = entry;
       return;
@@ -334,6 +343,15 @@ void LibraryListActivity::drawLetterGrid() {
   const int rows = (kLetterCount + kLetterCols - 1) / kLetterCols;
   const int cellH = listHeight / (rows + 1);
   const int top = listTop + cellH / 2;
+  // The mode line sits above the grid, in space the grid was leaving empty.
+  const char* modeLabel = jumpByGivenName ? tr(STR_LIBRARY_JUMP_GIVEN) : tr(STR_LIBRARY_JUMP_SURNAME);
+  const int modeW = renderer.getTextWidth(SMALL_FONT_ID, modeLabel);
+  const int modeX = (width - modeW) / 2;
+  renderer.drawText(SMALL_FONT_ID, modeX, listTop + 2, modeLabel, true);
+  if (letterCursor < 0) {
+    renderer.fillRect(modeX, listTop + 2 + renderer.getLineHeight(SMALL_FONT_ID) + 1, modeW, 1, true);
+  }
+
   // Centre the block itself. Laying it out from the left margin left the last
   // column hanging off the right edge, since 26 letters do not fill 5 columns
   // evenly and the remainder all landed on one side.
@@ -423,16 +441,42 @@ void LibraryListActivity::loop() {
       return;
     }
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      jumpToLetter(static_cast<char>('a' + letterCursor));
-      letterGrid = false;
-      requestUpdate();
+      if (letterCursor >= 0) {
+        jumpToLetter(static_cast<char>('a' + letterCursor));
+        letterGrid = false;
+        requestUpdate();
+      }
       return;
     }
+    // letterCursor == -1 is the mode line above the grid, reached by pressing Up
+    // from the top row — the same idiom the sort strip uses, so there is one rule
+    // to learn rather than two.
+    if (letterCursor < 0) {
+      if (mappedInput.wasReleased(MappedInputManager::Button::Left) ||
+          mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+        jumpByGivenName = !jumpByGivenName;
+        computeLettersPresent();
+        requestUpdate();
+      }
+      if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+        letterCursor = 0;
+        requestUpdate();
+      }
+      return;
+    }
+
     int delta = 0;
     if (mappedInput.wasReleased(MappedInputManager::Button::Right)) delta = 1;
     if (mappedInput.wasReleased(MappedInputManager::Button::Left)) delta = -1;
     if (mappedInput.wasReleased(MappedInputManager::Button::Down)) delta = kLetterCols;
-    if (mappedInput.wasReleased(MappedInputManager::Button::Up)) delta = -kLetterCols;
+    if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
+      if (letterCursor < kLetterCols) {
+        letterCursor = -1;
+        requestUpdate();
+        return;
+      }
+      delta = -kLetterCols;
+    }
     if (delta != 0) {
       // Plain movement, including onto letters no book starts with. Skipping them
       // was tried and reverted: the skip walked one cell at a time, so Down —
@@ -452,6 +496,7 @@ void LibraryListActivity::loop() {
       // Only where an alphabet exists to jump through. Sorted by date there is no
       // letter order to walk, so the press stays inert rather than opening a grid
       // whose every choice would land somewhere arbitrary.
+      jumpByGivenName = false;
       computeLettersPresent();
       letterCursor = 0;
       letterGrid = true;
