@@ -638,6 +638,16 @@ void LibraryListActivity::drawRows() {
     if (drawn > 0 && y + height + (startsGroup ? groupH : 0) > listTop + listHeight) break;
 
     if (startsGroup) {
+      // Written surname-first, as a catalogue does. The shelf is ORDERED by
+      // surname, and printing "Becky Chambers" above a run that sits between
+      // Chattam and Crouch makes the order look arbitrary — the eye reads B, M, B
+      // while the sort follows Ch, Ch, Cr. Inverting it here makes the ordering
+      // visible in the column that carries it. Only in author order: elsewhere
+      // the natural spelling reads better.
+      const size_t lastSpace = author.find_last_of(' ');
+      if (lastSpace != std::string::npos && lastSpace + 1 < author.size()) {
+        author = author.substr(lastSpace + 1) + ", " + author.substr(0, lastSpace);
+      }
       // The first heading on a page needs no gap above it: the strip already
       // bounds the list there.
       const int gap = drawn == 0 ? 2 : groupGapAbove;
