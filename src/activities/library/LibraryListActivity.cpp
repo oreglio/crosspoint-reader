@@ -388,7 +388,15 @@ void LibraryListActivity::drawRows() {
   // The author then appears once above the run instead of under every title,
   // which is what makes the shelf answer "what else has this person written".
   const bool grouped = sortOrder == library::SortOrder::AuthorAsc;
-  const int groupH = grouped ? authorLineH + LIBRARY_ROW_PADDING : 0;
+  // Proximity does the grouping. The heading sits close to the books it names and
+  // far from the run above, so it reads as belonging downward; equal gaps on both
+  // sides — which is what the first cut had — leave it attached to nothing.
+  const int groupGapAbove = LIBRARY_ROW_PADDING + 6;
+  const int groupGapBelow = 3;
+  const int groupH = grouped ? authorLineH + groupGapAbove + groupGapBelow : 0;
+  // Books indent under their heading, so the left edge itself says which rows
+  // belong to whom, without a box or a rule doing the work.
+  const int groupIndent = grouped ? LIBRARY_ICON_GAP : 0;
 
   int y = listTop;
   int drawn = 0;
@@ -403,21 +411,24 @@ void LibraryListActivity::drawRows() {
     if (drawn > 0 && y + height + (startsGroup ? groupH : 0) > listTop + listHeight) break;
 
     if (startsGroup) {
+      // The first heading on a page needs no gap above it: the strip already
+      // bounds the list there.
+      const int gap = drawn == 0 ? 2 : groupGapAbove;
       const std::string heading = renderer.truncatedText(SMALL_FONT_ID, author.c_str(), textW);
-      renderer.drawText(SMALL_FONT_ID, LIBRARY_SIDE_PADDING, y + LIBRARY_ROW_PADDING / 2, heading.c_str(), true);
-      y += groupH;
+      renderer.drawText(SMALL_FONT_ID, LIBRARY_SIDE_PADDING, y + gap, heading.c_str(), true);
+      y += authorLineH + gap + groupGapBelow;
     }
 
     if (entry == selectedIndex) {
-      renderer.fillRoundedRect(LIBRARY_SIDE_PADDING / 2, y, width - LIBRARY_SIDE_PADDING, height - 2, 6,
+      renderer.fillRoundedRect(LIBRARY_SIDE_PADDING / 2 + groupIndent, y, width - LIBRARY_SIDE_PADDING - groupIndent, height - 2, 6,
                                Color::LightGray);
     }
-    renderer.drawIcon(icon_book_24_bits, LIBRARY_SIDE_PADDING, y + (height - LIBRARY_ICON_SIZE) / 2,
+    renderer.drawIcon(icon_book_24_bits, LIBRARY_SIDE_PADDING + groupIndent, y + (height - LIBRARY_ICON_SIZE) / 2,
                       LIBRARY_ICON_SIZE);
 
     int textY = y + LIBRARY_ROW_PADDING / 2;
     for (const auto& line : lines) {
-      renderer.drawText(UI_10_FONT_ID, textX, textY, line.c_str(), true);
+      renderer.drawText(UI_10_FONT_ID, textX + groupIndent, textY, line.c_str(), true);
       textY += titleLineH;
     }
     if (!grouped && !author.empty()) {
@@ -430,8 +441,17 @@ void LibraryListActivity::drawRows() {
 
     // Dotted, not solid: on a 1-bit panel every-other-pixel is how a rule reads
     // grey. A solid line would outweigh the text it separates.
-    if (entry + 1 < count && y + LIBRARY_ROW_PADDING < listTop + listHeight) {
-      for (int x = LIBRARY_SIDE_PADDING; x < width - LIBRARY_SIDE_PADDING; x += 2) {
+    // Within a group only. Across a boundary the whitespace and the next heading
+    // already separate, and a rule there would compete with them.
+    std::string nextAuthor;
+    bool sameGroup = true;
+    if (grouped && entry + 1 < count) {
+      std::string nextTitle;
+      rowTextFor(entry + 1, nextTitle, nextAuthor);
+      sameGroup = nextAuthor == author;
+    }
+    if (entry + 1 < count && sameGroup && y + LIBRARY_ROW_PADDING < listTop + listHeight) {
+      for (int x = LIBRARY_SIDE_PADDING + groupIndent; x < width - LIBRARY_SIDE_PADDING; x += 2) {
         renderer.drawPixel(x, y - 1, true);
       }
     }
