@@ -268,6 +268,68 @@ void LibraryListActivity::applyFilter() {
   topIndex = 0;
 }
 
+// 26 letters over 5 columns. A grid rather than a strip because reaching a letter
+// costs presses, and each press is a full ~185 ms panel repaint on this panel:
+// linear travel averages 13 presses, two dimensions average about 4.5.
+constexpr int kLetterCols = 5;
+constexpr int kLetterCount = 26;
+
+void LibraryListActivity::computeLettersPresent() {
+  lettersPresent = 0;
+  const int total = rowCount();
+  for (int entry = 0; entry < total; entry++) {
+    const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
+    library::ClixRecord record{};
+    if (ordinal == 0xFFFF || !index.readRecord(ordinal, record) || record.foldLen == 0) continue;
+    const char c = record.fold[0];
+    if (c >= 'a' && c <= 'z') lettersPresent |= 1u << (c - 'a');
+  }
+}
+
+// The fold has already dropped accents and leading articles, so "L'inconsole"
+// lands under I and "Éluard" under E — which is what a reader looking under a
+// letter expects, and what the raw title would get wrong.
+void LibraryListActivity::jumpToLetter(const char letter) {
+  const int total = rowCount();
+  for (int entry = 0; entry < total; entry++) {
+    const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
+    library::ClixRecord record{};
+    if (ordinal == 0xFFFF || !index.readRecord(ordinal, record) || record.foldLen == 0) continue;
+    if (record.fold[0] >= letter) {
+      selectedIndex = entry;
+      topIndex = entry;
+      return;
+    }
+  }
+}
+
+void LibraryListActivity::drawLetterGrid() {
+  const int width = renderer.getScreenWidth();
+  const int cell = (width - 2 * LIBRARY_SIDE_PADDING) / kLetterCols;
+  const int rows = (kLetterCount + kLetterCols - 1) / kLetterCols;
+  const int cellH = listHeight / (rows + 1);
+  const int top = listTop + cellH / 2;
+
+  for (int i = 0; i < kLetterCount; i++) {
+    const int cx = LIBRARY_SIDE_PADDING + (i % kLetterCols) * cell;
+    const int cy = top + (i / kLetterCols) * cellH;
+    const bool present = (lettersPresent & (1u << i)) != 0;
+
+    if (i == letterCursor) {
+      renderer.fillRoundedRect(cx + 2, cy, cell - 6, cellH - 6, 4, Color::Black);
+    }
+    char label[2] = {static_cast<char>('A' + i), 0};
+    const int tw = renderer.getTextWidth(UI_10_FONT_ID, label);
+    // A letter no book starts with is drawn, not hidden: a gap would make the
+    // grid's shape shift and cost the reader their place in the alphabet.
+    if (present || i == letterCursor) {
+      renderer.drawText(UI_10_FONT_ID, cx + (cell - tw) / 2, cy + 4, label, i != letterCursor);
+    } else {
+      renderer.drawText(SMALL_FONT_ID, cx + (cell - tw) / 2, cy + 6, label, true);
+    }
+  }
+}
+
 void LibraryListActivity::openSearch() {
   startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_LIBRARY_SEARCH), query,
                                                                  48, InputType::Text),
@@ -307,12 +369,57 @@ void LibraryListActivity::loop() {
   }
   const int count = rowCount();
 
+  // Back clears the filter before it leaves. A shelf showing 7 of 60 books is a
+  // state the reader must be able to undo, and giving it the press they would
+  // reach for anyway costs no screen space and needs no explaining.
+  if (!query.empty() && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    query.clear();
+    filtered.clear();
+    selectedIndex = 0;
+    topIndex = 0;
+    requestUpdate();
+    return;
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finishAfterBackPress();
     return;
   }
+  if (letterGrid) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      letterGrid = false;
+      requestUpdate();
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      jumpToLetter(static_cast<char>('a' + letterCursor));
+      letterGrid = false;
+      requestUpdate();
+      return;
+    }
+    int delta = 0;
+    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) delta = 1;
+    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) delta = -1;
+    if (mappedInput.wasReleased(MappedInputManager::Button::Down)) delta = kLetterCols;
+    if (mappedInput.wasReleased(MappedInputManager::Button::Up)) delta = -kLetterCols;
+    if (delta != 0) {
+      letterCursor = (letterCursor + delta + kLetterCount) % kLetterCount;
+      requestUpdate();
+    }
+    return;
+  }
+
   if (tabsFocused && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (tabCursor == kSearchTab) openSearch();
+    if (tabCursor == kSearchTab) {
+      openSearch();
+    } else if (sortOrder != library::SortOrder::DateDesc) {
+      // Only where an alphabet exists to jump through. Sorted by date there is no
+      // letter order to walk, so the press stays inert rather than opening a grid
+      // whose every choice would land somewhere arbitrary.
+      computeLettersPresent();
+      letterCursor = 0;
+      letterGrid = true;
+      requestUpdate();
+    }
     return;
   }
   if (count > 0 && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
@@ -427,7 +534,9 @@ void LibraryListActivity::render(RenderLock&&) {
     GUI.drawHeader(renderer, header, title);
   }
 
-  if (rowCount() == 0) {
+  if (letterGrid) {
+    drawLetterGrid();
+  } else if (rowCount() == 0) {
     renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_LIBRARY_EMPTY));
   } else {
     measureRows();

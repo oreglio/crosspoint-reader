@@ -80,6 +80,16 @@ class LibraryListActivity final : public Activity {
   std::string query;
   std::vector<uint16_t> filtered;
   void openSearch();
+  // The A-Z grid is a mode of this activity, not a separate one: it borrows the
+  // same render and input pass, so it needs no lifecycle of its own.
+  bool letterGrid = false;
+  int letterCursor = 0;
+  void drawLetterGrid();
+  void jumpToLetter(char letter);
+  // One bit per letter, computed when the grid opens. Testing each letter against
+  // the index while drawing would re-read every record 26 times per frame.
+  uint32_t lettersPresent = 0;
+  void computeLettersPresent();
   void applyFilter();
   int rowCount() const;
   int rowFor(int entry) const;
