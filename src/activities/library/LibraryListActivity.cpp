@@ -210,8 +210,8 @@ void LibraryListActivity::measureRows() {
   authorLineH = renderer.getLineHeight(SMALL_FONT_ID);
   // The sort strip sits between the header and the list, and takes its height
   // from the list rather than overlaying it.
-  tabsTop = metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput) + metrics.verticalSpacing;
-  listTop = tabsTop + LIBRARY_TABS_HEIGHT;
+  tabsTop = metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput);
+  listTop = tabsTop + LIBRARY_TABS_HEIGHT + metrics.verticalSpacing;
   listHeight = renderer.getScreenHeight() - metrics.buttonHintsHeight - metrics.verticalSpacing - listTop;
 }
 
@@ -318,26 +318,32 @@ void LibraryListActivity::loop() {
 // panel that refreshes whole, showing the alternatives costs nothing per frame
 // and saves a menu round-trip to discover them.
 void LibraryListActivity::drawSortTabs(const int top) {
-  const int right = renderer.getScreenWidth() - LIBRARY_SIDE_PADDING;
+  const int width = renderer.getScreenWidth();
   const int lineH = renderer.getLineHeight(SMALL_FONT_ID);
-  // drawText takes the TOP of the text, not its baseline, so the rules below sit
-  // under the glyphs rather than through them.
-  const int textY = top + 2;
-  const int ruleY = textY + lineH + 1;
-  int x = LIBRARY_SIDE_PADDING;
+  const int height = lineH + 8;
 
+  // Same shape as the Settings tab bar: a light band flush under the header, the
+  // active tab as a filled pill. Settings builds it through fui::Screen, which
+  // this activity does not use — it draws its own rows so the title can wrap —
+  // so the look is reproduced rather than shared.
+  renderer.fillRectDither(0, top, width, height, Color::LightGray);
+
+  // Equal-width slots, as in Settings, so the tabs do not shift as labels change.
+  const int slot = width / kSortTabCount;
   for (int i = 0; i < kSortTabCount; i++) {
     const char* label = sortLabelFor(kSortTabs[i]);
     const int w = renderer.getTextWidth(SMALL_FONT_ID, label);
-    if (x + w > right) break;
-    renderer.drawText(SMALL_FONT_ID, x, textY, label);
-    if (kSortTabs[i] == sortOrder) {
-      // Underline marks the active mode; a second rule marks that the strip has
-      // the focus and is about to consume Left/Right.
-      renderer.fillRect(x, ruleY, w, 1, true);
-      if (tabsFocused) renderer.fillRect(x, ruleY + 2, w, 1, true);
+    const int x = i * slot + (slot - w) / 2;
+    const bool selected = kSortTabs[i] == sortOrder;
+
+    // Focused, the pill inverts, which is the strongest signal this panel has
+    // that Left/Right now belong to the strip. Unfocused it stays a plain
+    // underline, so the list keeps the reader's attention.
+    if (selected && tabsFocused) {
+      renderer.fillRoundedRect(x - 6, top + 2, w + 12, height - 4, 4, Color::Black);
     }
-    x += w + 16;
+    renderer.drawText(SMALL_FONT_ID, x, top + 4, label, !(selected && tabsFocused));
+    if (selected && !tabsFocused) renderer.fillRect(x, top + 4 + lineH + 1, w, 1, true);
   }
 }
 

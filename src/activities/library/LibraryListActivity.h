@@ -26,7 +26,7 @@
 inline constexpr int LIBRARY_TITLE_LINES = 3;
 // Height of the sort strip. Sized to the small font plus the underline that marks
 // the active tab.
-inline constexpr int LIBRARY_TABS_HEIGHT = 26;
+inline constexpr int LIBRARY_TABS_HEIGHT = 24;
 inline constexpr int LIBRARY_ICON_SIZE = 24;
 inline constexpr int LIBRARY_ICON_GAP = 10;
 inline constexpr int LIBRARY_SIDE_PADDING = 12;
