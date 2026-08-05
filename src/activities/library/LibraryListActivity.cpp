@@ -8,6 +8,7 @@
 
 #include "MappedInputManager.h"
 #include "activities/ActivityManager.h"
+#include "activities/util/KeyboardEntryActivity.h"
 #include "components/TouchHeaderBackButton.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
@@ -85,7 +86,7 @@ bool LibraryListActivity::rebuildIndex() {
 
 void LibraryListActivity::openSelectedBook() {
   if (!indexReady) return;
-  const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(selectedIndex));
+  const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(selectedIndex)));
   if (ordinal == 0xFFFF) return;
 
   library::ClixRecord record{};
@@ -151,11 +152,20 @@ int sortTabIndex(const library::SortOrder order) {
   return 0;
 }
 
+// The strip holds the four sort modes plus Search, which is not one. Moving onto
+// a sort mode applies it at once; Search waits for Confirm, since opening a
+// keyboard is not something a sideways press should do by itself.
+constexpr int kSearchTab = kSortTabCount;
+
 void LibraryListActivity::cycleSortOrder(const bool forward) {
-  const int next = (sortTabIndex(sortOrder) + (forward ? 1 : kSortTabCount - 1)) % kSortTabCount;
-  sortOrder = kSortTabs[next];
-  selectedIndex = 0;
-  topIndex = 0;
+  const int slots = kSortTabCount + 1;
+  tabCursor = (tabCursor + (forward ? 1 : slots - 1)) % slots;
+  if (tabCursor != kSearchTab) {
+    sortOrder = kSortTabs[tabCursor];
+    applyFilter();
+    selectedIndex = 0;
+    topIndex = 0;
+  }
   requestUpdate();
 }
 
@@ -215,12 +225,58 @@ void LibraryListActivity::measureRows() {
   listHeight = renderer.getScreenHeight() - metrics.buttonHintsHeight - metrics.verticalSpacing - listTop;
 }
 
+int LibraryListActivity::rowCount() const {
+  return query.empty() ? static_cast<int>(index.bookCount()) : static_cast<int>(filtered.size());
+}
+
+// Entry position on screen to row position in the sort order. Identity while
+// unfiltered, so the shelf costs nothing when nothing is typed.
+int LibraryListActivity::rowFor(const int entry) const {
+  if (query.empty()) return entry;
+  if (entry < 0 || entry >= static_cast<int>(filtered.size())) return 0;
+  return filtered[entry];
+}
+
+// One pass over the sort order, keeping what matches. No index, no cache: at the
+// 512-book cap this is 512 comparisons of at most 96 bytes, which is far below
+// the cost of the panel repaint that will follow it anyway.
+void LibraryListActivity::applyFilter() {
+  filtered.clear();
+  if (query.empty()) return;
+
+  const std::string needle = library::fold(query, /*stripArticle=*/false);
+  const int total = static_cast<int>(index.bookCount());
+  filtered.reserve(static_cast<size_t>(total));
+  for (int row = 0; row < total; row++) {
+    const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(row));
+    library::ClixRecord record{};
+    if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) continue;
+    if (library::matchesQuery(std::string_view(record.fold, record.foldLen), needle)) {
+      filtered.push_back(static_cast<uint16_t>(row));
+    }
+  }
+  selectedIndex = 0;
+  topIndex = 0;
+}
+
+void LibraryListActivity::openSearch() {
+  startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_LIBRARY_SEARCH), query,
+                                                                 48, InputType::Text),
+                         [this](const ActivityResult& result) {
+                           if (result.isCancelled) return;
+                           query = std::get<KeyboardResult>(result.data).text;
+                           applyFilter();
+                           tabsFocused = false;
+                           requestUpdate();
+                         });
+}
+
 // Title and author for one entry, read straight from the index. Only ever called
 // for rows about to be drawn, so at most a screenful of strings exists at once.
 bool LibraryListActivity::rowTextFor(const int entry, std::string& title, std::string& author) {
   title.clear();
   author.clear();
-  const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(entry));
+  const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
   library::ClixRecord record{};
   std::string name;
   if (ordinal != 0xFFFF && index.readRecord(ordinal, record) && index.readName(record, name)) {
@@ -240,10 +296,14 @@ void LibraryListActivity::loop() {
     finishAfterBackPress();
     return;
   }
-  const int count = static_cast<int>(index.bookCount());
+  const int count = rowCount();
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finishAfterBackPress();
+    return;
+  }
+  if (tabsFocused && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    if (tabCursor == kSearchTab) openSearch();
     return;
   }
   if (count > 0 && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
@@ -293,6 +353,7 @@ void LibraryListActivity::loop() {
       // already at the top
     } else if (selectedIndex == 0) {
       tabsFocused = true;
+      tabCursor = sortTabIndex(sortOrder);
       requestUpdate();
     } else if (selectedIndex > topIndex) {
       selectedIndex--;
@@ -327,12 +388,14 @@ void LibraryListActivity::drawSortTabs(const int top) {
   // the eye with one texture. The pill alone carries the state.
 
   // Equal-width slots, as in Settings, so the tabs do not shift as labels change.
-  const int slot = width / kSortTabCount;
-  for (int i = 0; i < kSortTabCount; i++) {
-    const char* label = sortLabelFor(kSortTabs[i]);
+  const int slots = kSortTabCount + 1;
+  const int slot = width / slots;
+  for (int i = 0; i < slots; i++) {
+    const char* label = i == kSearchTab ? tr(STR_LIBRARY_SEARCH) : sortLabelFor(kSortTabs[i]);
     const int w = renderer.getTextWidth(SMALL_FONT_ID, label);
     const int x = i * slot + (slot - w) / 2;
-    const bool selected = kSortTabs[i] == sortOrder;
+    // Focused, the cursor marks the pill; unfocused, the active sort does.
+    const bool selected = tabsFocused ? i == tabCursor : (i != kSearchTab && kSortTabs[i] == sortOrder);
 
     // Focused, the pill inverts, which is the strongest signal this panel has
     // that Left/Right now belong to the strip. Unfocused it stays a plain
@@ -355,7 +418,7 @@ void LibraryListActivity::render(RenderLock&&) {
     GUI.drawHeader(renderer, header, title);
   }
 
-  if (index.bookCount() == 0) {
+  if (rowCount() == 0) {
     renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_LIBRARY_EMPTY));
   } else {
     measureRows();
@@ -371,7 +434,7 @@ void LibraryListActivity::render(RenderLock&&) {
 
 void LibraryListActivity::drawRows() {
   measureRows();
-  const int count = static_cast<int>(index.bookCount());
+  const int count = rowCount();
   if (topIndex > selectedIndex) topIndex = selectedIndex;
   const int width = renderer.getScreenWidth();
   const int textX = LIBRARY_SIDE_PADDING + LIBRARY_ICON_SIZE + LIBRARY_ICON_GAP;
@@ -477,7 +540,7 @@ void LibraryListActivity::drawRows() {
 // The book position is stable by construction, and it answers the question the
 // reader actually has: how far in am I, and how much is left.
 void LibraryListActivity::drawPositionReadout() {
-  const int count = static_cast<int>(index.bookCount());
+  const int count = rowCount();
   if (count <= 0) return;
 
   // "12/60 books", not "2/6". Rows are variable height, so how many fit depends
@@ -499,7 +562,7 @@ void LibraryListActivity::drawPositionReadout() {
 // remembered as the reader moves forward, which makes going back exact rather
 // than an estimate that would drift on every turn.
 void LibraryListActivity::nextPage() {
-  const int count = static_cast<int>(index.bookCount());
+  const int count = rowCount();
   const int next = topIndex + visibleRows;
   if (next >= count) return;
   if (pageStarts.empty()) pageStarts.push_back(0);

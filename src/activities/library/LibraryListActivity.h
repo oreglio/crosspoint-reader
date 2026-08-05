@@ -70,6 +70,19 @@ class LibraryListActivity final : public Activity {
   // it only while focused, which the reader reaches by pressing Up from the first
   // book — the one press that had nothing to do before.
   bool tabsFocused = false;
+  // Cursor within the strip. Separate from sortOrder because the strip carries
+  // one entry that is not a sort mode: Search.
+  int tabCursor = 0;
+
+  // Rows surviving the current query, as positions in the active sort order.
+  // Empty query means no filtering and this stays untouched, so the ordinary
+  // shelf pays nothing for the feature.
+  std::string query;
+  std::vector<uint16_t> filtered;
+  void openSearch();
+  void applyFilter();
+  int rowCount() const;
+  int rowFor(int entry) const;
   void cycleSortOrder(bool forward = true);
   const char* sortOrderLabel() const;
 
