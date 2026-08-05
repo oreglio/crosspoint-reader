@@ -319,6 +319,7 @@ void LibraryListActivity::computeLettersPresent() {
 // lands under I and "Éluard" under E — which is what a reader looking under a
 // letter expects, and what the raw title would get wrong.
 void LibraryListActivity::jumpToLetter(const char letter) {
+  const bool descending = sortOrder == library::SortOrder::TitleDesc;
   const int total = rowCount();
   for (int entry = 0; entry < total; entry++) {
     const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
@@ -329,7 +330,14 @@ void LibraryListActivity::jumpToLetter(const char letter) {
     // all — the As are scattered down the whole shelf — so that mode must match
     // exactly, and lands on the first such book in shelf order.
     const char c = letterOf(record);
-    if (jumpByGivenName ? c == letter : c >= letter) {
+    // The scan has to follow the direction the shelf runs in. Title Z-A descends,
+    // so "at or past" stopped on the very first row every time — its letter is
+    // always at or past anything asked for. Given-name order does not run
+    // alphabetically at all, so that one matches exactly.
+    const bool hit = jumpByGivenName          ? c == letter
+                     : descending             ? c <= letter
+                                              : c >= letter;
+    if (hit) {
       selectedIndex = entry;
       topIndex = entry;
       return;
