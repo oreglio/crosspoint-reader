@@ -86,8 +86,12 @@ struct ClixHeader {
   // needing a second permutation array.
   uint16_t knownAuthorCount;
   uint16_t nextFirstSeen;
-  uint16_t enrichCursor;
-  uint16_t longestName[3];
+  // Reserved. These held enrichCursor and longestName[3], added for an
+  // incremental-enrichment pass and a layout hint that were never built — nothing
+  // has ever written or read them. Named fields that no code maintains are worse
+  // than blank space: the next reader assumes they mean something. Kept as bytes
+  // so the header stays 64 and the format version does not have to move.
+  uint8_t reserved1[8];
   uint32_t folderStart;
   uint32_t folderLen;
   uint32_t recordStart;
@@ -97,7 +101,9 @@ struct ClixHeader {
   // Expected total file size. Comparing it with the real size is a free
   // truncation guard: a build interrupted by a power cut cannot pass.
   uint32_t selfSize;
-  uint32_t scanSignature;
+  // Reserved; was scanSignature, intended to detect a card changing under the
+  // index and never wired to anything.
+  uint32_t reserved2;
   uint32_t lastWalkMs;
   uint32_t totalBookBytes;
 };

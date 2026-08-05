@@ -6,7 +6,6 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
-#include <vector>
 #include <utility>
 
 #include "activities/Activity.h"

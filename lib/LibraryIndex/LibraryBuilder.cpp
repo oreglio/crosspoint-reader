@@ -304,10 +304,13 @@ void walk(WalkState& st, const std::string& path, const int depth) {
   // by throwing, so the failure is abort() and a reboot loop on every rebuild
   // rather than a degraded scan. At four bytes each the same folder costs 8 KB.
   //
-  // A collision would drop a real book. At 2000 entries against a 32-bit space
-  // that is under one chance in two thousand, and it costs one book its shelf
-  // entry, against a certain crash — but it is a trade, not a free win.
-  std::vector<uint32_t> seen;
+  // Keyed on (name hash, size) packed into 64 bits, not the hash alone. Two
+  // different books colliding in 32 bits AND sharing a byte-exact size is
+  // implausible where a bare hash collision is merely unlikely, and the cost of
+  // being wrong is a real book silently missing from the shelf — the failure
+  // hardest to notice and hardest to explain.
+  std::vector<uint64_t> seen;
+  seen.reserve(32);
   std::vector<std::string> subdirs;
 
   const std::string basename = path.substr(path.find_last_of('/') + 1);
@@ -340,12 +343,12 @@ void walk(WalkState& st, const std::string& path, const int depth) {
       st.unreadableSkipped++;
       continue;
     }
-    const uint32_t nameHash = fnv1a32(name.data(), name.size());
-    if (std::find(seen.begin(), seen.end(), nameHash) != seen.end()) {
+    const uint64_t key = (static_cast<uint64_t>(fnv1a32(name.data(), name.size())) << 32) | size;
+    if (std::find(seen.begin(), seen.end(), key) != seen.end()) {
       st.duplicatesDropped++;
       continue;
     }
-    seen.push_back(nameHash);
+    seen.push_back(key);
 
     if (!folderEmitted) {
       // Folders are emitted lazily, so only directories that actually hold a
