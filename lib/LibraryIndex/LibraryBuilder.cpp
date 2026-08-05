@@ -10,6 +10,7 @@
 #include <cstring>
 #include <vector>
 
+#include "LibraryIndexFile.h"
 #include "LibraryText.h"
 
 namespace library {
@@ -76,6 +77,33 @@ std::string stemOf(const std::string& name) {
   return (dot == std::string::npos || dot == 0) ? name : name.substr(0, dot);
 }
 
+// One book as the PREVIOUS index knew it, kept only long enough to recognise the
+// same book in the new walk.
+//
+// The name is held as a 32-bit hash rather than as text: 512 real names are
+// ~40 KB, the hashes are 6 KB, and the size check beside it makes a hash
+// collision harmless. Identity is (name, size) — a name whose size changed is a
+// different file, and gets re-read.
+struct PriorEntry {
+  uint32_t nameHash;
+  uint32_t size;
+  uint16_t firstSeen;
+  bool matched;
+};
+
+uint32_t fnv1a32(const char* data, const size_t len) {
+  uint32_t hash = 2166136261u;
+  for (size_t i = 0; i < len; i++) {
+    hash ^= static_cast<unsigned char>(data[i]);
+    hash *= 16777619u;
+  }
+  return hash;
+}
+
+// Sentinel written into a staged record whose book matched nothing by (name,
+// size). A second pass decides whether it is a rename or genuinely new.
+constexpr uint16_t FIRST_SEEN_UNRESOLVED = 0xFFFF;
+
 // State threaded through the recursive walk. Passed by reference rather than
 // captured, so the walk stays a plain function and its stack frame stays small.
 struct WalkState {
@@ -94,7 +122,22 @@ struct WalkState {
   HalFile folders;  // folder section, staged separately then copied in
   BuildProgressFn onProgress = nullptr;
   void* progressCtx = nullptr;
+  // Books the previous index knew. Empty on a first build, in which case every
+  // book is new and gets a fresh firstSeen.
+  PriorEntry* prior = nullptr;
+  uint16_t priorCount = 0;
+  uint16_t reused = 0;
 };
+
+// Find the previous record for this exact file. Linear because the array is at
+// most a few hundred entries and this runs once per book during a walk that is
+// already dominated by SD seeks.
+int findPrior(WalkState& st, const uint32_t nameHash, const uint32_t size) {
+  for (uint16_t i = 0; i < st.priorCount; i++) {
+    if (!st.prior[i].matched && st.prior[i].nameHash == nameHash && st.prior[i].size == size) return i;
+  }
+  return -1;
+}
 
 void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize, const uint16_t folderId,
                  const std::string& parentBasename, const int depth) {
@@ -120,7 +163,20 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
 
   entry.record.nameOff = st.nameBytes;
   entry.record.fileSize = fileSize;
-  entry.record.firstSeen = st.nextFirstSeen++;
+
+  // Reuse the arrival order this book already had. Without this every rebuild
+  // renumbers the whole library in disk-walk order, and "Recently added" silently
+  // becomes "whatever order the card enumerates in".
+  const int priorIndex = findPrior(st, fnv1a32(name.data(), name.size()), fileSize);
+  if (priorIndex >= 0) {
+    st.prior[priorIndex].matched = true;
+    entry.record.firstSeen = st.prior[priorIndex].firstSeen;
+    st.reused++;
+  } else {
+    // Might be a rename rather than a new book; resolved after the walk, when
+    // the set of genuinely unmatched previous entries is known.
+    entry.record.firstSeen = FIRST_SEEN_UNRESOLVED;
+  }
   entry.record.folderId = folderId;
   entry.record.nameLen = static_cast<uint8_t>(std::min<size_t>(name.size(), STAGE_NAME_BYTES));
   entry.record.foldLen = static_cast<uint8_t>(std::min(folded.size(), CLIX_FOLD_BYTES));
@@ -253,7 +309,6 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   // author spelling each record ends up carrying is not known until the
   // one-spelling-per-person pass has run.
   layoutSections(header, st.folderBytes, 0);
-  (void)previousNextFirstSeen;
 
   HalFile stage;
   HalFile out;
@@ -383,6 +438,33 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
     }
   }
 
+  // --- arrival order -------------------------------------------------------
+  //
+  // firstSeen values now come from the PREVIOUS index, so they are no longer a
+  // dense sequence in walk order: a rebuild reuses each book's original number
+  // and only hands out new ones for books it has never seen. The date order has
+  // to be SORTED rather than assumed, or "Recently added" silently degrades into
+  // "the order the card enumerates in" — which is exactly the bug reconciliation
+  // exists to prevent.
+  auto dateSort = makeUniqueNoThrow<SortKey[]>(n == 0 ? 1 : n);
+  auto dateRankOf = makeUniqueNoThrow<uint16_t[]>(n == 0 ? 1 : n);
+  if (dateSort && dateRankOf) {
+    for (uint16_t i = 0; i < n; i++) {
+      ClixRecord r{};
+      stage.seekSet(static_cast<uint64_t>(order[i]) * STAGE_STRIDE);
+      stage.read(reinterpret_cast<uint8_t*>(&r), sizeof(r));
+      // Big-endian into the key so memcmp orders numerically.
+      memset(dateSort[i].key, 0, sizeof(dateSort[i].key));
+      dateSort[i].key[0] = static_cast<char>(r.firstSeen >> 8);
+      dateSort[i].key[1] = static_cast<char>(r.firstSeen & 0xFF);
+      dateSort[i].ordinal = i;
+    }
+    if (n > 1) std::sort(dateSort.get(), dateSort.get() + n, sortKeyLess);
+    for (uint16_t k = 0; k < n; k++) dateRankOf[dateSort[k].ordinal] = k;
+  } else {
+    stats.ranksDegraded = true;
+  }
+
   // Records, in title order, with both ranks and the name offset filled in.
   //
   // nameOff MUST be recomputed here. The walk assigns offsets in discovery
@@ -405,10 +487,7 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
     // Must match the blob loop below exactly, or every name after the first
     // divergence renders as a slice of its neighbours.
     nameCursor += entry.record.nameLen + 1u + canonical.authorLen;
-    // firstSeen is handed out sequentially during the walk and carried across
-    // rebuilds, so the position in first-seen order is the offset from the value
-    // this build started at — not the raw counter.
-    entry.record.dateRank = static_cast<uint16_t>(entry.record.firstSeen - previousNextFirstSeen);
+    entry.record.dateRank = dateRankOf ? dateRankOf[i] : i;
     entry.record.authorRank = authorRankOf ? authorRankOf[i] : i;
     out.write(reinterpret_cast<const uint8_t*>(&entry.record), sizeof(ClixRecord));
   }
@@ -418,10 +497,8 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
     const uint16_t ordinal = authorSort ? authorSort[k].ordinal : k;
     out.write(reinterpret_cast<const uint8_t*>(&ordinal), sizeof(ordinal));
   }
-  // dateOrder: staging index order IS first-seen order, so the k-th oldest book
-  // is whatever title-order position the k-th staged record ended up at.
   for (uint16_t k = 0; k < n; k++) {
-    const uint16_t ordinal = newOrdinalOf[k];
+    const uint16_t ordinal = dateSort ? dateSort[k].ordinal : newOrdinalOf[k];
     out.write(reinterpret_cast<const uint8_t*>(&ordinal), sizeof(ordinal));
   }
   padTo(header.nameStart);
@@ -480,9 +557,39 @@ bool buildLibraryIndex(const char* rootPath, const uint16_t previousNextFirstSee
     return false;
   }
 
+  // Load what the previous index knew, so the walk can recognise the same books.
+  // Failure here is not fatal: the build simply treats every book as new.
+  std::unique_ptr<PriorEntry[]> priorList;
+  uint16_t priorCount = 0;
+  {
+    LibraryIndexFile previous;
+    if (previous.open(INDEX_PATH)) {
+      priorCount = previous.bookCount();
+      priorList = makeUniqueNoThrow<PriorEntry[]>(priorCount == 0 ? 1 : priorCount);
+      if (priorList) {
+        uint16_t kept = 0;
+        for (uint16_t i = 0; i < priorCount; i++) {
+          ClixRecord r{};
+          std::string name;
+          if (!previous.readRecord(i, r) || !previous.readName(r, name)) continue;
+          priorList[kept].nameHash = fnv1a32(name.data(), name.size());
+          priorList[kept].size = r.fileSize;
+          priorList[kept].firstSeen = r.firstSeen;
+          priorList[kept].matched = false;
+          kept++;
+        }
+        priorCount = kept;
+      } else {
+        priorCount = 0;
+      }
+    }
+  }
+
   WalkState st;
   st.nameBuf = nameBuf.get();
   st.nextFirstSeen = previousNextFirstSeen;
+  st.prior = priorList.get();
+  st.priorCount = priorList ? priorCount : 0;
   st.onProgress = onProgress;
   st.progressCtx = progressCtx;
 
@@ -498,6 +605,49 @@ bool buildLibraryIndex(const char* rootPath, const uint16_t previousNextFirstSee
   st.stage.close();
   st.folders.close();
 
+  // --- second pass: renames, then genuinely new books ----------------------
+  //
+  // A book that matched nothing by (name, size) is either renamed or new. Match
+  // it against the leftover previous entries by SIZE alone: across a real
+  // library, two different books sharing a byte-exact size is implausible, and
+  // being wrong only costs one book its place in "Recently added" and one
+  // re-read. A content hash would settle it properly but would read ~12 KB per
+  // book on every single verification, to decide a case that arises when someone
+  // renames a file.
+  if (!st.aborted && st.books > 0) {
+    HalFile fix;
+    if (Storage.openFileForWrite("LIBIDX", STAGE_PATH, fix)) {
+      for (uint16_t i = 0; i < st.books; i++) {
+        ClixRecord r{};
+        fix.seekSet(static_cast<uint64_t>(i) * STAGE_STRIDE);
+        if (fix.read(reinterpret_cast<uint8_t*>(&r), sizeof(r)) != static_cast<int>(sizeof(r))) break;
+        if (r.firstSeen != FIRST_SEEN_UNRESOLVED) continue;
+
+        int renamed = -1;
+        for (uint16_t p = 0; p < priorCount; p++) {
+          if (!priorList[p].matched && priorList[p].size == r.fileSize) {
+            renamed = p;
+            break;
+          }
+        }
+        if (renamed >= 0) {
+          priorList[renamed].matched = true;
+          r.firstSeen = priorList[renamed].firstSeen;
+          stats.renamed++;
+        } else {
+          r.firstSeen = st.nextFirstSeen++;
+          stats.added++;
+        }
+        fix.seekSet(static_cast<uint64_t>(i) * STAGE_STRIDE);
+        fix.write(reinterpret_cast<const uint8_t*>(&r), sizeof(r));
+      }
+      fix.close();
+    }
+    for (uint16_t p = 0; p < priorCount; p++) {
+      if (!priorList[p].matched) stats.removed++;
+    }
+  }
+
   if (st.aborted) {
     LOG_INF("LIBIDX", "build cancelled after %u books", static_cast<unsigned>(st.books));
     Storage.remove(STAGE_PATH);
@@ -510,6 +660,7 @@ bool buildLibraryIndex(const char* rootPath, const uint16_t previousNextFirstSee
   stats.duplicatesDropped = st.duplicatesDropped;
   stats.unreadableSkipped = st.unreadableSkipped;
   stats.booksAtRoot = st.booksAtRoot;
+  stats.unchanged = st.reused;
 
   // --- title order -----------------------------------------------------------
   // Read the staged fold prefixes back and sort ordinals. Only 14 bytes per book

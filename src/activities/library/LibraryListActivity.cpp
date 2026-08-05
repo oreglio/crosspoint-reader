@@ -74,8 +74,10 @@ bool LibraryListActivity::rebuildIndex() {
   }
   library::BuildStats stats;
   const bool ok = library::buildLibraryIndex("/", carriedFirstSeen, stats);
-  if (ok && (stats.duplicatesDropped > 0 || stats.unreadableSkipped > 0)) {
-    LOG_INF("LIB", "card has %u duplicate and %u unreadable entries",
+  if (ok) {
+    LOG_INF("LIB", "reconciled: %u unchanged, %u added, %u renamed, %u removed (%u dup, %u unreadable)",
+            static_cast<unsigned>(stats.unchanged), static_cast<unsigned>(stats.added),
+            static_cast<unsigned>(stats.renamed), static_cast<unsigned>(stats.removed),
             static_cast<unsigned>(stats.duplicatesDropped), static_cast<unsigned>(stats.unreadableSkipped));
   }
   return ok;

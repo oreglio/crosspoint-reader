@@ -45,6 +45,12 @@ struct BuildStats {
   uint16_t duplicatesDropped = 0;
   uint16_t unreadableSkipped = 0;
   uint32_t walkMs = 0;
+  // Reconciliation against the previous index. Their sum over a rebuild with no
+  // card changes should be: unchanged == books, everything else zero.
+  uint16_t unchanged = 0;  // same (name, size): keeps its place in "Recently added"
+  uint16_t added = 0;      // matched nothing, not even by size
+  uint16_t renamed = 0;    // matched a leftover entry by size alone
+  uint16_t removed = 0;    // previous entry no book claimed
   bool ranksDegraded = false;
   bool booksAtRoot = false;
 };
