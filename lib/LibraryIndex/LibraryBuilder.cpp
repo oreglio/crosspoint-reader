@@ -546,31 +546,61 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
       // all 0xFF) must not be collapsed onto one arbitrary empty string.
       const bool unknownRun = static_cast<unsigned char>(authorSort[runStart].key[0]) == 0xFF;
       if (!unknownRun && runEnd - runStart > 1) {
+        // Each author read ONCE, then counted in RAM. The first version re-read
+        // the whole run for every member of it — k² reads of 768 bytes for a
+        // number that k reads can produce — and an author with twenty books cost
+        // four hundred SD reads to decide one string.
+        //
+        // Bounded by DISTINCT spellings rather than by run length, which is the
+        // point: one person has two or three spellings on a real card, however
+        // many books they wrote, so this holds a handful of short strings instead
+        // of one per book.
+        struct Spelling {
+          std::string text;
+          uint16_t ordinal;
+          int count;
+        };
+        std::vector<Spelling> spellings;
+        spellings.reserve(4);
+
+        for (uint16_t a = runStart; a < runEnd; a++) {
+          const uint16_t ord = authorSort[a].ordinal;
+          uint8_t len = 0;
+          stage.seekSet(static_cast<uint64_t>(order[ord]) * STAGE_STRIDE + offsetof(StagedEntry, authorLen));
+          if (stage.read(reinterpret_cast<uint8_t*>(&len), sizeof(len)) != sizeof(len) || len == 0) continue;
+
+          char buf[STAGE_AUTHOR_BYTES];
+          const size_t want = std::min<size_t>(len, sizeof(buf));
+          stage.seekSet(static_cast<uint64_t>(order[ord]) * STAGE_STRIDE + offsetof(StagedEntry, author));
+          if (stage.read(reinterpret_cast<uint8_t*>(buf), want) != static_cast<int>(want)) continue;
+          const std::string text(buf, want);
+
+          bool merged = false;
+          for (auto& sp : spellings) {
+            if (sp.text == text) {
+              sp.count++;
+              merged = true;
+              break;
+            }
+          }
+          // A hard cap so a card full of near-identical spellings cannot grow this
+          // without bound. Sixteen is far past anything real; beyond it the vote
+          // simply decides among the first sixteen.
+          if (!merged && spellings.size() < 16) spellings.push_back(Spelling{text, ord, 1});
+        }
+
         uint16_t bestOrdinal = authorSort[runStart].ordinal;
         int bestScore = -1;
         size_t bestLen = 0;
         std::string bestText;
-        for (uint16_t a = runStart; a < runEnd; a++) {
-          StagedEntry ea{};
-          stage.seekSet(static_cast<uint64_t>(order[authorSort[a].ordinal]) * STAGE_STRIDE);
-          stage.read(reinterpret_cast<uint8_t*>(&ea), STAGE_STRIDE);
-          if (ea.authorLen == 0) continue;
-          const std::string textA(ea.author, ea.authorLen);
-
-          int score = 0;
-          for (uint16_t b = runStart; b < runEnd; b++) {
-            StagedEntry eb{};
-            stage.seekSet(static_cast<uint64_t>(order[authorSort[b].ordinal]) * STAGE_STRIDE);
-            stage.read(reinterpret_cast<uint8_t*>(&eb), STAGE_STRIDE);
-            if (eb.authorLen == ea.authorLen && memcmp(eb.author, ea.author, ea.authorLen) == 0) score++;
-          }
-          const bool better = score > bestScore || (score == bestScore && textA.size() < bestLen) ||
-                              (score == bestScore && textA.size() == bestLen && textA < bestText);
+        for (const auto& sp : spellings) {
+          const bool better = sp.count > bestScore || (sp.count == bestScore && sp.text.size() < bestLen) ||
+                              (sp.count == bestScore && sp.text.size() == bestLen && sp.text < bestText);
           if (better) {
-            bestScore = score;
-            bestLen = textA.size();
-            bestText = textA;
-            bestOrdinal = authorSort[a].ordinal;
+            bestScore = sp.count;
+            bestLen = sp.text.size();
+            bestText = sp.text;
+            bestOrdinal = sp.ordinal;
           }
         }
         for (uint16_t a = runStart; a < runEnd; a++) canonicalFrom[authorSort[a].ordinal] = bestOrdinal;
