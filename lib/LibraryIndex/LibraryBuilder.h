@@ -71,8 +71,7 @@ using BuildProgressFn = bool (*)(uint16_t booksSoFar, const char* currentPath, v
 // building that cache is the reader's own full indexing pass and would take
 // minutes across a library.
 bool buildLibraryIndex(const char* rootPath, uint16_t previousNextFirstSeen, BuildStats& stats,
-                       bool readMetadata = false, BuildProgressFn onProgress = nullptr,
-                       void* progressCtx = nullptr);
+                       bool readMetadata = false, BuildProgressFn onProgress = nullptr, void* progressCtx = nullptr);
 
 // Paths, exposed so the activity and the tests agree on them.
 const char* libraryIndexPath();

@@ -9,18 +9,16 @@
 #include "MappedInputManager.h"
 #include "activities/ActivityManager.h"
 #include "activities/util/KeyboardEntryActivity.h"
+#include "activities/util/OptionSelectionActivity.h"
 #include "components/TouchHeaderBackButton.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
-#include "components/icons/listIcons.h"
-#include "activities/util/OptionSelectionActivity.h"
 #include "components/UiAppHelpers.h"
+#include "components/icons/listIcons.h"
 
 namespace fui = freeink::ui;
 
-namespace {
-
-}  // namespace
+namespace {}  // namespace
 
 LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     : Activity("Library", renderer, mappedInput),
@@ -39,6 +37,10 @@ void LibraryListActivity::onEnter() {
   // walk, so entering the screen is normally instant.
   indexReady = openIndex();
   if (!indexReady) {
+    // Held across the popup and the build, for the same reason the Settings
+    // rebuild holds it: the render task's SD-loaded fonts read glyph data at
+    // draw time, and the walk needs the card to itself.
+    RenderLock lock(*this);
     GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
     indexReady = rebuildIndex() && openIndex();
   }
@@ -65,12 +67,22 @@ bool LibraryListActivity::rebuildIndex() {
     if (previous.open(library::libraryIndexPath())) carriedFirstSeen = previous.header().nextFirstSeen;
   }
   library::BuildStats stats;
-  const bool ok = library::buildLibraryIndex("/", carriedFirstSeen, stats, SETTINGS.libraryUseMetadata != 0);
+  const bool ok = library::buildLibraryIndex(
+      "/", carriedFirstSeen, stats, SETTINGS.libraryUseMetadata != 0,
+      [](const uint16_t booksSoFar, const char*, void*) {
+        // Let the idle task run so the task watchdog stays fed: its panic
+        // timeout is 5 s and a metadata walk can run longer than that.
+        if ((booksSoFar & 31u) == 0) delay(1);
+        return true;
+      },
+      nullptr);
   if (ok) {
     LOG_INF("LIB", "reconciled: %u unchanged, %u added, %u renamed, %u removed (%u dup, %u unreadable)",
             static_cast<unsigned>(stats.unchanged), static_cast<unsigned>(stats.added),
             static_cast<unsigned>(stats.renamed), static_cast<unsigned>(stats.removed),
             static_cast<unsigned>(stats.duplicatesDropped), static_cast<unsigned>(stats.unreadableSkipped));
+  } else {
+    LOG_ERR("LIB", "index build failed");
   }
   return ok;
 }
@@ -94,6 +106,10 @@ void LibraryListActivity::openSelectedBook() {
 }
 
 void LibraryListActivity::openSortMenu() {
+  // Degraded means every order IS discovery order: the strip is hidden, and
+  // the hold must not offer a choice that would repaint the same list under a
+  // different title.
+  if (degraded) return;
   std::vector<std::string> options{tr(STR_LIBRARY_SORT_RECENT), tr(STR_LIBRARY_SORT_TITLE_AZ),
                                    tr(STR_LIBRARY_SORT_TITLE_ZA), tr(STR_LIBRARY_SORT_AUTHOR)};
   const auto current = static_cast<uint8_t>(sortOrder == library::SortOrder::DateDesc    ? 0
@@ -334,9 +350,7 @@ void LibraryListActivity::jumpToLetter(const char letter) {
     // so "at or past" stopped on the very first row every time — its letter is
     // always at or past anything asked for. Given-name order does not run
     // alphabetically at all, so that one matches exactly.
-    const bool hit = jumpByGivenName          ? c == letter
-                     : descending             ? c <= letter
-                                              : c >= letter;
+    const bool hit = jumpByGivenName ? c == letter : descending ? c <= letter : c >= letter;
     if (hit) {
       selectedIndex = entry;
       topIndex = entry;
@@ -583,7 +597,10 @@ void LibraryListActivity::loop() {
     }
     return;
   }
-  if (count > 0 && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  // The hold threshold below also gates this release: when the sort menu
+  // declines to show (degraded), the long hold falls through to here, and the
+  // release of a menu-length hold must not open a book instead.
+  if (count > 0 && mappedInput.wasReleased(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() < 800) {
     openSelectedBook();
     return;
   }
@@ -783,8 +800,8 @@ void LibraryListActivity::drawRows() {
     }
 
     if (entry == selectedIndex) {
-      renderer.fillRoundedRect(LIBRARY_SIDE_PADDING / 2 + groupIndent, y, width - LIBRARY_SIDE_PADDING - groupIndent, height - 2, 6,
-                               Color::LightGray);
+      renderer.fillRoundedRect(LIBRARY_SIDE_PADDING / 2 + groupIndent, y, width - LIBRARY_SIDE_PADDING - groupIndent,
+                               height - 2, 6, Color::LightGray);
     }
     renderer.drawIcon(icon_book_24_bits, LIBRARY_SIDE_PADDING + groupIndent, y + (height - LIBRARY_ICON_SIZE) / 2,
                       LIBRARY_ICON_SIZE);

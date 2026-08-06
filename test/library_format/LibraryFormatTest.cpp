@@ -11,8 +11,7 @@ namespace {
 
 // A header for N books whose sections are laid out consistently, i.e. one that
 // validateHeader() must accept. Tests then damage exactly one thing.
-ClixHeader makeHeader(const uint16_t books, const uint32_t folderBytes = 300,
-                      const uint32_t nameBytes = 0) {
+ClixHeader makeHeader(const uint16_t books, const uint32_t folderBytes = 300, const uint32_t nameBytes = 0) {
   ClixHeader h{};
   memcpy(h.magic, CLIX_MAGIC, sizeof(CLIX_MAGIC));
   h.formatVersion = CLIX_FORMAT_VERSION;
@@ -119,6 +118,17 @@ TEST(LibraryFormatValidation, RejectsUnknownVersionsSeparately) {
   EXPECT_EQ(validateHeader(h, h.selfSize), ClixValidity::StaleFoldVersion);
 }
 
+TEST(LibraryFormatValidation, RejectsLengthsBeyondTheFile) {
+  // folderLen and nameLen are attacker bytes; near-2^32 values used to wrap
+  // the section sums and re-derive the same wrapped layout on both sides.
+  ClixHeader h = makeHeader(60, 116);
+  h.folderLen = 0xFFFFFF00u;
+  EXPECT_EQ(validateHeader(h, h.selfSize), ClixValidity::SectionsInconsistent);
+  h = makeHeader(60, 116);
+  h.nameLen = 0xFFFFFF00u;
+  EXPECT_EQ(validateHeader(h, h.selfSize), ClixValidity::SectionsInconsistent);
+}
+
 TEST(LibraryFormatValidation, RejectsTruncationInBothDirections) {
   const ClixHeader h = makeHeader(60, 116);
   // Power loss mid-build: the file is short.
@@ -156,13 +166,13 @@ TEST(LibraryFormatValidation, AcceptsAnEmptyLibrary) {
 
 TEST(LibraryRecordFlags, PackAndUnpackRoundTrip) {
   for (const uint8_t fmt : {CLIX_FORMAT_EPUB, CLIX_FORMAT_TXT, CLIX_FORMAT_XTC, CLIX_FORMAT_OTHER}) {
-    for (const uint8_t prov : {CLIX_AUTHOR_FROM_FOLDER, CLIX_AUTHOR_FROM_CACHE, CLIX_AUTHOR_FROM_OPF,
-                               CLIX_AUTHOR_UNKNOWN}) {
+    for (const uint8_t prov :
+         {CLIX_AUTHOR_FROM_FOLDER, CLIX_AUTHOR_FROM_CACHE, CLIX_AUTHOR_FROM_OPF, CLIX_AUTHOR_UNKNOWN}) {
       for (const bool fromOpf : {false, true}) {
         for (const bool tooLarge : {false, true}) {
           ClixRecord r{};
-          r.flags = makeRecordFlags(static_cast<ClixFormat>(fmt),
-                                    static_cast<ClixAuthorProvenance>(prov), fromOpf, tooLarge);
+          r.flags =
+              makeRecordFlags(static_cast<ClixFormat>(fmt), static_cast<ClixAuthorProvenance>(prov), fromOpf, tooLarge);
           EXPECT_EQ(recordFormat(r), fmt);
           EXPECT_EQ(recordAuthorProvenance(r), prov);
           EXPECT_EQ(recordTitleFromOpf(r), fromOpf);

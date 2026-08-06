@@ -1,19 +1,16 @@
 #include "LibraryBuilder.h"
 
 #include <Arduino.h>
+#include <Epub.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <vector>
-
-#include <cstddef>
-
-#include <Epub.h>
-#include <FsHelpers.h>
 
 #include "LibraryIndexFile.h"
 #include "LibraryMeta.h"
@@ -44,7 +41,7 @@ struct StagedEntry {
   char author[STAGE_AUTHOR_BYTES];
   // The title the book gives itself, kept SEPARATE from `name`. Writing it into
   // the name slot was a defect: readPath rebuilds a book's file path from that
-  // slot, so an enriched book resolved to "/Books/Pachinko" and could not be
+  // slot, so an enriched book resolved to "/Books/Germinal" and could not be
   // opened, and reconciliation hashed a dirent name on one side against a stored
   // title on the other.
   uint8_t titleLen;
@@ -229,7 +226,7 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
   // room to distinguish — and which is honest, because this field separates
   // sources that can be trusted from a name pulled out of "Title - Author.epub"
   // by pattern, where the pattern is a guess.
-  ClixAuthorProvenance provenance = authorFromOpf  ? CLIX_AUTHOR_FROM_OPF
+  ClixAuthorProvenance provenance = authorFromOpf    ? CLIX_AUTHOR_FROM_OPF
                                     : authorFromBook ? CLIX_AUTHOR_FROM_CACHE
                                                      : CLIX_AUTHOR_UNKNOWN;
 
@@ -332,6 +329,13 @@ void walk(WalkState& st, const std::string& path, const int depth) {
     const std::string name(st.nameBuf);
 
     if (isDir) {
+      // Bounded for the same reason `seen` holds hashes: a pathological level
+      // with thousands of directories must degrade, not abort the device.
+      // Skipped ones are counted so the build can say the walk was partial.
+      if (subdirs.size() >= 256) {
+        st.unreadableSkipped++;
+        continue;
+      }
       subdirs.push_back(name);
       continue;
     }
@@ -401,8 +405,8 @@ uint32_t blobBytesFor(const StagedEntry& entry, const StagedEntry& canonical) {
   return entry.record.nameLen + 1u + canonical.authorLen + 1u + entry.titleLen;
 }
 
-bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order,
-               const uint16_t* resolvedFirstSeen, BuildStats& stats) {
+bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order, const uint16_t* resolvedFirstSeen,
+               BuildStats& stats) {
   const uint16_t n = st.books;
 
   // newOrdinalOf[stagingIndex] = position in title order. Needed because both
@@ -471,8 +475,11 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
     HalFile folders;
     if (Storage.openFileForRead("LIBIDX", folderStagePath, folders)) {
       uint8_t buf[256];
-      size_t got = 0;
+      // read() returns int: a -1 error must fail the emit, not wrap into a
+      // huge unsigned length.
+      int got = 0;
       while ((got = folders.read(buf, sizeof(buf))) > 0) put(buf, static_cast<size_t>(got));
+      if (got < 0) writeFailed = true;
       folders.close();
     }
   }
@@ -488,6 +495,13 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   const bool rankable = n <= LIBRARY_MAX_SORTED;
   auto authorSort = rankable ? makeUniqueNoThrow<SortKey[]>(n == 0 ? 1 : n) : nullptr;
   auto authorRankOf = makeUniqueNoThrow<uint16_t[]>(n == 0 ? 1 : n);
+  // The pair degrades together. Consumers test one pointer each, so a key
+  // array without its rank array would feed zeroed keys to the spelling vote
+  // and zeroed ordinals to the permutation section.
+  if (!authorSort || !authorRankOf) {
+    authorSort.reset();
+    authorRankOf.reset();
+  }
   uint16_t known = 0;
   if (authorSort && authorRankOf) {
     for (uint16_t i = 0; i < n; i++) {
@@ -499,8 +513,7 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
         memset(authorSort[i].key, 0xFF, sizeof(authorSort[i].key));
       } else {
         memset(authorSort[i].key, 0, sizeof(authorSort[i].key));
-        memcpy(authorSort[i].key, r.authorKey,
-               std::min<size_t>(r.authorKeyLen, sizeof(authorSort[i].key)));
+        memcpy(authorSort[i].key, r.authorKey, std::min<size_t>(r.authorKeyLen, sizeof(authorSort[i].key)));
         known++;
       }
       authorSort[i].ordinal = i;
@@ -517,15 +530,15 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
 
   // --- one spelling per person --------------------------------------------
   //
-  // The author KEY already merges "Xiaolong, Qiu", "Qiu Xiaolong_" and
-  // "Qiu Xiaolong [Xiaolong, Qiu]" into one identity, because its tokens are
+  // The author KEY already merges "Xun, Lu", "Lu Xun_" and
+  // "Lu Xun [Xun, Lu]" into one identity, because its tokens are
   // sorted. The displayed STRING is still whatever each filename happened to
   // carry, so one person appears under several spellings in the same list.
   //
   // Fix: within each key group show the spelling that occurs most often, ties
   // broken by the shortest and then alphabetically. It never invents or reorders
   // a name — it picks one of the strings that actually exist — which is what
-  // keeps "Qiu Xiaolong" and "Min Jin Lee" safe from a forename/surname rule
+  // keeps "Lu Xun" and "Natsume Soseki" safe from a forename/surname rule
   // that would confidently get them backwards.
   //
   // authorSort is already grouped: books by one person are contiguous in it. So
@@ -538,8 +551,8 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
     uint16_t runStart = 0;
     while (runStart < n) {
       uint16_t runEnd = runStart + 1;
-      while (runEnd < n && memcmp(authorSort[runEnd].key, authorSort[runStart].key,
-                                  sizeof(authorSort[runStart].key)) == 0) {
+      while (runEnd < n &&
+             memcmp(authorSort[runEnd].key, authorSort[runStart].key, sizeof(authorSort[runStart].key)) == 0) {
         runEnd++;
       }
       // A run of one has nothing to reconcile, and the unknown-author run (key
@@ -613,8 +626,8 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   //
   // The pass above had to run in authorKey order, because that is what puts one
   // author's books in a single run for the spelling vote. But authorKey sorts a
-  // name's WORDS — the property that lets "Ian Manook" and "Manook Ian" be
-  // recognised as one person — so ordering by it files Blake Crouch under B.
+  // name's WORDS — the property that lets "Victor Hugo" and "Hugo Victor" be
+  // recognised as one person — so ordering by it files Herman Melville under B.
   //
   // Now that every book carries its canonical display name, the shelf is ordered
   // by surname, as a library would. Keying off the canonical name rather than the
@@ -659,11 +672,12 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
   // "the order the card enumerates in" — which is exactly the bug reconciliation
   // exists to prevent.
   auto dateSort = rankable ? makeUniqueNoThrow<SortKey[]>(n == 0 ? 1 : n) : nullptr;
+  // Same pairing rule as the author arrays above.
   // Said out loud, so the shelf can tell the reader its order is approximate
   // rather than quietly presenting walk order as an alphabet.
   if (!rankable) {
-    LOG_INF("LIBIDX", "%u books over the %u sort cap: author and date order degraded",
-            static_cast<unsigned>(n), static_cast<unsigned>(LIBRARY_MAX_SORTED));
+    LOG_INF("LIBIDX", "%u books over the %u sort cap: author and date order degraded", static_cast<unsigned>(n),
+            static_cast<unsigned>(LIBRARY_MAX_SORTED));
     stats.ranksDegraded = true;
   }
   auto dateRankOf = makeUniqueNoThrow<uint16_t[]>(n == 0 ? 1 : n);
@@ -776,8 +790,7 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
 
   if (writeFailed || !sizeMatches) {
     LOG_ERR("LIBIDX", "emit incomplete (write %s, size %u vs %u) — keeping the old index",
-            writeFailed ? "failed" : "ok", static_cast<unsigned>(written),
-            static_cast<unsigned>(header.selfSize));
+            writeFailed ? "failed" : "ok", static_cast<unsigned>(written), static_cast<unsigned>(header.selfSize));
     // Leave the previous index alone. A shelf that is a rebuild out of date is
     // worth incomparably more than none at all, and a full card is exactly when
     // the reader can least afford to lose it.
@@ -864,6 +877,15 @@ bool buildLibraryIndex(const char* rootPath, const uint16_t previousNextFirstSee
   walk(st, rootPath, 0);
   st.stage.close();
   st.folders.close();
+
+  // An aborted walk must leave the previous index in place: the staging file
+  // is partial, and every section derived from it would inherit the holes.
+  if (st.aborted) {
+    LOG_INF("LIBIDX", "walk aborted; keeping the previous index");
+    Storage.remove(STAGE_PATH);
+    Storage.remove(folderStagePath.c_str());
+    return false;
+  }
 
   // --- second pass: renames, then genuinely new books ----------------------
   //
@@ -963,8 +985,8 @@ bool buildLibraryIndex(const char* rootPath, const uint16_t previousNextFirstSee
     }
   } else if (!sortable) {
     stats.ranksDegraded = true;
-    LOG_INF("LIBIDX", "%u books exceeds sort cap %u; index built in walk order",
-            static_cast<unsigned>(st.books), static_cast<unsigned>(LIBRARY_MAX_SORTED));
+    LOG_INF("LIBIDX", "%u books exceeds sort cap %u; index built in walk order", static_cast<unsigned>(st.books),
+            static_cast<unsigned>(LIBRARY_MAX_SORTED));
   }
 
   const bool ok = emitIndex(folderStagePath.c_str(), st, order.get(), resolvedFirstSeen.get(), stats);
@@ -972,8 +994,8 @@ bool buildLibraryIndex(const char* rootPath, const uint16_t previousNextFirstSee
   Storage.remove(folderStagePath.c_str());
 
   stats.walkMs = millis() - startMs;
-  LOG_INF("LIBIDX", "%s: %u books, %u folders, %u dup dropped, %u unreadable, %ums",
-          ok ? "built" : "FAILED", static_cast<unsigned>(stats.books), static_cast<unsigned>(stats.folders),
+  LOG_INF("LIBIDX", "%s: %u books, %u folders, %u dup dropped, %u unreadable, %ums", ok ? "built" : "FAILED",
+          static_cast<unsigned>(stats.books), static_cast<unsigned>(stats.folders),
           static_cast<unsigned>(stats.duplicatesDropped), static_cast<unsigned>(stats.unreadableSkipped),
           static_cast<unsigned>(stats.walkMs));
   return ok;

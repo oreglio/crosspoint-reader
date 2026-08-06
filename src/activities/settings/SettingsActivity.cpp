@@ -1,12 +1,10 @@
-#include <LibraryBuilder.h>
-#include <LibraryIndexFile.h>
-
-#include "activities/home/BookActions.h"
 #include "SettingsActivity.h"
 
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
+#include <LibraryBuilder.h>
+#include <LibraryIndexFile.h>
 #include <Logging.h>
 
 #include <algorithm>
@@ -32,6 +30,7 @@
 #include "SettingsList.h"
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
+#include "activities/home/BookActions.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/reader/GlobalReadingStats.h"
 #include "activities/util/ConfirmationActivity.h"
@@ -944,6 +943,12 @@ void SettingsActivity::toggleCurrentSetting() {
         // well under a second; the reader asked for it, so a progress popup is
         // more honest than a background task whose effects appear later without
         // explanation.
+        // Held for the whole job. The render task may still be repainting the
+        // settings list, and its SD-loaded fonts read glyph data at draw time —
+        // a second open reader while the walk holds EPUBs open, which the
+        // storage layer does not allow. The popup is flushed to the panel
+        // first, so blocking the render task costs nothing visible.
+        RenderLock lock(*this);
         GUI.drawPopup(renderer, tr(STR_LIBRARY_REBUILDING));
         uint16_t carried = 0;
         {
@@ -958,12 +963,22 @@ void SettingsActivity::toggleCurrentSetting() {
         GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
 
         library::BuildStats stats;
-        const bool ok = library::buildLibraryIndex("/", carried, stats, SETTINGS.libraryUseMetadata != 0);
+        const bool ok = library::buildLibraryIndex(
+            "/", carried, stats, SETTINGS.libraryUseMetadata != 0,
+            [](const uint16_t booksSoFar, const char*, void*) {
+              // Let the idle task run so the task watchdog stays fed: its panic
+              // timeout is 5 s and a metadata walk can run longer than that.
+              if ((booksSoFar & 31u) == 0) delay(1);
+              return true;
+            },
+            nullptr);
         if (ok) {
           LOG_INF("LIB", "rebuild: %u books (%u new, %u renamed, %u removed, %u enriched) in %ums",
                   static_cast<unsigned>(stats.books), static_cast<unsigned>(stats.added),
                   static_cast<unsigned>(stats.renamed), static_cast<unsigned>(stats.removed),
                   static_cast<unsigned>(stats.enriched), static_cast<unsigned>(stats.walkMs));
+        } else {
+          LOG_ERR("LIB", "index rebuild failed");
         }
         BookActions::drawToast(renderer, ok ? tr(STR_LIBRARY_REBUILD_DONE) : tr(STR_LIBRARY_REBUILD_FAILED));
         delay(1200);

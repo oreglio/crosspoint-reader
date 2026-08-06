@@ -36,7 +36,7 @@ constexpr NormalisationPair PAIRS[] = {
      "Re\xCC\x81"
      "camier",
      "recamier"},
-    {"Derri\xC3\xA8re les portes", "Derrie\xCC\x80re les portes", "derriere les portes"},
+    {"Derri\xC3\xA8re les collines", "Derrie\xCC\x80re les collines", "derriere les collines"},
 };
 
 }  // namespace
@@ -51,9 +51,9 @@ TEST(LibraryFold, BothNormalisationsAgree) {
 
 TEST(LibraryFold, LettersWithoutCanonicalDecomposition) {
   // These have no NFD form at all, so a decompose-only fold silently deletes
-  // them. "Nesbø" losing its last letter is the case that motivated the map.
-  EXPECT_EQ(fold("Nesb\xC3\xB8"), "nesbo");
-  EXPECT_EQ(fold("\xC3\x98stergaard"), "ostergaard");
+  // them. "Søren" losing its last letter is the case that motivated the map.
+  EXPECT_EQ(fold("S\xC3\xB8ren"), "soren");
+  EXPECT_EQ(fold("\xC3\x98rsted"), "orsted");
   EXPECT_EQ(fold("\xC3\x86"
                  "sop"),
             "aesop");
@@ -64,43 +64,67 @@ TEST(LibraryFold, LettersWithoutCanonicalDecomposition) {
   EXPECT_EQ(fold("s\xC5\x93ur"), "soeur");
 }
 
-TEST(LibraryFold, ApostrophesSurviveSoArchiveCreditsStayMatchable) {
+TEST(LibraryFold, ApostrophesSurviveInNamesAndElisions) {
   // U+2019 is what exporters actually emit; folding it to a space would split
-  // "Anna's" into two tokens and defeat looksLikeMetadata().
-  EXPECT_EQ(fold("Anna\xE2\x80\x99s Archive"), "anna's archive");
-  EXPECT_EQ(fold("Anna's Archive"), "anna's archive");
-  EXPECT_EQ(fold("L\xE2\x80\x99inconsol\xC3\xA9"), "l'inconsole");
+  // "O'Malley" into two tokens and change both its sort place and its search.
+  // ("Malley", not "Brien": C++ hex escapes are greedy, so \x99B would parse
+  // as the single escape 0x99B.)
+  EXPECT_EQ(fold("O\xE2\x80\x99Malley"), "o'malley");
+  EXPECT_EQ(fold("O'Malley"), "o'malley");
+  EXPECT_EQ(fold("L\xE2\x80\x99\xC3\x89n\xC3\xA9ide"), "l'eneide");
+}
+
+TEST(LibraryFold, TypographicDashesAndQuotesFoldLikeTheirAsciiForms) {
+  // An em dash used to stay inside the fold word while an ASCII hyphen broke
+  // it, so the same title written both ways sorted and searched differently.
+  EXPECT_EQ(library::fold("a\u2014b"), library::fold("a-b"));
+  EXPECT_EQ(library::fold("a\u2013b"), library::fold("a-b"));
+  EXPECT_EQ(library::fold("\u201Cquoted\u201D"), library::fold("\"quoted\""));
 }
 
 TEST(LibraryFold, PunctuationSeparatesAndSpaceRunsCollapse) {
-  EXPECT_EQ(fold("Le juge Ti.T2.Le po\xC3\xA8te"), "le juge ti t2 le poete");
+  EXPECT_EQ(fold("Le juge Untel.T2.Le po\xC3\xA8me"), "le juge untel t2 le poeme");
   EXPECT_EQ(fold("  spaced   out  "), "spaced out");
   EXPECT_EQ(fold("a---b"), "a b");
-  EXPECT_EQ(fold("2084 _ Artificial"), "2084 artificial");
+  EXPECT_EQ(fold("2085 _ Artificial"), "2085 artificial");
   EXPECT_EQ(fold(""), "");
   EXPECT_EQ(fold("!!!"), "");
 }
 
 TEST(LibraryFold, ArticleStrippingOnlyWhenAsked) {
-  EXPECT_EQ(fold("The Fury"), "the fury");
-  EXPECT_EQ(fold("The Fury", true), "fury");
-  EXPECT_EQ(fold("Les refuges", true), "refuges");
-  EXPECT_EQ(fold("L\xE2\x80\x99inconsol\xC3\xA9", true), "inconsole");
+  EXPECT_EQ(fold("The Iliad"), "the iliad");
+  EXPECT_EQ(fold("The Iliad", true), "iliad");
+  EXPECT_EQ(fold("Les Mis\xC3\xA9rables", true), "miserables");
+  EXPECT_EQ(fold("L\xE2\x80\x99\xC3\x89n\xC3\xA9ide", true), "eneide");
   // A title that IS an article-like word must not vanish.
   EXPECT_EQ(fold("The", true), "the");
 }
 
 TEST(LibraryParse, TitleAndAuthorFromTheExportPattern) {
-  const auto p = parseFilename(
-      "Encres de Chine -- Xiaolong, Qiu -- 2012 -- Liana Levi -- d8fc -- Anna's Archive");
-  EXPECT_EQ(p.title, "Encres de Chine");
-  EXPECT_EQ(p.author, "Xiaolong, Qiu");
+  const auto p = parseFilename("Sample Title -- Xun, Lu -- 2012 -- Sample Press -- d8fc -- Open Library");
+  EXPECT_EQ(p.title, "Sample Title");
+  EXPECT_EQ(p.author, "Xun, Lu");
 }
 
 TEST(LibraryParse, NoSeparatorKeepsTheWholeStemAsTitle) {
-  const auto p = parseFilename("Kazuo Ishiguro - Linconsole");
-  EXPECT_EQ(p.title, "Kazuo Ishiguro - Linconsole");
+  const auto p = parseFilename("Jules Verne - Le Tour du monde");
+  EXPECT_EQ(p.title, "Jules Verne - Le Tour du monde");
   EXPECT_TRUE(p.author.empty());
+}
+
+TEST(LibraryParse, ShortHexLookingNamesStayAuthors) {
+  // "Bede" and "Abba" are a-f-only words that used to be classified as hex
+  // digests and dropped; a digest must carry at least one decimal digit.
+  EXPECT_EQ(library::parseFilename("History -- Bede").author, "Bede");
+  EXPECT_EQ(library::parseFilename("Gold -- Abba").author, "Abba");
+  EXPECT_EQ(library::parseFilename("Title -- 3f2a9c8b").author, "");
+}
+
+TEST(LibraryFold, TruncatedTrailingSequenceIsDropped) {
+  // A string_view may end mid-sequence; the tail must be refused, not decoded
+  // against whatever memory follows.
+  const char raw[] = {'a', 'b', static_cast<char>(0xC3)};
+  EXPECT_EQ(library::fold(std::string_view(raw, 3)), "ab");
 }
 
 TEST(LibraryParse, MetadataInTheAuthorSlotIsRejected) {
@@ -112,8 +136,9 @@ TEST(LibraryParse, MetadataInTheAuthorSlotIsRejected) {
            "Some Title -- isbn13 9780310109563 -- x",
            "Some Title -- 9782226463982 -- x",
            "Some Title -- Paris, 2019 -- x",
-           "Some Title -- Une enquete de l'inspecteur Chen, Paris, DL 2009 -- x",
-           "Some Title -- Anna's Archive",
+           "Some Title -- Une enquete de l'inspecteur Untel, Paris, DL 2009 -- x",
+           "Some Title -- Internet Archive",
+           "Some Title -- Open Library",
            "Some Title -- Paris, 1985 -",  // trailing dash tolerance
        }) {
     EXPECT_TRUE(parseFilename(stem).author.empty()) << stem;
@@ -121,150 +146,148 @@ TEST(LibraryParse, MetadataInTheAuthorSlotIsRejected) {
 }
 
 TEST(LibraryParse, RealAuthorsAreNotMistakenForMetadata) {
-  // "Michaelides, Alex" is structurally identical to "Paris, France"; only the
+  // "Wollstonecraft, Mary" is structurally identical to "Paris, France"; only the
   // year requirement separates them. Any looser rule eats real authors.
-  for (const char* author : {"Michaelides, Alex", "Pink, Daniel H.", "Jia Jiang [Jiang, Jia]",
-                             "John C Lennox", "Qiu Xiaolong_", "Giebel, Karine",
-                             "Lloyd  Evans; Paul   Grundy", "B_A_ Paris"}) {
+  for (const char* author : {"Wollstonecraft, Mary", "Wells, Herbert G.", "Lu Xun [Xun, Lu]", "Herbert G Wells",
+                             "Lu Xun_", "Sand, George", "Emile  Erckmann; Alexandre   Chatrian", "H_P_ Lovecraft"}) {
     const std::string stem = std::string("T -- ") + author + " -- 2019";
     EXPECT_EQ(parseFilename(stem).author, author) << author;
   }
 }
 
 TEST(LibraryAuthorKey, OrderAndPunctuationDoNotMatter) {
-  const std::string expected = authorKey("Qiu Xiaolong");
+  const std::string expected = authorKey("Lu Xun");
   EXPECT_FALSE(expected.empty());
-  for (const char* spelling : {"Qiu, Xiaolong", "Xiaolong, Qiu", "Qiu Xiaolong_",
-                               "Qiu Xiaolong [Xiaolong, Qiu]", "  qiu   xiaolong  "}) {
+  for (const char* spelling : {"Lu, Xun", "Xun, Lu", "Lu Xun_", "Lu Xun [Xun, Lu]", "  lu   xun  "}) {
     EXPECT_EQ(authorKey(spelling), expected) << spelling;
   }
 }
 
 TEST(LibraryAuthorKey, InitialsAreIgnored) {
-  EXPECT_EQ(authorKey("John C Lennox"), authorKey("John Lennox"));
-  EXPECT_EQ(authorKey("Pink, Daniel H."), authorKey("Daniel Pink"));
+  EXPECT_EQ(authorKey("Herbert G Wells"), authorKey("Herbert Wells"));
+  EXPECT_EQ(authorKey("Wells, Herbert G."), authorKey("Herbert Wells"));
 }
 
 TEST(LibraryAuthorKey, SecondaryAuthorsAndBracketsDropped) {
-  EXPECT_EQ(authorKey("Lloyd Evans; Paul Grundy"), authorKey("Lloyd Evans"));
-  EXPECT_EQ(authorKey("Karine Giebel [Giebel, Karine]"), authorKey("Karine Giebel"));
+  EXPECT_EQ(authorKey("Emile Erckmann; Alexandre Chatrian"), authorKey("Emile Erckmann"));
+  EXPECT_EQ(authorKey("George Sand [Sand, George]"), authorKey("George Sand"));
 }
 
 TEST(LibraryAuthorKey, DistinctPeopleDoNotCollide) {
-  EXPECT_NE(authorKey("Alex Michaelides"), authorKey("Ashley Elston"));
-  EXPECT_NE(authorKey("Ian Manook"), authorKey("Min Jin Lee"));
+  EXPECT_NE(authorKey("Mary Wollstonecraft"), authorKey("Charlotte Bronte"));
+  EXPECT_NE(authorKey("Victor Hugo"), authorKey("Jules Verne"));
 }
 
 TEST(LibraryAuthorKey, FitsTheRecordFieldWithoutCollapsingToAForename) {
   const std::string key = authorKey("Bartholomew Fitzgerald Wellington");
+  ASSERT_FALSE(key.empty());
   EXPECT_LE(key.size(), library::AUTHOR_KEY_MAX_BYTES);
   EXPECT_NE(key.back(), ' ');
 
   // Sorting puts a short forename first, so cutting on a token boundary would
-  // reduce this to "alex" and merge every Alex in the library. The byte cut must
+  // reduce this to "mary" and merge every Alex in the library. The byte cut must
   // keep enough of the surname to discriminate.
-  const std::string alex = authorKey("Michaelides, Alex");
-  EXPECT_GT(alex.size(), 5u);
-  EXPECT_NE(alex, "alex");
-  EXPECT_NE(alex, authorKey("Alex Trevelyan"));
+  const std::string mary = authorKey("Wollstonecraft, Mary");
+  EXPECT_GT(mary.size(), 5u);
+  EXPECT_NE(mary, "mary");
+  EXPECT_NE(mary, authorKey("Mary Trevelyan"));
 
   // A truncated key stays a prefix of the untruncated one, so grouping is stable
   // however long the name is.
-  EXPECT_EQ(authorKey("Michaelides, Alexander").rfind("alex", 0), 0u);
+  EXPECT_EQ(authorKey("Wollstonecraft, Maryse").rfind("mary", 0), 0u);
 
   EXPECT_FALSE(authorKey("Nebuchadnezzarson").empty());
   EXPECT_TRUE(authorKey("").empty());
-  EXPECT_TRUE(authorKey("J. R. R.").empty());  // initials only: no identity
+  EXPECT_TRUE(authorKey("Q. X. Z.").empty());  // initials only: no identity
 }
 
 TEST(LibraryTitleMerge, PrefersTheRicherFilenameTitle) {
-  EXPECT_TRUE(preferFilenameTitle("2084", "2084 _ Artificial Intelligence and the Future of Humanity"));
-  EXPECT_TRUE(preferFilenameTitle("Cosmic Chemistry", "Cosmic Chemistry: Do God and Science Mix?"));
+  EXPECT_TRUE(preferFilenameTitle("2085", "2085 _ Artificial Minds and the Future of Machines"));
+  EXPECT_TRUE(preferFilenameTitle("Sample Chemistry", "Sample Chemistry: Do Cases and Samples Mix?"));
 }
 
 TEST(LibraryTitleMerge, BlocksExporterMidPhraseTruncation) {
   // The filename stops on a stop word, so it is a cut phrase, not a fuller title.
-  EXPECT_FALSE(preferFilenameTitle("Galileo's Error", "Galileo's error _ foundations for a new science of"));
-  EXPECT_FALSE(preferFilenameTitle("Mere Christianity",
-                                   "Mere Christianity_ a revised and amplified edition, with a"));
+  EXPECT_FALSE(preferFilenameTitle("A Sceptic's Error", "A sceptic's error _ foundations for a new science of"));
+  EXPECT_FALSE(preferFilenameTitle("Sample Doctrine", "Sample Doctrine_ a revised and amplified edition, with a"));
   // Too little added to be worth the swap.
-  EXPECT_FALSE(preferFilenameTitle("Dark Matter", "Dark Matter : A Novel"));
-  EXPECT_FALSE(preferFilenameTitle("The Fury", "The Fury"));
+  EXPECT_FALSE(preferFilenameTitle("Wuthering Heights", "Wuthering Heights : A Novel"));
+  EXPECT_FALSE(preferFilenameTitle("The Iliad", "The Iliad"));
   // Not a prefix at all.
-  EXPECT_FALSE(preferFilenameTitle("Pachinko", "Min Lee Jin-Pachonko"));
+  EXPECT_FALSE(preferFilenameTitle("Germinal", "Emile Zola-Germinl"));
   // Prefix but not on a word boundary.
-  EXPECT_FALSE(preferFilenameTitle("Cosmic", "Cosmical Chemistry Do God Mix"));
+  EXPECT_FALSE(preferFilenameTitle("Sample", "Samples Chemistry Do Cases Mix"));
   EXPECT_FALSE(preferFilenameTitle("", "anything at all here"));
 }
 
 TEST(LibraryMetadataGuard, ClassifiesYearsAndLeavesNamesAlone) {
   EXPECT_TRUE(looksLikeMetadata("2019"));
   EXPECT_TRUE(looksLikeMetadata("1985"));
-  EXPECT_TRUE(looksLikeMetadata("2084"));  // in range; see the title test below
+  EXPECT_TRUE(looksLikeMetadata("2085"));  // in range; see the title test below
   EXPECT_FALSE(looksLikeMetadata("42"));
-  EXPECT_FALSE(looksLikeMetadata("blake crouch"));
+  EXPECT_FALSE(looksLikeMetadata("herman melville"));
 }
 
 TEST(LibraryMetadataGuard, NeverAppliedToTheTitleSegment) {
-  // The guard would classify "2084" as a year, so a title that is a bare year
+  // The guard would classify "2085" as a year, so a title that is a bare year
   // survives only because segment 0 is never classified. This is the invariant
   // that makes the unconditional segment-2+ drop safe, so it gets its own test.
-  const auto p = parseFilename("2084 -- John C Lennox -- 2020 -- HarperCollins");
-  EXPECT_EQ(p.title, "2084");
-  EXPECT_EQ(p.author, "John C Lennox");
+  const auto p = parseFilename("2085 -- Herbert G Wells -- 2020 -- Sample Press");
+  EXPECT_EQ(p.title, "2085");
+  EXPECT_EQ(p.author, "Herbert G Wells");
 
-  EXPECT_EQ(parseFilename("1984").title, "1984");
-  EXPECT_EQ(parseFilename("1984 -- Orwell, George").title, "1984");
+  EXPECT_EQ(parseFilename("1987").title, "1987");
+  EXPECT_EQ(parseFilename("1987 -- Verne, Jules").title, "1987");
 }
 
 // --- matchesQuery ------------------------------------------------------------
 //
-// Cases taken from the maintainer's own 60-book card, because the accented and
-// apostrophised titles there are exactly what a naive matcher gets wrong.
+// Cases taken from the shape of the accented and
+// apostrophised titles real cards hold — what a naive matcher gets wrong.
 
 TEST(MatchesQuery, EmptyQueryMatchesEverything) {
-  EXPECT_TRUE(library::matchesQuery(library::fold("Dark Matter"), ""));
+  EXPECT_TRUE(library::matchesQuery(library::fold("Wuthering Heights"), ""));
 }
 
 TEST(MatchesQuery, WholeWordMatches) {
-  EXPECT_TRUE(library::matchesQuery(library::fold("Dark Matter"), library::fold("matter")));
+  EXPECT_TRUE(library::matchesQuery(library::fold("Wuthering Heights"), library::fold("heights")));
 }
 
 TEST(MatchesQuery, PrefixOfOneWordIsEnough) {
-  EXPECT_TRUE(library::matchesQuery(library::fold("Dark Matter"), library::fold("mat")));
+  EXPECT_TRUE(library::matchesQuery(library::fold("Wuthering Heights"), library::fold("hei")));
 }
 
 // The point of the whole design: six keypresses instead of ten, on a panel where
 // each one costs a full repaint.
 TEST(MatchesQuery, EveryWordMayBeAbbreviated) {
-  EXPECT_TRUE(library::matchesQuery(library::fold("Dark Matter"), library::fold("dar mat")));
+  EXPECT_TRUE(library::matchesQuery(library::fold("Wuthering Heights"), library::fold("wut hei")));
 }
 
 TEST(MatchesQuery, WordsNeedNotBeInOrder) {
-  EXPECT_TRUE(library::matchesQuery(library::fold("Dark Matter"), library::fold("matter dark")));
+  EXPECT_TRUE(library::matchesQuery(library::fold("Wuthering Heights"), library::fold("heights wuthering")));
 }
 
 TEST(MatchesQuery, EveryWordMustHit) {
-  EXPECT_FALSE(library::matchesQuery(library::fold("Dark Matter"), library::fold("dark blue")));
+  EXPECT_FALSE(library::matchesQuery(library::fold("Wuthering Heights"), library::fold("wuthering blue")));
 }
 
-// A prefix, not a substring: "atter" is inside "matter" but starts no word.
+// A prefix, not a substring: "eights" is inside "heights" but starts no word.
 TEST(MatchesQuery, MidWordDoesNotMatch) {
-  EXPECT_FALSE(library::matchesQuery(library::fold("Dark Matter"), library::fold("atter")));
+  EXPECT_FALSE(library::matchesQuery(library::fold("Wuthering Heights"), library::fold("eights")));
 }
 
 TEST(MatchesQuery, AccentsAreIgnoredOnBothSides) {
-  EXPECT_TRUE(library::matchesQuery(library::fold("L'inconsolé"), library::fold("inconsole")));
-  EXPECT_TRUE(library::matchesQuery(library::fold("L'inconsole"), library::fold("inconsolé")));
+  EXPECT_TRUE(library::matchesQuery(library::fold("L'Énéide"), library::fold("eneide")));
+  EXPECT_TRUE(library::matchesQuery(library::fold("L'Eneide"), library::fold("énéide")));
   EXPECT_TRUE(library::matchesQuery(library::fold("Éluard"), library::fold("eluard")));
 }
 
 TEST(MatchesQuery, ApostropheSplitsWords) {
-  EXPECT_TRUE(library::matchesQuery(library::fold("Le couple d'à côté"), library::fold("cote")));
+  EXPECT_TRUE(library::matchesQuery(library::fold("Le bureau d'à côté"), library::fold("cote")));
 }
 
 TEST(MatchesQuery, CaseIsIgnored) {
-  EXPECT_TRUE(library::matchesQuery(library::fold("The Silent Patient"), library::fold("SILENT")));
+  EXPECT_TRUE(library::matchesQuery(library::fold("Wuthering Heights"), library::fold("HEIGHTS")));
 }
 
 // The stored fold is capped at 96 bytes, so a query word beyond that cannot be
@@ -279,13 +302,11 @@ TEST(MatchesQuery, LongTitlesAreOnlySearchableWithinTheStoredFold) {
 // --- inverted author names ---------------------------------------------------
 
 TEST(CleanPersonName, InvertedNameIsTurnedRound) {
-  EXPECT_EQ(library::cleanPersonName("Tintera, Amy"), "Amy Tintera");
-  EXPECT_EQ(library::cleanPersonName("Michaelides, Alex"), "Alex Michaelides");
+  EXPECT_EQ(library::cleanPersonName("Austen, Jane"), "Jane Austen");
+  EXPECT_EQ(library::cleanPersonName("Wollstonecraft, Mary"), "Mary Wollstonecraft");
 }
 
-TEST(CleanPersonName, PlainNameIsUntouched) {
-  EXPECT_EQ(library::cleanPersonName("Alice Hunter"), "Alice Hunter");
-}
+TEST(CleanPersonName, PlainNameIsUntouched) { EXPECT_EQ(library::cleanPersonName("Emily Bronte"), "Emily Bronte"); }
 
 // Two commas mean a suffix or a list, not an inversion — leave it alone rather
 // than scramble it.
@@ -294,38 +315,26 @@ TEST(CleanPersonName, MultipleCommasAreLeftAlone) {
   EXPECT_EQ(library::cleanPersonName("Smith, John, Jr."), "Smith, John, Jr");
 }
 
-TEST(CleanPersonName, DanglingCommaIsNotAnInversion) {
-  EXPECT_EQ(library::cleanPersonName("Tintera,"), "Tintera");
-}
+TEST(CleanPersonName, DanglingCommaIsNotAnInversion) { EXPECT_EQ(library::cleanPersonName("Austen,"), "Austen"); }
 
 // --- surnameKey --------------------------------------------------------------
 
 TEST(SurnameKey, SurnameLeadsThenGivenNames) {
-  EXPECT_EQ(library::surnameKey("Blake Crouch"), "crouch blake");
-  EXPECT_EQ(library::surnameKey("Alex Michaelides"), "michaelides alex");
+  EXPECT_EQ(library::surnameKey("Herman Melville"), "melville herman");
+  EXPECT_EQ(library::surnameKey("Mary Wollstonecraft"), "wollstonecraft mary");
 }
 
-TEST(SurnameKey, SingleWordKeysOnItself) {
-  EXPECT_EQ(library::surnameKey("Voltaire"), "voltaire");
-}
+TEST(SurnameKey, SingleWordKeysOnItself) { EXPECT_EQ(library::surnameKey("Voltaire"), "voltaire"); }
 
-TEST(SurnameKey, AccentsAreFolded) {
-  EXPECT_EQ(library::surnameKey("Paul Éluard"), "eluard paul");
-}
+TEST(SurnameKey, AccentsAreFolded) { EXPECT_EQ(library::surnameKey("Paul Éluard"), "eluard paul"); }
 
-TEST(SurnameKey, ThreeWordNamesTakeTheLast) {
-  EXPECT_EQ(library::surnameKey("John C. Lennox"), "lennox john c");
-}
+TEST(SurnameKey, ThreeWordNamesTakeTheLast) { EXPECT_EQ(library::surnameKey("Herbert G. Wells"), "wells herbert g"); }
 
-TEST(SurnameKey, EmptyStaysEmpty) {
-  EXPECT_EQ(library::surnameKey(""), "");
-}
+TEST(SurnameKey, EmptyStaysEmpty) { EXPECT_EQ(library::surnameKey(""), ""); }
 
 // The whole point of keying off the DISPLAY name: the spelling vote has already
 // made every book by one author show one name, so a group cannot land in two
-// places even though "Ian Manook" and "Manook Ian" both exist in the wild.
+// places even though "Victor Hugo" and "Hugo Victor" both exist in the wild.
 TEST(SurnameKey, HarmonisedDisplayNameKeepsAGroupTogether) {
-  EXPECT_EQ(library::surnameKey("Ian Manook"), library::surnameKey("Ian Manook"));
-  EXPECT_NE(library::surnameKey("Ian Manook"), library::surnameKey("Manook Ian"));
+  EXPECT_NE(library::surnameKey("Victor Hugo"), library::surnameKey("Hugo Victor"));
 }
-

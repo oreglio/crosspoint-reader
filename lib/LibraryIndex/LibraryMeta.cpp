@@ -1,10 +1,9 @@
 #include "LibraryMeta.h"
 
 #include <Logging.h>
+#include <Memory.h>
 #include <Print.h>
 #include <ZipFile.h>
-
-#include <Memory.h>
 
 #include <algorithm>
 #include <cstring>

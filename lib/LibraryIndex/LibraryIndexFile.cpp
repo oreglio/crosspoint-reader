@@ -1,10 +1,9 @@
 #include "LibraryIndexFile.h"
 
-#include <algorithm>
-
 #include <HalStorage.h>
 #include <Logging.h>
 
+#include <algorithm>
 #include <cstring>
 
 namespace library {

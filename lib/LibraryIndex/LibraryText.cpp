@@ -19,7 +19,7 @@ struct CharMap {
 };
 constexpr CharMap EXPLICIT_MAP[] = {
     {0x00D8, "o"},   // Ø
-    {0x00F8, "o"},   // ø  — "Nesbø" folds to "nesbo", not "nesb"
+    {0x00F8, "o"},   // ø  — "Søren" folds to "soren", not "nesb"
     {0x00C6, "ae"},  // Æ
     {0x00E6, "ae"},  // æ
     {0x0152, "oe"},  // Œ
@@ -34,13 +34,9 @@ constexpr CharMap EXPLICIT_MAP[] = {
     {0x00DE, "th"},  // Þ
     {0x00FE, "th"},  // þ
     {0x0131, "i"},   // ı
-    {0x0027, "'"},   // ' — kept, not turned into a space, so "Anna's" stays one word
+    {0x0027, "'"},   // ' — kept, not turned into a space, so "O'Brien" stays one word
     {0x2019, "'"},   // ’ — and so the curly form folds to the same thing
     {0x2018, "'"},   // ‘
-    {0x201C, "\""},  // “
-    {0x201D, "\""},  // ”
-    {0x2013, "-"},   // –
-    {0x2014, "-"},   // —
 };
 
 const char* explicitMapping(const uint32_t cp) {
@@ -86,16 +82,16 @@ void appendLowerAscii(const uint32_t cp, std::string& out) {
 
 // Articles stripped from the head of sort and search keys. Display text never
 // goes through this.
-constexpr const char* ARTICLES[] = {"the ", "a ",  "an ", "le ",  "la ",  "les ", "l'",  "un ",
-                                    "une ", "de ", "du ", "des ", "der ", "die ", "das ", "el ",
-                                    "los ", "las ", "il ", "lo ",  "gli ", "i ",   "o ",  "os "};
+constexpr const char* ARTICLES[] = {"the ", "a ",   "an ", "le ",  "la ",  "les ", "l'",   "un ",
+                                    "une ", "de ",  "du ", "des ", "der ", "die ", "das ", "el ",
+                                    "los ", "las ", "il ", "lo ",  "gli ", "i ",   "o ",   "os "};
 
 // Words that must not be the last word of a filename title for TITLE_MERGE to
 // fire: an exporter truncating mid-phrase almost always stops on one of these.
-constexpr const char* STOP_TAIL[] = {
-    "a",   "an",  "the", "of",  "to",  "for", "at",   "if",  "in",   "on",  "and", "or",
-    "with", "from", "your", "is", "as",  "by",  "de",   "du",  "des",  "la",  "le",  "les",
-    "un",  "une", "et",  "pour", "dans", "sur", "que",  "qui", "ce",   "d",   "l",   "e"};
+constexpr const char* STOP_TAIL[] = {"a",    "an",   "the", "of",   "to",   "for",  "at", "if",  "in",
+                                     "on",   "and",  "or",  "with", "from", "your", "is", "as",  "by",
+                                     "de",   "du",   "des", "la",   "le",   "les",  "un", "une", "et",
+                                     "pour", "dans", "sur", "que",  "qui",  "ce",   "d",  "l",   "e"};
 
 bool isStopTail(const std::string& word) {
   for (const char* s : STOP_TAIL) {
@@ -115,13 +111,19 @@ void splitTokens(std::string_view folded, std::string* out, size_t maxTokens, si
   }
 }
 
-bool allHexDigits(std::string_view s) {
+bool looksLikeHexDigest(std::string_view s) {
   if (s.empty()) return false;
+  // At least one decimal digit is required: "Bede" and "Abba" are authors,
+  // not digests, and a real hash without a single digit is vanishingly rare.
+  // The trade-off runs the other way for pure-letter strings like "deadbeef",
+  // which now read as an (odd) author instead of being dropped — harmless.
+  bool sawDigit = false;
   for (const char c : s) {
-    const bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
-    if (!hex) return false;
+    const bool digit = (c >= '0' && c <= '9');
+    if (!digit && (c < 'a' || c > 'f')) return false;
+    sawDigit = sawDigit || digit;
   }
-  return true;
+  return sawDigit;
 }
 
 bool allDigits(std::string_view s) {
@@ -133,7 +135,7 @@ bool allDigits(std::string_view s) {
 }
 
 // A plausible publication year, 1500-2099. Narrow on purpose: a wider range
-// would swallow titles like "1984" and "2084".
+// would swallow titles like "1987" and "2085".
 bool isYear(std::string_view s) {
   if (s.size() != 4 || !allDigits(s)) return false;
   const int y = (s[0] - '0') * 1000 + (s[1] - '0') * 100 + (s[2] - '0') * 10 + (s[3] - '0');
@@ -158,6 +160,17 @@ std::string fold(const std::string_view text, const bool stripArticle) {
   bool pendingSpace = false;
 
   while (cursor < end) {
+    // The shared decoder stops on NUL and every std::string source is
+    // NUL-terminated, but fold's contract is string_view — and a view may end
+    // mid-sequence. Refuse to decode a lead byte whose continuation bytes lie
+    // past the end rather than trusting whatever sits there.
+    const unsigned char lead = *cursor;
+    const ptrdiff_t promised = lead < 0x80           ? 1
+                               : (lead >> 5) == 0x06 ? 2
+                               : (lead >> 4) == 0x0E ? 3
+                               : (lead >> 3) == 0x1E ? 4
+                                                     : 1;
+    if (promised > end - cursor) break;
     const uint32_t cp = utf8NextCodepoint(&cursor);
     if (cp == 0) break;
 
@@ -206,9 +219,16 @@ bool looksLikeMetadata(const std::string_view raw) {
   const std::string folded = fold(trimmed);
   if (folded.empty()) return true;
 
-  if (folded.size() >= 4 && folded.size() <= 32 && allHexDigits(folded)) return true;
+  if (folded.size() >= 4 && folded.size() <= 32 && looksLikeHexDigest(folded)) return true;
   if (folded.rfind("isbn10", 0) == 0 || folded.rfind("isbn13", 0) == 0) return true;
-  if (folded.rfind("anna's archive", 0) == 0 || folded.rfind("annas archive", 0) == 0) return true;
+  // Organisation credits that export tools leave in the author slot:
+  // "Internet Archive", "Open Library" and the like are sources, not people.
+  // Matching the last word keeps this free of any hardcoded site list, and no
+  // person's surname is "Archive" or "Library".
+  const size_t lastSpace = folded.find_last_of(' ');
+  const std::string_view lastWord =
+      lastSpace == std::string::npos ? std::string_view(folded) : std::string_view(folded).substr(lastSpace + 1);
+  if (lastWord == "archive" || lastWord == "library") return true;
   if (folded.size() == 13 && allDigits(folded) && folded.rfind("97", 0) == 0) return true;
   if (folded.size() == 10 && allDigits(folded.substr(0, 9)) &&
       (folded[9] == 'x' || (folded[9] >= '0' && folded[9] <= '9'))) {
@@ -270,10 +290,11 @@ std::string cleanPersonName(const std::string_view author) {
     if (c == ';') break;  // secondary authors
     if (depth > 0) continue;
     if (c == '_') {
-      // "Michael S_ Heiser" — the underscore stands in for a full stop the
+      // "Herbert G_ Wells" — the underscore stands in for a full stop the
       // filesystem would not take. Between letters it is an abbreviation dot;
       // at the end of a word it is just noise.
-      const bool betweenLetters = i > 0 && i + 1 < author.size() && isalpha(static_cast<unsigned char>(author[i - 1])) &&
+      const bool betweenLetters = i > 0 && i + 1 < author.size() &&
+                                  isalpha(static_cast<unsigned char>(author[i - 1])) &&
                                   isalpha(static_cast<unsigned char>(author[i + 1]));
       out.push_back(betweenLetters ? '.' : ' ');
       continue;
@@ -281,8 +302,8 @@ std::string cleanPersonName(const std::string_view author) {
     out.push_back(c);
   }
 
-  while (!out.empty() && (out.back() == ' ' || out.back() == ',' || out.back() == '-' || out.back() == '.' ||
-                          out.back() == '_')) {
+  while (!out.empty() &&
+         (out.back() == ' ' || out.back() == ',' || out.back() == '-' || out.back() == '.' || out.back() == '_')) {
     out.pop_back();
   }
   size_t start = 0;
@@ -303,7 +324,7 @@ std::string cleanPersonName(const std::string_view author) {
     collapsed.push_back(c);
   }
 
-  // "Tintera, Amy" is the same person as "Amy Tintera", and publishers use both.
+  // "Austen, Jane" is the same person as "Jane Austen", and publishers use both.
   // The spelling vote cannot settle it — with one book per author there is no
   // majority — so the inverted form is turned round here instead. Only a single
   // comma qualifies: "Smith, John, Jr." and lists of several authors are left
@@ -327,7 +348,7 @@ std::string cleanPersonName(const std::string_view author) {
 }
 
 std::string authorKey(const std::string_view author) {
-  // Drop bracketed spans ("Karine Giebel [Giebel, Karine]") and everything after
+  // Drop bracketed spans ("George Sand [Sand, George]") and everything after
   // a multi-author separator.
   std::string cleaned;
   cleaned.reserve(author.size());
@@ -352,8 +373,8 @@ std::string authorKey(const std::string_view author) {
   size_t count = 0;
   splitTokens(folded, tokens, MAX_TOKENS, count);
 
-  // Initials carry no identity and appear inconsistently ("John C Lennox" vs
-  // "John Lennox"), so they must not change the key.
+  // Initials carry no identity and appear inconsistently ("Herbert G Wells" vs
+  // "Herbert Wells"), so they must not change the key.
   size_t kept = 0;
   for (size_t i = 0; i < count; i++) {
     if (tokens[i].size() > 1) tokens[kept++] = tokens[i];
@@ -366,9 +387,9 @@ std::string authorKey(const std::string_view author) {
     key += tokens[i];
   }
   // Truncate on bytes, not on a token boundary. Sorting puts a short forename
-  // first, so a whole-token cut would reduce "Michaelides, Alex" to the key
+  // first, so a whole-token cut would reduce "Wollstonecraft, Mary" to the key
   // "alex" and merge every Alex in the library; the byte cut keeps
-  // "alex michael", which stays a prefix of the full key and discriminates.
+  // "mary wollsto", which stays a prefix of the full key and discriminates.
   if (key.size() > AUTHOR_KEY_MAX_BYTES) key.resize(AUTHOR_KEY_MAX_BYTES);
   while (!key.empty() && key.back() == ' ') key.pop_back();
   return key;
@@ -397,10 +418,9 @@ bool preferFilenameTitle(const std::string_view dcTitle, const std::string_view 
   return !isStopTail(extra[count - 1]);
 }
 
-
-// fold() keeps the apostrophe, which is right for sorting — "L'inconsole" belongs
+// fold() keeps the apostrophe, which is right for sorting — "L'Eneide" belongs
 // under L. For searching it is wrong: in French the word worth typing is the one
-// AFTER the apostrophe, so "inconsole" must reach "L'inconsole" and "cote" must
+// AFTER the apostrophe, so "eneide" must reach "L'Eneide" and "cote" must
 // reach "d'a cote". Treating it as a word boundary here leaves the sort untouched.
 bool isWordBreak(const char c) { return c == ' ' || c == '\''; }
 

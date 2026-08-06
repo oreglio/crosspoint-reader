@@ -141,10 +141,10 @@ inline ClixAuthorProvenance recordAuthorProvenance(const ClixRecord& r) {
 }
 inline bool recordTitleFromOpf(const ClixRecord& r) { return (r.flags & (1 << 5)) != 0; }
 inline bool recordOpfTooLarge(const ClixRecord& r) { return (r.flags & (1 << 6)) != 0; }
-inline uint8_t makeRecordFlags(const ClixFormat format, const ClixAuthorProvenance provenance,
-                               const bool titleFromOpf, const bool opfTooLarge) {
-  return static_cast<uint8_t>((format & 0x07) | ((provenance & 0x03) << 3) |
-                              (titleFromOpf ? (1 << 5) : 0) | (opfTooLarge ? (1 << 6) : 0));
+inline uint8_t makeRecordFlags(const ClixFormat format, const ClixAuthorProvenance provenance, const bool titleFromOpf,
+                               const bool opfTooLarge) {
+  return static_cast<uint8_t>((format & 0x07) | ((provenance & 0x03) << 3) | (titleFromOpf ? (1 << 5) : 0) |
+                              (opfTooLarge ? (1 << 6) : 0));
 }
 
 inline uint32_t alignUp(const uint32_t value) { return (value + CLIX_ALIGN - 1) / CLIX_ALIGN * CLIX_ALIGN; }
@@ -179,7 +179,7 @@ enum class ClixValidity : uint8_t {
   BadMagic,
   UnknownFormatVersion,
   StaleFoldVersion,
-  SizeMismatch,   // truncated, or a build interrupted before the final rename
+  SizeMismatch,  // truncated, or a build interrupted before the final rename
   CountOutOfRange,
   SectionsInconsistent,
 };
@@ -196,11 +196,15 @@ inline ClixValidity validateHeader(const ClixHeader& h, const uint64_t actualFil
   if (h.bookCount > CLIX_MAX_RECORDS) return ClixValidity::CountOutOfRange;
   if (actualFileSize != h.selfSize) return ClixValidity::SizeMismatch;
 
+  // Both lengths are attacker-controlled bytes. Capped against the real file
+  // size they cannot wrap the 32-bit section sums below, so the layout
+  // comparison stays sound instead of re-deriving the same wrapped values.
+  if (h.folderLen > actualFileSize || h.nameLen > actualFileSize) return ClixValidity::SectionsInconsistent;
+
   ClixHeader expected = h;
   layoutSections(expected, h.folderLen, h.nameLen);
   if (expected.folderStart != h.folderStart || expected.recordStart != h.recordStart ||
-      expected.permStart != h.permStart || expected.nameStart != h.nameStart ||
-      expected.selfSize != h.selfSize) {
+      expected.permStart != h.permStart || expected.nameStart != h.nameStart || expected.selfSize != h.selfSize) {
     return ClixValidity::SectionsInconsistent;
   }
   if (h.knownAuthorCount > h.bookCount) return ClixValidity::SectionsInconsistent;

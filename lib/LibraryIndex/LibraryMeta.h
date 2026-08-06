@@ -5,8 +5,8 @@
 // Worth doing because on a real card the metadata is not merely different from
 // the filename, it is better: 59 of 60 books carry both fields, the median title
 // is 23 characters against 148 for the filename, and it is often more correct —
-// one book whose filename says "Pachonko" knows itself as "Pachinko", another
-// whose filename lost its accents knows it is "L'inconsole" with them.
+// one book whose filename says "Germinl" knows itself as "Germinal", another
+// whose filename lost its accents knows it is "L'Eneide" with them.
 //
 // This is the path for books the reader has never opened, which therefore have
 // no cache to read. It inflates two small files and stops; it does not index the
