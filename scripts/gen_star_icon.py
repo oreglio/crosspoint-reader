@@ -1,26 +1,45 @@
 #!/usr/bin/env python3
-"""Generate src/components/icons/libraryIcons.h — the favorites star.
+"""Generate src/components/icons/libraryIcons.h — the Library's own icons.
 
-The general icon pipeline (freeink-sdk gen_icons.py) rasterises SVGs through
-rsvg and a luminance threshold. That is right for Lucide's stroked icons and
-wrong for a tiny filled star: the threshold binarises antialiased edges one
-pixel at a time, so a mathematically symmetric shape comes out lopsided at
-16 px — which is exactly how it looked on the panel. This script rasterises
-the star polygon itself, by pixel coverage with symmetric supersampling, so
-the output is mirror-symmetric by construction and the tips stay attached.
+Two things set this apart from the general icon pipeline (freeink-sdk
+gen_icons.py):
+
+1. The favorites star is rasterised from an exact five-point polygon by pixel
+   coverage, not thresholded from a stroked SVG: the threshold binarises
+   antialiased edges one pixel at a time, and a mathematically symmetric star
+   came out lopsided at 16 px. Coverage sampling on a symmetric grid is
+   mirror-symmetric by construction (asserted below).
+
+2. Every bitmap is stored pre-rotated 90 degrees COUNTER-clockwise. The
+   raw-bits GfxRenderer::drawIcon path displays stored bitmaps rotated 90
+   degrees clockwise on the portrait X3 — settled empirically over three
+   flashes: upright-stored art leaned, clockwise-stored art stood on its head.
+   Every icon in the app rides through the same blit; near-rotation-invariant
+   shapes (cog, search, wifi) hid it for the whole icon set, and the row book
+   icon has been lying on its side since the day it shipped. The star made it
+   visible, and the book generated here stands the shelf's rows upright too.
+   fillRect-drawn marks (the Titles triangle) never had the problem.
+
+Requires rsvg-convert (librsvg) and Pillow for the book, like gen_icons.py.
 
 Usage: python3 scripts/gen_star_icon.py   (writes the header in place)
 """
 
+import io
 import math
+import subprocess
+
+from PIL import Image
 
 OUT = 'src/components/icons/libraryIcons.h'
-SIZES = (16, 24)
+BOOK_SVG = 'freeink-sdk/libs/assets/Icons/lucide/icons/book.svg'
+STAR_SIZES = (16, 24)
 SAMPLES = 8          # supersampling grid per pixel axis
 COVERAGE = 0.38      # ink threshold; below 0.5 so 1-px star tips survive
 OUTER = 0.46         # outer radius, as a fraction of the box
 INNER = 0.45         # inner radius, as a fraction of the outer (chunkier
                      # than the 0.382 pentagram ratio, for 1-bit legibility)
+THRESHOLD = 110      # luminance cut for the stroked book, as gen_icons.py
 
 
 def star_polygon(px):
@@ -51,7 +70,7 @@ def point_in_polygon(x, y, poly):
     return inside
 
 
-def rasterize(px):
+def rasterize_star(px):
     poly = star_polygon(px)
     rows = []
     for y in range(px):
@@ -72,20 +91,20 @@ def rasterize(px):
     return rows
 
 
-def rotate_cw(rows, px):
-    """Pre-rotate 90° clockwise to cancel the panel path's rotation.
+def rasterize_svg(path, px):
+    png = subprocess.run(['rsvg-convert', '-w', str(px), '-h', str(px), path],
+                         capture_output=True, check=True).stdout
+    img = Image.open(io.BytesIO(png)).convert('RGBA')
+    bg = Image.new('RGBA', img.size, (255, 255, 255, 255))
+    bg.paste(img, mask=img.split()[3])
+    grey = bg.convert('L')
+    pix = grey.load()
+    return [[pix[x, y] < THRESHOLD for x in range(px)] for y in range(px)]
 
-    GfxRenderer::drawIcon's raw-bits blit maps source rows onto the panel's
-    physical scanlines, and on the portrait-on-landscape X3 that displays the
-    stored bitmap rotated 90° counter-clockwise. Every icon rides through it
-    that way — the row 'book' is a book lying on its side, unnoticed because a
-    rotated book still reads as a book. A five-point star rotated 90° sits 18°
-    off its nearest natural orientation (90 - 72) and finally made it visible.
-    Storing the star rotated clockwise makes the two rotations cancel; the
-    fillRect-drawn marks (the Titles triangle) never had the problem because
-    rect primitives go through the correct transform.
-    """
-    return [[rows[px - 1 - c][r] for c in range(px)] for r in range(px)]
+
+def rotate_ccw(rows, px):
+    """new[r][c] = old[c][px-1-r]: the storage rotation the blit cancels."""
+    return [[rows[c][px - 1 - r] for c in range(px)] for r in range(px)]
 
 
 def pack(rows, px):
@@ -102,25 +121,28 @@ def pack(rows, px):
     return data, stride
 
 
+def emit(name, upright, px, parts):
+    stored = rotate_ccw(upright, px)
+    data, stride = pack(stored, px)
+    art = '\n'.join('// ' + ''.join('#' if c else '.' for c in row) for row in upright)
+    hexes = ', '.join(f'0x{b:02X}' for b in data)
+    parts.append(
+        f'\n// As displayed (the stored bytes are this, pre-rotated 90° CCW):\n{art}\n'
+        f'static const uint8_t {name}_bits[] = {{{hexes}}};\n'
+        f'static const freeink::Icon {name} = {{{px}, {px}, {stride}, {name}_bits}};\n'
+    )
+
+
 def main():
     parts = [
         '#pragma once\n\n#include "Icon.h"\n\n'
         '// Generated by scripts/gen_star_icon.py. Do not edit.\n'
-        '// The favorites star, rasterised by coverage so it is mirror-symmetric\n'
-        '// and centred by bounding box; see the script for why the SVG pipeline\n'
-        '// is not used here.\n'
+        '// Stored pre-rotated 90° CCW because the raw drawIcon blit displays\n'
+        '// bitmaps rotated 90° CW on the portrait X3; see the script.\n'
     ]
-    for px in SIZES:
-        rows = rasterize(px)
-        stored = rotate_cw(rows, px)
-        data, stride = pack(stored, px)
-        art = '\n'.join('// ' + ''.join('#' if c else '.' for c in row) for row in rows)
-        hexes = ', '.join(f'0x{b:02X}' for b in data)
-        parts.append(
-            f'\n// As displayed (the stored bytes are this, pre-rotated 90° clockwise):\n{art}\n'
-            f'static const uint8_t icon_star_{px}_bits[] = {{{hexes}}};\n'
-            f'static const freeink::Icon icon_star_{px} = {{{px}, {px}, {stride}, icon_star_{px}_bits}};\n'
-        )
+    for px in STAR_SIZES:
+        emit(f'icon_star_{px}', rasterize_star(px), px, parts)
+    emit('icon_book_upright_24', rasterize_svg(BOOK_SVG, 24), 24, parts)
     with open(OUT, 'w', encoding='utf-8') as f:
         f.write(''.join(parts))
     print(f'wrote {OUT}')

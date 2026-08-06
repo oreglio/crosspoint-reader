@@ -43,10 +43,11 @@ Refer to https://freeink.org/llms.txt for guidance.
 ## Misc Repo Gotchas
 
 - `GfxRenderer::drawIcon`/`drawIconInverted` (raw-bits path) display the stored
-  bitmap rotated 90° CCW on the portrait X3/X4: source rows are blitted along
-  the panel's physical scanlines. Near-rotation-invariant icons (book, cog,
-  search) hid this for the whole icon set; asymmetric art must be stored
-  pre-rotated 90° CW (see `scripts/gen_star_icon.py`). `fillRect`-drawn marks
+  bitmap rotated 90° CW on the portrait X3/X4 (settled empirically: upright-
+  stored art leans, CW-stored art stands on its head). Near-rotation-invariant
+  icons (book, cog, search) hid this for the whole icon set; asymmetric art
+  must be stored pre-rotated 90° CCW (see `scripts/gen_star_icon.py`, which
+  also carries an upright book for the Library rows). `fillRect`-drawn marks
   are unaffected — rect primitives go through the correct transform.
 
 - POSIX TZ signs are inverted from ISO 8601 in `TimeStore::applyTimezone()`: `"UTC-1"` means UTC+1.

@@ -15,7 +15,6 @@
 #include "components/UIThemeTokens.h"
 #include "components/UiAppHelpers.h"
 #include "components/icons/libraryIcons.h"
-#include "components/icons/listIcons.h"
 
 namespace fui = freeink::ui;
 
@@ -1066,8 +1065,10 @@ void LibraryListActivity::drawRows() {
       renderer.drawIcon(icon_star_24_bits, LIBRARY_SIDE_PADDING + groupIndent, y + (height - LIBRARY_ICON_SIZE) / 2,
                         LIBRARY_ICON_SIZE);
     } else {
-      renderer.drawIcon(icon_book_24_bits, LIBRARY_SIDE_PADDING + groupIndent, y + (height - LIBRARY_ICON_SIZE) / 2,
-                        LIBRARY_ICON_SIZE);
+      // The pre-rotated copy, not listIcons' book: the raw blit shows that one
+      // lying on its side (see gen_star_icon.py).
+      renderer.drawIcon(icon_book_upright_24_bits, LIBRARY_SIDE_PADDING + groupIndent,
+                        y + (height - LIBRARY_ICON_SIZE) / 2, LIBRARY_ICON_SIZE);
     }
 
     int textY = y + LIBRARY_ROW_PADDING / 2;
