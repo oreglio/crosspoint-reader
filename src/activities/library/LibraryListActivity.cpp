@@ -149,13 +149,53 @@ void LibraryListActivity::openBookMenu() {
   const std::vector<std::string> options{tr(STR_LIBRARY_MENU_OPEN),
                                          isFavorite ? tr(STR_LIBRARY_MENU_FAV_REMOVE) : tr(STR_LIBRARY_MENU_FAV_ADD),
                                          tr(STR_LIBRARY_MENU_DETAILS)};
-  bookMenu.show(title.c_str(), options, 0, [this](const int choice) {
+  popup.show(title.c_str(), options, 0, [this](const int choice) {
     if (choice == 0) openSelectedBook();
     if (choice == 1) toggleFavoriteAt(selectedIndex);
     if (choice == 2) {
       detailsView = true;
       requestUpdate(true);
     }
+  });
+  requestUpdate();
+}
+
+// The sort menu the strip cannot offer here: its sort tabs would leave the ★
+// view. This is the view's own secondary action — hold on the focused star —
+// and the one place the old standalone sort menu earned its way back.
+void LibraryListActivity::openFavoritesSortMenu() {
+  const std::string titles = tr(STR_LIBRARY_TAB_TITLES);
+  const std::vector<std::string> options{tr(STR_LIBRARY_TAB_RECENT), titles + " A-Z", titles + " Z-A",
+                                         tr(STR_LIBRARY_TAB_AUTHOR)};
+  const int current = sortOrder == library::SortOrder::DateDesc    ? 0
+                      : sortOrder == library::SortOrder::TitleAsc  ? 1
+                      : sortOrder == library::SortOrder::TitleDesc ? 2
+                                                                   : 3;
+  popup.show(tr(STR_LIBRARY_FAV_SORT_TITLE), options, current, [this](const int choice) {
+    switch (choice) {
+      case 0:
+        sortOrder = library::SortOrder::DateDesc;
+        break;
+      // The Titles tab's triangle keeps telling the truth if the reader
+      // later leaves ★: direction state follows the choice made here.
+      case 1:
+        sortOrder = library::SortOrder::TitleAsc;
+        sTitleDescending = false;
+        break;
+      case 2:
+        sortOrder = library::SortOrder::TitleDesc;
+        sTitleDescending = true;
+        break;
+      case 3:
+        sortOrder = library::SortOrder::AuthorAsc;
+        break;
+      default:
+        return;
+    }
+    applyFilter();
+    selectedIndex = 0;
+    topIndex = 0;
+    requestUpdate(true);
   });
   requestUpdate();
 }
@@ -536,7 +576,7 @@ bool LibraryListActivity::rowTextFor(const int entry, std::string& title, std::s
 
 void LibraryListActivity::loop() {
   // The menu owns every button while it is up, including the touch layer.
-  if (bookMenu.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+  if (popup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
   if (TouchHeaderBackButton::wasTapped(mappedInput, renderer)) {
     finishAfterBackPress();
     return;
@@ -677,6 +717,7 @@ void LibraryListActivity::loop() {
       // own menu.
       if (tabsFocused) {
         if (tabCursor == kTitlesTab) flipTitleDirection();
+        if (tabCursor == kFavTab) openFavoritesSortMenu();
       } else {
         openBookMenu();
       }
@@ -841,7 +882,7 @@ void LibraryListActivity::drawSortTabs(const int top) {
 void LibraryListActivity::render(RenderLock&&) {
   // The menu paints over the retained frame — no clear, no page redraw, the
   // same overlay idiom Settings uses for its popups.
-  if (bookMenu.processRender(renderer, mappedInput)) return;
+  if (popup.processRender(renderer, mappedInput)) return;
   renderer.clearScreen();
   const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
   const char* title = detailsView ? tr(STR_LIBRARY_MENU_DETAILS)

@@ -64,6 +64,9 @@ class LibraryListActivity final : public Activity {
   // Long-press on a row: the row's secondary actions, headed by the book's own
   // title so there is no doubt which row they land on.
   void openBookMenu();
+  // Long-press on the focused ★ tab: pick the order the favorites read in
+  // without leaving the view — the strip's sort tabs would exit it.
+  void openFavoritesSortMenu();
   void toggleFavoriteAt(int entry);
   // The favorites identity of one visible row: {fnv1a32(basename), fileSize},
   // the same pair the index rebuild reconciles by.
@@ -115,7 +118,9 @@ class LibraryListActivity final : public Activity {
   // The ★ view flag lives in a file-static (sFavoritesView), like the title
   // direction: with the star leading the strip, leaving the shelf in the ★
   // view and coming back to Recent read as a bug on the device.
-  OptionPopup bookMenu;
+  // One popup, two menus that can never coexist: the row's book menu and the
+  // ★ tab's sort menu.
+  OptionPopup popup;
 
   int selectedIndex = 0;
   int topIndex = 0;
