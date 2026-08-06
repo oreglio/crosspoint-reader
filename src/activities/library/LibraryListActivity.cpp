@@ -7,8 +7,10 @@
 #include <Logging.h>
 
 #include "MappedInputManager.h"
+#include "RecentBooksStore.h"
 #include "activities/ActivityManager.h"
 #include "activities/home/BookActions.h"
+#include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/TouchHeaderBackButton.h"
 #include "components/UITheme.h"
@@ -156,7 +158,7 @@ void LibraryListActivity::openBookMenu() {
   rowTextFor(selectedIndex, title, author, &isFavorite);
   const std::vector<std::string> options{tr(STR_LIBRARY_MENU_OPEN),
                                          isFavorite ? tr(STR_LIBRARY_MENU_FAV_REMOVE) : tr(STR_LIBRARY_MENU_FAV_ADD),
-                                         tr(STR_LIBRARY_MENU_DETAILS)};
+                                         tr(STR_LIBRARY_MENU_DETAILS), tr(STR_DELETE)};
   popup.show(title.c_str(), options, 0, [this](const int choice) {
     if (choice == 0) openSelectedBook();
     if (choice == 1) toggleFavoriteAt(selectedIndex);
@@ -164,8 +166,62 @@ void LibraryListActivity::openBookMenu() {
       detailsView = true;
       requestUpdate(true);
     }
+    if (choice == 3) promptDeleteSelectedBook();
   });
   requestUpdate();
+}
+
+void LibraryListActivity::promptDeleteSelectedBook() {
+  const uint16_t ordinal = index.ordinalForRow(sSortOrder, static_cast<uint16_t>(rowFor(selectedIndex)));
+  library::ClixRecord record{};
+  std::string path;
+  std::string title;
+  if (ordinal == 0xFFFF || !index.readRecord(ordinal, record) || !index.readPath(record, path)) return;
+  if (!index.readTitle(record, title) || title.empty()) index.readName(record, title);
+  library::FavoriteKey key;
+  const bool hasKey = rowKeyFor(selectedIndex, key);
+
+  const std::string heading = tr(STR_DELETE) + std::string("? ");
+  startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, title),
+                         [this, path, key, hasKey](const ActivityResult& res) {
+                           if (res.isCancelled) {
+                             requestUpdate(true);
+                             return;
+                           }
+                           // Closed before the delete and rebuild: the rebuild renames a fresh
+                           // index over this one, which must not happen under an open reader.
+                           index.close();
+                           indexReady = false;
+                           // The FILE goes first — the reverse of the Recent Books order, on
+                           // purpose: if the remove fails, a book that still exists must not
+                           // have lost its bookmarks and cache to a cleanup that ran ahead.
+                           if (!Storage.remove(path.c_str())) {
+                             LOG_ERR("LIB", "failed to delete %s", path.c_str());
+                             indexReady = openIndex();
+                             requestUpdate(true);
+                             return;
+                           }
+                           // Reader cache, bookmarks and clippings — the same helper Recent
+                           // Books uses, per file type. Reading stats are deliberately KEPT,
+                           // as everywhere else: deleting a book does not rewrite history.
+                           BookActions::clearFileMetadata(path);
+                           RECENT_BOOKS.removeByPath(path);
+                           // The two cleanups only this screen knows about. toggle() removes and
+                           // writes through; the contains() guard keeps it from re-adding.
+                           if (hasKey && favorites.contains(key)) favorites.toggle(key);
+                           // Reconciled on the spot, so the shelf never lists a ghost row. Same
+                           // lock-and-popup as the entry rebuild: the walk needs the card.
+                           {
+                             RenderLock lock(*this);
+                             GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+                             indexReady = rebuildIndex() && openIndex();
+                           }
+                           degraded = indexReady && index.ranksDegraded();
+                           applyFilter();
+                           selectedIndex = 0;
+                           topIndex = 0;
+                           requestUpdate(true);
+                         });
 }
 
 // The sort menu the strip cannot offer here: its sort tabs would leave the ★

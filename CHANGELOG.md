@@ -9,6 +9,7 @@
 - Rebuilding recognises books that were renamed or moved and keeps their place in `Recently added`, rather than treating them as new arrivals.
 - Mark a book as a favorite from its long-press menu. Favorite rows carry a star in place of the book icon, the star tab in the strip shows favorites only — composed with whatever sort is active — and the flag survives index rebuilds and moves to another folder, because it is stored in its own file keyed by file identity rather than in the rebuildable index.
 - A `Details` page in the same long-press menu shows the book's title, its author together with where that author string actually came from — the folder name, the book's reading cache, or the EPUB metadata — plus the on-disk filename, folder, size and format.
+- The long-press menu can also `Delete` a book, confirmed first. The file, its reading cache, bookmarks, clippings, recents entry and favorites entry all go; the index is reconciled on the spot so the shelf never lists a ghost. Reading stats are deliberately kept — deleting a book does not rewrite history.
 
 - `File Browser Display` gains a `Full Name` option in `Settings > System > Files & Cache`, wrapping file names over enough lines that long names are no longer cut short with an ellipsis. Rows are taller, so fewer books are listed per screen than in `2 Lines`.
 

@@ -67,6 +67,10 @@ class LibraryListActivity final : public Activity {
   // Long-press on the focused ★ tab: pick the order the favorites read in
   // without leaving the view — the strip's sort tabs would exit it.
   void openFavoritesSortMenu();
+  // The menu's destructive entry, confirmed first. Reuses the Recent Books
+  // deletion flow, then cleans the two things only this screen knows about:
+  // the favorites entry and the index, reconciled on the spot.
+  void promptDeleteSelectedBook();
   void toggleFavoriteAt(int entry);
   // The favorites identity of one visible row: {fnv1a32(basename), fileSize},
   // the same pair the index rebuild reconciles by.
