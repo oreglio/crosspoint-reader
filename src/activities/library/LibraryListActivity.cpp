@@ -14,6 +14,7 @@
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
 #include "components/UiAppHelpers.h"
+#include "components/icons/libraryIcons.h"
 #include "components/icons/listIcons.h"
 
 namespace fui = freeink::ui;
@@ -25,17 +26,6 @@ namespace {
 // preference the next boot can simply re-express in one hold.
 bool sTitleDescending = false;
 
-// The favorites mark: a filled diamond built from fillRect rows, the same
-// technique as the Titles triangle. Chosen over a five-point star because a
-// 1-bit panel renders a small star as noise; the exact mark is a simulator
-// decision and easy to retune here.
-void drawDiamond(const GfxRenderer& renderer, const int x, const int y, const int size, const bool dark) {
-  const int mid = size / 2;
-  for (int row = 0; row < size; row++) {
-    const int half = row <= mid ? row : size - 1 - row;
-    renderer.fillRect(x + mid - half, y + row, 2 * half + 1, 1, dark);
-  }
-}
 }  // namespace
 
 LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -799,15 +789,18 @@ void LibraryListActivity::drawSortTabs(const int top) {
   for (int i = 0; i < kTabSlots; i++) {
     if (i == kFavTab) {
       // A drawn mark, not a word: nothing to translate, and it is the same
-      // diamond the favorite rows carry, so the strip teaches the marker.
-      constexpr int diaW = 13;
-      const int x = i * slot + (slot - diaW) / 2;
+      // star the favorite rows carry, so the strip teaches the marker.
+      constexpr int starW = 16;
+      const int x = i * slot + (slot - starW) / 2;
+      const int iconY = top + 4 + (lineH - starW) / 2;
       const bool selected = tabsFocused ? i == tabCursor : favoritesOnly;
       if (selected && tabsFocused) {
-        renderer.fillRoundedRect(x - 6, top + 2, diaW + 12, height - 4, 4, Color::Black);
+        renderer.fillRoundedRect(x - 6, top + 2, starW + 12, height - 4, 4, Color::Black);
+        renderer.drawIconInverted(icon_star_16_bits, x, iconY, starW);
+      } else {
+        renderer.drawIcon(icon_star_16_bits, x, iconY, starW);
       }
-      drawDiamond(renderer, x, top + 4 + (lineH - diaW) / 2, diaW, !(selected && tabsFocused));
-      if (selected && !tabsFocused) renderer.fillRect(x, top + 4 + lineH + 1, diaW, 1, true);
+      if (selected && !tabsFocused) renderer.fillRect(x, top + 4 + lineH + 1, starW, 1, true);
       continue;
     }
     const char* label = tabLabelFor(i);
@@ -1067,12 +1060,11 @@ void LibraryListActivity::drawRows() {
     }
     if (isFavorite && !favoritesOnly) {
       // The mark replaces the row's book icon outright: the icon is decoration
-      // every row shares, the diamond is information, and reusing the slot
-      // moves no text. Skipped in the ★ view itself, where every row would
-      // carry it and it would say nothing.
-      constexpr int diaSize = 14;
-      drawDiamond(renderer, LIBRARY_SIDE_PADDING + groupIndent + (LIBRARY_ICON_SIZE - diaSize) / 2,
-                  y + (height - diaSize) / 2, diaSize, true);
+      // every row shares, the star is information, and reusing the slot moves
+      // no text. Skipped in the ★ view itself, where every row would carry it
+      // and it would say nothing.
+      renderer.drawIcon(icon_star_24_bits, LIBRARY_SIDE_PADDING + groupIndent, y + (height - LIBRARY_ICON_SIZE) / 2,
+                        LIBRARY_ICON_SIZE);
     } else {
       renderer.drawIcon(icon_book_24_bits, LIBRARY_SIDE_PADDING + groupIndent, y + (height - LIBRARY_ICON_SIZE) / 2,
                         LIBRARY_ICON_SIZE);

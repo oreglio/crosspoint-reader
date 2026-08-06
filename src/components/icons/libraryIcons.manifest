@@ -1,0 +1,8 @@
+# Manifest for src/components/icons/libraryIcons.h — regenerate with:
+#   python3 <freeink-sdk>/libs/assets/Icons/tools/gen_icons.py \
+#     --manifest src/components/icons/libraryIcons.manifest \
+#     --svgdir <freeink-sdk>/libs/assets/Icons/lucide/icons \
+#     --sizes 16,24 --out src/components/icons/libraryIcons.h
+# then clang-format -i the output.
+# 16px sits inside the sort strip's band; 24px matches the row icons.
+star = star
