@@ -56,7 +56,9 @@ class LibraryListActivity final : public Activity {
   void nextPage();
   void previousPage(bool selectLast = false);
   void openSelectedBook();
-  void openSortMenu();
+  // Swap TitleAsc/TitleDesc in place: the Titles tab keeps its slot and the
+  // direction state lives for the whole power-on session (file-static).
+  void flipTitleDirection();
   void drawSortTabs(int top);
   int tabsTop = 0;
   // Left/Right turn pages, so the strip cannot own that axis outright. It takes
@@ -96,7 +98,6 @@ class LibraryListActivity final : public Activity {
 
   library::LibraryIndexFile index;
   library::SortOrder sortOrder = library::SortOrder::DateDesc;
-
 
   int selectedIndex = 0;
   int topIndex = 0;
