@@ -316,6 +316,8 @@ HomeMenuAction homeActionForInitialMenuItem(HomeMenuItem item) {
   switch (item) {
     case HomeMenuItem::FILE_BROWSER:
       return HomeMenuAction::BrowseFiles;
+    case HomeMenuItem::LIBRARY:
+      return HomeMenuAction::LibraryShelf;
     case HomeMenuItem::RECENTS:
       return HomeMenuAction::RecentBooks;
     case HomeMenuItem::OPDS_BROWSER:
