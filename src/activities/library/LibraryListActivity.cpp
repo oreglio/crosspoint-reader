@@ -273,8 +273,8 @@ void LibraryListActivity::applyFilter() {
     }
     // The stored fold covers the title only, so the author has to be read and
     // folded here. That is the search most worth having: the reader who knows the
-    // author usually also knows where the book is, while "alice" finding Alice
-    // Hunter is the case the shelf exists to answer.
+    // author usually also knows where the book is, while "emily" finding Emily
+    // Bronte is the case the shelf exists to answer.
     std::string author;
     if (index.readAuthor(record, author) && library::matchesQuery(library::fold(author), needle)) {
       filtered.push_back(static_cast<uint16_t>(row));
@@ -292,16 +292,16 @@ constexpr int kLetterCount = 26;
 
 // Which letter a book files under, matching the column the reader is looking at:
 // the title's when sorted by title, the author's when sorted by author. Using the
-// title fold in author order — which the first cut did — sent "Alice Hunter" to
+// title fold in author order — which the first cut did — sent "Emily Bronte" to
 // wherever her book's title happened to fall.
 char LibraryListActivity::letterOf(const library::ClixRecord& record) {
   // Must be the key the rows are ORDERED by, not the text they display. The jump
   // scans for the first row at or past the chosen letter, which is only valid
   // while the letters ascend — and the displayed name does not always ascend with
-  // the sort. "Manook Ian" is filed under I, because authorKey sorts a name's
-  // words so that "Ian Manook" and "Manook Ian" group as one person; reading the
-  // display letter there gives M, the scan meets it early, and every letter from
-  // C onward stops on that one row.
+  // the sort. "Sand George" is filed under G, because authorKey sorts a name's
+  // words so that "George Sand" and "Sand George" group as one person; reading
+  // the display letter there gives S, the scan meets it early, and every letter
+  // between G and S stops on that one row.
   if (sortOrder == library::SortOrder::AuthorAsc) {
     // The shelf is ordered by surname now, so the jump reads the same key. It is
     // derived from the displayed name, which after harmonisation is one string
@@ -331,8 +331,8 @@ void LibraryListActivity::computeLettersPresent() {
   }
 }
 
-// The fold has already dropped accents and leading articles, so "L'inconsole"
-// lands under I and "Éluard" under E — which is what a reader looking under a
+// The fold has already dropped accents and leading articles, so "L'Odyssee"
+// lands under O and "Éluard" under E — which is what a reader looking under a
 // letter expects, and what the raw title would get wrong.
 void LibraryListActivity::jumpToLetter(const char letter) {
   const bool descending = sortOrder == library::SortOrder::TitleDesc;
@@ -777,15 +777,15 @@ void LibraryListActivity::drawRows() {
 
     if (startsGroup) {
       // Written surname-first, as a catalogue does. The shelf is ORDERED by
-      // surname, and printing "Becky Chambers" above a run that sits between
-      // Chattam and Crouch makes the order look arbitrary — the eye reads B, M, B
-      // while the sort follows Ch, Ch, Cr. Inverting it here makes the ordering
+      // surname, and printing "Anton Chekhov" above a run that sits between
+      // Chateaubriand and Crane makes the order look arbitrary — the eye reads
+      // F, A, S while the sort follows Ch, Ch, Cr. Inverting it here makes the ordering
       // visible in the column that carries it. Only in author order: elsewhere
       // the natural spelling reads better.
       // Into a local, NOT back into `author`. Overwriting it cost the first row of
       // every group its separator: the comparison below reads the next row's
-      // author straight from the index, so "Xiaolong, Qiu" never matched
-      // "Qiu Xiaolong" and the rows read as separate groups.
+      // author straight from the index, so "Xun, Lu" never matched
+      // "Lu Xun" and the rows read as separate groups.
       std::string inverted = author;
       const size_t lastSpace = inverted.find_last_of(' ');
       if (lastSpace != std::string::npos && lastSpace + 1 < inverted.size()) {
