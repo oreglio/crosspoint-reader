@@ -112,9 +112,9 @@ class LibraryListActivity final : public Activity {
   library::LibraryIndexFile index;
   library::SortOrder sortOrder = library::SortOrder::DateDesc;
   library::LibraryFavoritesFile favorites;
-  // The ★ view: favorites only, composed with whatever sort is current. A tab
-  // like the others to reach, a filter like search underneath.
-  bool favoritesOnly = false;
+  // The ★ view flag lives in a file-static (sFavoritesView), like the title
+  // direction: with the star leading the strip, leaving the shelf in the ★
+  // view and coming back to Recent read as a bug on the device.
   OptionPopup bookMenu;
 
   int selectedIndex = 0;

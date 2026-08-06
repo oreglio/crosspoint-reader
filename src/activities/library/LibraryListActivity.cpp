@@ -24,6 +24,10 @@ namespace {
 // not a setting — a persisted field would be one more thing to migrate for a
 // preference the next boot can simply re-express in one hold.
 bool sTitleDescending = false;
+// The ★ view survives the shelf the same way: with the star leading the strip,
+// leaving in the favorites view and returning to Recent read as a bug on the
+// device. A boot still starts on Recent — the full shelf is the honest default.
+bool sFavoritesView = false;
 
 }  // namespace
 
@@ -132,7 +136,7 @@ void LibraryListActivity::toggleFavoriteAt(const int entry) {
   BookActions::drawToast(renderer, nowFavorite ? tr(STR_LIBRARY_FAV_ADDED) : tr(STR_LIBRARY_FAV_REMOVED));
   delay(1200);
   // Removing while looking AT the ★ view must take the row out of it.
-  if (favoritesOnly) applyFilter();
+  if (sFavoritesView) applyFilter();
   requestUpdate(true);
 }
 
@@ -212,12 +216,12 @@ void LibraryListActivity::cycleSortOrder(const bool forward) {
   if (tabCursor == kFavTab) {
     // Landing on ★ applies it at once, like any sort tab. The order itself is
     // untouched: favorites compose with whatever order is current.
-    favoritesOnly = true;
+    sFavoritesView = true;
     applyFilter();
     selectedIndex = 0;
     topIndex = 0;
   } else if (tabCursor != kSearchTab) {
-    favoritesOnly = false;
+    sFavoritesView = false;
     sortOrder = orderForTab(tabCursor);
     applyFilter();
     selectedIndex = 0;
@@ -276,14 +280,14 @@ void LibraryListActivity::measureRows() {
 }
 
 int LibraryListActivity::rowCount() const {
-  const bool filteredView = !query.empty() || favoritesOnly;
+  const bool filteredView = !query.empty() || sFavoritesView;
   return filteredView ? static_cast<int>(filtered.size()) : static_cast<int>(index.bookCount());
 }
 
 // Entry position on screen to row position in the sort order. Identity while
 // unfiltered, so the shelf costs nothing when nothing is typed.
 int LibraryListActivity::rowFor(const int entry) const {
-  if (query.empty() && !favoritesOnly) return entry;
+  if (query.empty() && !sFavoritesView) return entry;
   if (entry < 0 || entry >= static_cast<int>(filtered.size())) return 0;
   return filtered[entry];
 }
@@ -296,7 +300,7 @@ void LibraryListActivity::applyFilter() {
   // Cleared even on the empty-query path: dropping a filter changes the list just
   // as much as applying one.
   pageStarts.clear();
-  if (query.empty() && !favoritesOnly) return;
+  if (query.empty() && !sFavoritesView) return;
 
   // Folded the same way the stored folds were, articles removed included —
   // otherwise "the hobbit" searches for a word no record contains.
@@ -309,7 +313,7 @@ void LibraryListActivity::applyFilter() {
     if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) continue;
     // ★ narrows first, and composes with the query rather than replacing it:
     // searching within favorites is the natural reading of having both on.
-    if (favoritesOnly) {
+    if (sFavoritesView) {
       std::string name;
       if (!index.readName(record, name)) continue;
       const library::FavoriteKey key{library::favoriteNameHash(name.data(), name.size()), record.fileSize};
@@ -655,8 +659,8 @@ void LibraryListActivity::loop() {
   }
   // ★ is a view the reader must be able to back out of, exactly like an active
   // search: the press they would reach for anyway undoes it.
-  if (favoritesOnly && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    favoritesOnly = false;
+  if (sFavoritesView && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    sFavoritesView = false;
     tabCursor = sortTabIndex(sortOrder);
     applyFilter();
     selectedIndex = 0;
@@ -748,7 +752,7 @@ void LibraryListActivity::loop() {
       // orders behind a hidden strip would repaint the same walk-order list
       // under a different title.
       tabsFocused = true;
-      tabCursor = favoritesOnly ? kFavTab : sortTabIndex(sortOrder);
+      tabCursor = sFavoritesView ? kFavTab : sortTabIndex(sortOrder);
       requestUpdate();
     } else if (selectedIndex > topIndex) {
       selectedIndex--;
@@ -791,7 +795,7 @@ void LibraryListActivity::drawSortTabs(const int top) {
       constexpr int starW = 16;
       const int x = i * slot + (slot - starW) / 2;
       const int iconY = top + 4 + (lineH - starW) / 2;
-      const bool selected = tabsFocused ? i == tabCursor : favoritesOnly;
+      const bool selected = tabsFocused ? i == tabCursor : sFavoritesView;
       if (selected && tabsFocused) {
         renderer.fillRoundedRect(x - 6, top + 2, starW + 12, height - 4, 4, Color::Black);
         renderer.drawIconInverted(icon_star_16_bits, x, iconY, starW);
@@ -816,7 +820,7 @@ void LibraryListActivity::drawSortTabs(const int top) {
     // Focused, the cursor marks the pill; unfocused, the active VIEW does —
     // which is ★ while the favorites view is on, not the sort composing it.
     const bool selected =
-        tabsFocused ? i == tabCursor : (!favoritesOnly && i != kSearchTab && sortTabIndex(sortOrder) == i);
+        tabsFocused ? i == tabCursor : (!sFavoritesView && i != kSearchTab && sortTabIndex(sortOrder) == i);
 
     // Focused, the pill inverts, which is the strongest signal this panel has
     // that Left/Right now belong to the strip. Unfocused it stays a plain
@@ -846,8 +850,12 @@ void LibraryListActivity::render(RenderLock&&) {
   if (bookMenu.processRender(renderer, mappedInput)) return;
   renderer.clearScreen();
   const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
-  const char* title =
-      detailsView ? tr(STR_LIBRARY_MENU_DETAILS) : (degraded ? tr(STR_LIBRARY_TITLE_UNSORTED) : sortOrderLabel());
+  const char* title = detailsView ? tr(STR_LIBRARY_MENU_DETAILS)
+                      // The ★ view announces itself: a list that changes under an unchanged
+                      // title reads as an indexing bug — it did, on the device.
+                      : sFavoritesView ? tr(STR_LIBRARY_SORT_FAVORITES)
+                      : degraded       ? tr(STR_LIBRARY_TITLE_UNSORTED)
+                                       : sortOrderLabel();
   if (mappedInput.hasTouchHardware()) {
     TouchHeaderBackButton::draw(renderer, uiTarget, header, title, true);
   } else {
@@ -868,7 +876,7 @@ void LibraryListActivity::render(RenderLock&&) {
     }
     // The empty ★ view teaches the gesture that fills it.
     renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2,
-                              favoritesOnly ? tr(STR_LIBRARY_FAVORITES_EMPTY) : tr(STR_LIBRARY_EMPTY));
+                              sFavoritesView ? tr(STR_LIBRARY_FAVORITES_EMPTY) : tr(STR_LIBRARY_EMPTY));
   } else {
     measureRows();
     if (!degraded) drawSortTabs(tabsTop);
@@ -1056,7 +1064,7 @@ void LibraryListActivity::drawRows() {
       renderer.fillRoundedRect(LIBRARY_SIDE_PADDING / 2 + groupIndent, y, width - LIBRARY_SIDE_PADDING - groupIndent,
                                height - 2, 6, Color::LightGray);
     }
-    if (isFavorite && !favoritesOnly) {
+    if (isFavorite && !sFavoritesView) {
       // The mark replaces the row's book icon outright: the icon is decoration
       // every row shares, the star is information, and reusing the slot moves
       // no text. Skipped in the ★ view itself, where every row would carry it
