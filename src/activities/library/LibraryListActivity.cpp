@@ -657,17 +657,11 @@ void LibraryListActivity::loop() {
     requestUpdate();
     return;
   }
-  // ★ is a view the reader must be able to back out of, exactly like an active
-  // search: the press they would reach for anyway undoes it.
-  if (sFavoritesView && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    sFavoritesView = false;
-    tabCursor = sortTabIndex(sortOrder);
-    applyFilter();
-    selectedIndex = 0;
-    topIndex = 0;
-    requestUpdate();
-    return;
-  }
+  // Back in the ★ view exits the Library WITH the view intact — deliberately
+  // not the search idiom. A query is a transient filter and Back undoes it
+  // (above); the star is a PLACE — first tab, restored on return — and the
+  // first cut treated it as a filter, so the reader's exit habit silently
+  // wiped their view on every leave. The strip is the way to another view.
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finishAfterBackPress();
     return;
