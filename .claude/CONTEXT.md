@@ -42,5 +42,12 @@ Refer to https://freeink.org/llms.txt for guidance.
 
 ## Misc Repo Gotchas
 
+- `GfxRenderer::drawIcon`/`drawIconInverted` (raw-bits path) display the stored
+  bitmap rotated 90° CCW on the portrait X3/X4: source rows are blitted along
+  the panel's physical scanlines. Near-rotation-invariant icons (book, cog,
+  search) hid this for the whole icon set; asymmetric art must be stored
+  pre-rotated 90° CW (see `scripts/gen_star_icon.py`). `fillRect`-drawn marks
+  are unaffected — rect primitives go through the correct transform.
+
 - POSIX TZ signs are inverted from ISO 8601 in `TimeStore::applyTimezone()`: `"UTC-1"` means UTC+1.
 - `LyraTheme::drawHeader()` does not call `BaseTheme::drawHeader()`, so header changes in the base theme must be duplicated in Lyra if needed.

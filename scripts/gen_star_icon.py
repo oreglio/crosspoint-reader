@@ -72,6 +72,22 @@ def rasterize(px):
     return rows
 
 
+def rotate_cw(rows, px):
+    """Pre-rotate 90° clockwise to cancel the panel path's rotation.
+
+    GfxRenderer::drawIcon's raw-bits blit maps source rows onto the panel's
+    physical scanlines, and on the portrait-on-landscape X3 that displays the
+    stored bitmap rotated 90° counter-clockwise. Every icon rides through it
+    that way — the row 'book' is a book lying on its side, unnoticed because a
+    rotated book still reads as a book. A five-point star rotated 90° sits 18°
+    off its nearest natural orientation (90 - 72) and finally made it visible.
+    Storing the star rotated clockwise makes the two rotations cancel; the
+    fillRect-drawn marks (the Titles triangle) never had the problem because
+    rect primitives go through the correct transform.
+    """
+    return [[rows[px - 1 - c][r] for c in range(px)] for r in range(px)]
+
+
 def pack(rows, px):
     stride = (px + 7) // 8
     data = []
@@ -96,11 +112,12 @@ def main():
     ]
     for px in SIZES:
         rows = rasterize(px)
-        data, stride = pack(rows, px)
+        stored = rotate_cw(rows, px)
+        data, stride = pack(stored, px)
         art = '\n'.join('// ' + ''.join('#' if c else '.' for c in row) for row in rows)
         hexes = ', '.join(f'0x{b:02X}' for b in data)
         parts.append(
-            f'\n{art}\n'
+            f'\n// As displayed (the stored bytes are this, pre-rotated 90° clockwise):\n{art}\n'
             f'static const uint8_t icon_star_{px}_bits[] = {{{hexes}}};\n'
             f'static const freeink::Icon icon_star_{px} = {{{px}, {px}, {stride}, icon_star_{px}_bits}};\n'
         )
