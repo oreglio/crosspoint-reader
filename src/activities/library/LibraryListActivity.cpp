@@ -154,10 +154,15 @@ void LibraryListActivity::openBookMenu() {
   bool isFavorite = false;
   rowTextFor(selectedIndex, title, author, &isFavorite);
   const std::vector<std::string> options{tr(STR_LIBRARY_MENU_OPEN),
-                                         isFavorite ? tr(STR_LIBRARY_MENU_FAV_REMOVE) : tr(STR_LIBRARY_MENU_FAV_ADD)};
+                                         isFavorite ? tr(STR_LIBRARY_MENU_FAV_REMOVE) : tr(STR_LIBRARY_MENU_FAV_ADD),
+                                         tr(STR_LIBRARY_MENU_DETAILS)};
   bookMenu.show(title.c_str(), options, 0, [this](const int choice) {
     if (choice == 0) openSelectedBook();
     if (choice == 1) toggleFavoriteAt(selectedIndex);
+    if (choice == 2) {
+      detailsView = true;
+      requestUpdate(true);
+    }
   });
   requestUpdate();
 }
@@ -546,6 +551,16 @@ void LibraryListActivity::loop() {
   }
   const int count = rowCount();
 
+  // Details is a reading page: the only thing to do on it is leave.
+  if (detailsView) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      detailsView = false;
+      requestUpdate(true);
+    }
+    return;
+  }
+
   // The grid owns every button while it is open, so its block runs FIRST. Sitting
   // below the Back handlers, its own Back was unreachable: Back left the activity
   // with the grid still on screen.
@@ -840,14 +855,18 @@ void LibraryListActivity::render(RenderLock&&) {
   if (bookMenu.processRender(renderer, mappedInput)) return;
   renderer.clearScreen();
   const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
-  const char* title = degraded ? tr(STR_LIBRARY_TITLE_UNSORTED) : sortOrderLabel();
+  const char* title =
+      detailsView ? tr(STR_LIBRARY_MENU_DETAILS) : (degraded ? tr(STR_LIBRARY_TITLE_UNSORTED) : sortOrderLabel());
   if (mappedInput.hasTouchHardware()) {
     TouchHeaderBackButton::draw(renderer, uiTarget, header, title, true);
   } else {
     GUI.drawHeader(renderer, header, title);
   }
 
-  if (letterGrid) {
+  if (detailsView) {
+    measureRows();
+    drawDetails();
+  } else if (letterGrid) {
     drawLetterGrid();
   } else if (rowCount() == 0) {
     // The strip stays visible over an empty FILTERED view — it is the way out.
@@ -865,16 +884,115 @@ void LibraryListActivity::render(RenderLock&&) {
     drawRows();
   }
 
-  drawPositionReadout();
+  if (!detailsView) drawPositionReadout();
   // The bottom pair delivers Left/Right on this hardware, so labelling it
   // "Up/Down" describes the wrong axis — it pages the list, switches tabs and
   // steps letters, none of which is vertical. mapLabels takes previous/next
-  // precisely so the caller can say what they do here.
-  const char* prevLabel = letterGrid || tabsFocused ? tr(STR_DIR_LEFT) : tr(STR_LIBRARY_PAGE_PREV);
-  const char* nextLabel = letterGrid || tabsFocused ? tr(STR_DIR_RIGHT) : tr(STR_LIBRARY_PAGE_NEXT);
+  // precisely so the caller can say what they do here. On the details page the
+  // pair does nothing, and an empty label is how the hints bar says so.
+  const char* prevLabel = detailsView ? "" : (letterGrid || tabsFocused ? tr(STR_DIR_LEFT) : tr(STR_LIBRARY_PAGE_PREV));
+  const char* nextLabel =
+      detailsView ? "" : (letterGrid || tabsFocused ? tr(STR_DIR_RIGHT) : tr(STR_LIBRARY_PAGE_NEXT));
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), prevLabel, nextLabel);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
+}
+
+// The Details page: where the stored author provenance finally reaches the
+// reader. Every record has carried "where this author string came from" since
+// the first build — folder name, the book's own reading cache, or the EPUB
+// package document — and this is the screen honest enough to say it.
+void LibraryListActivity::drawDetails() {
+  const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(selectedIndex)));
+  library::ClixRecord record{};
+  if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) return;
+
+  std::string title;
+  std::string author;
+  std::string name;
+  std::string path;
+  if (!index.readTitle(record, title) || title.empty()) index.readName(record, title);
+  index.readAuthor(record, author);
+  index.readName(record, name);
+  index.readPath(record, path);
+  // The folder is the path with the basename cut off; the root keeps its '/'.
+  std::string folder = "/";
+  const size_t slash = path.find_last_of('/');
+  if (slash != std::string::npos && slash > 0) folder = path.substr(0, slash);
+
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int x = LIBRARY_SIDE_PADDING;
+  const int w = renderer.getScreenWidth() - 2 * LIBRARY_SIDE_PADDING;
+  int y = listTop;
+
+  const auto titleLines = renderer.wrappedText(UI_12_FONT_ID, title.c_str(), w, 3);
+  for (const auto& line : titleLines) {
+    renderer.drawText(UI_12_FONT_ID, x, y, line.c_str(), true);
+    y += renderer.getLineHeight(UI_12_FONT_ID);
+  }
+
+  if (!author.empty()) {
+    y += metrics.verticalSpacing;
+    renderer.drawText(UI_10_FONT_ID, x, y, renderer.truncatedText(UI_10_FONT_ID, author.c_str(), w).c_str(), true);
+    y += renderer.getLineHeight(UI_10_FONT_ID);
+    const char* provenance = nullptr;
+    switch (library::recordAuthorProvenance(record)) {
+      case library::CLIX_AUTHOR_FROM_FOLDER:
+        provenance = tr(STR_LIBRARY_PROV_FOLDER);
+        break;
+      case library::CLIX_AUTHOR_FROM_CACHE:
+        provenance = tr(STR_LIBRARY_PROV_CACHE);
+        break;
+      case library::CLIX_AUTHOR_FROM_OPF:
+        provenance = tr(STR_LIBRARY_PROV_OPF);
+        break;
+      case library::CLIX_AUTHOR_UNKNOWN:
+        // A guess pulled from the filename pattern: naming a source for it
+        // would claim more than the build knows.
+        break;
+    }
+    if (provenance != nullptr) {
+      renderer.drawText(SMALL_FONT_ID, x, y, provenance, true);
+      y += renderer.getLineHeight(SMALL_FONT_ID);
+    }
+  }
+
+  // The file itself: name, folder, then size and format on one line.
+  y += metrics.verticalSpacing * 2;
+  const auto nameLines = renderer.wrappedText(SMALL_FONT_ID, name.c_str(), w, 2);
+  for (const auto& line : nameLines) {
+    renderer.drawText(SMALL_FONT_ID, x, y, line.c_str(), true);
+    y += renderer.getLineHeight(SMALL_FONT_ID);
+  }
+  renderer.drawText(SMALL_FONT_ID, x, y, renderer.truncatedText(SMALL_FONT_ID, folder.c_str(), w).c_str(), true);
+  y += renderer.getLineHeight(SMALL_FONT_ID);
+
+  const char* formatToken = "";
+  switch (library::recordFormat(record)) {
+    case library::CLIX_FORMAT_EPUB:
+      formatToken = "EPUB";
+      break;
+    case library::CLIX_FORMAT_TXT:
+      formatToken = "TXT";
+      break;
+    case library::CLIX_FORMAT_MD:
+      formatToken = "MD";
+      break;
+    case library::CLIX_FORMAT_XTC:
+      formatToken = "XTC";
+      break;
+    case library::CLIX_FORMAT_OTHER:
+      break;
+  }
+  char sizeLine[48];
+  if (record.fileSize >= 1024u * 1024u) {
+    const unsigned whole = record.fileSize / (1024u * 1024u);
+    const unsigned tenth = (record.fileSize % (1024u * 1024u)) * 10u / (1024u * 1024u);
+    snprintf(sizeLine, sizeof(sizeLine), "%u.%u MB %s", whole, tenth, formatToken);
+  } else {
+    snprintf(sizeLine, sizeof(sizeLine), "%u KB %s", static_cast<unsigned>(record.fileSize / 1024u), formatToken);
+  }
+  renderer.drawText(SMALL_FONT_ID, x, y, sizeLine, true);
 }
 
 void LibraryListActivity::drawRows() {

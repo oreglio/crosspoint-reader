@@ -84,6 +84,10 @@ class LibraryListActivity final : public Activity {
   std::string query;
   std::vector<uint16_t> filtered;
   void openSearch();
+  // Details is a mode of this activity too, like the grid: a full-screen page
+  // for the selected row, render + Back, no lifecycle of its own.
+  bool detailsView = false;
+  void drawDetails();
   // The A-Z grid is a mode of this activity, not a separate one: it borrows the
   // same render and input pass, so it needs no lifecycle of its own.
   bool letterGrid = false;

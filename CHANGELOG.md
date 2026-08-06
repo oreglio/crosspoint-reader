@@ -8,6 +8,7 @@
 - Jump to a letter with the `A-Z` grid, opened with `OK` on an alphabetical sort. Sorted by author you choose whether the letter means the first name or the last, because no rule can tell `Lu Xun` from `Jane Austen`.
 - Rebuilding recognises books that were renamed or moved and keeps their place in `Recently added`, rather than treating them as new arrivals.
 - Mark a book as a favorite from its long-press menu. Favorite rows carry a small diamond in place of the book icon, the diamond tab in the strip shows favorites only — composed with whatever sort is active — and the flag survives index rebuilds and moves to another folder, because it is stored in its own file keyed by file identity rather than in the rebuildable index.
+- A `Details` page in the same long-press menu shows the book's title, its author together with where that author string actually came from — the folder name, the book's reading cache, or the EPUB metadata — plus the on-disk filename, folder, size and format.
 
 - `File Browser Display` gains a `Full Name` option in `Settings > System > Files & Cache`, wrapping file names over enough lines that long names are no longer cut short with an ellipsis. Rows are taller, so fewer books are listed per screen than in `2 Lines`.
 
