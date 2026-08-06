@@ -8,6 +8,7 @@
 
 #include "MappedInputManager.h"
 #include "activities/ActivityManager.h"
+#include "activities/home/BookActions.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/TouchHeaderBackButton.h"
 #include "components/UITheme.h"
@@ -23,6 +24,18 @@ namespace {
 // not a setting — a persisted field would be one more thing to migrate for a
 // preference the next boot can simply re-express in one hold.
 bool sTitleDescending = false;
+
+// The favorites mark: a filled diamond built from fillRect rows, the same
+// technique as the Titles triangle. Chosen over a five-point star because a
+// 1-bit panel renders a small star as noise; the exact mark is a simulator
+// decision and easy to retune here.
+void drawDiamond(const GfxRenderer& renderer, const int x, const int y, const int size, const bool dark) {
+  const int mid = size / 2;
+  for (int row = 0; row < size; row++) {
+    const int half = row <= mid ? row : size - 1 - row;
+    renderer.fillRect(x + mid - half, y + row, 2 * half + 1, 1, dark);
+  }
+}
 }  // namespace
 
 LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -50,6 +63,9 @@ void LibraryListActivity::onEnter() {
     indexReady = rebuildIndex() && openIndex();
   }
   degraded = indexReady && index.ranksDegraded();
+  // Corrupt or unreadable favorites degrade to an empty set, logged inside;
+  // the shelf itself must never be held up by its smallest file.
+  favorites.load();
   requestUpdate(true);
 }
 
@@ -110,6 +126,42 @@ void LibraryListActivity::openSelectedBook() {
   activityManager.goToReader(std::move(path));
 }
 
+bool LibraryListActivity::rowKeyFor(const int entry, library::FavoriteKey& key) {
+  const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
+  library::ClixRecord record{};
+  std::string name;
+  if (ordinal == 0xFFFF || !index.readRecord(ordinal, record) || !index.readName(record, name)) return false;
+  key.nameHash = library::favoriteNameHash(name.data(), name.size());
+  key.fileSize = record.fileSize;
+  return true;
+}
+
+void LibraryListActivity::toggleFavoriteAt(const int entry) {
+  library::FavoriteKey key;
+  if (!rowKeyFor(entry, key)) return;
+  const bool nowFavorite = favorites.toggle(key);
+  BookActions::drawToast(renderer, nowFavorite ? tr(STR_LIBRARY_FAV_ADDED) : tr(STR_LIBRARY_FAV_REMOVED));
+  delay(1200);
+  // Removing while looking AT the ★ view must take the row out of it.
+  if (favoritesOnly) applyFilter();
+  requestUpdate(true);
+}
+
+void LibraryListActivity::openBookMenu() {
+  if (!indexReady || rowCount() == 0) return;
+  std::string title;
+  std::string author;
+  bool isFavorite = false;
+  rowTextFor(selectedIndex, title, author, &isFavorite);
+  const std::vector<std::string> options{tr(STR_LIBRARY_MENU_OPEN),
+                                         isFavorite ? tr(STR_LIBRARY_MENU_FAV_REMOVE) : tr(STR_LIBRARY_MENU_FAV_ADD)};
+  bookMenu.show(title.c_str(), options, 0, [this](const int choice) {
+    if (choice == 0) openSelectedBook();
+    if (choice == 1) toggleFavoriteAt(selectedIndex);
+  });
+  requestUpdate();
+}
+
 // The strip's tab order, which is also the cycle order: Recent, Titles, Author,
 // then Search — which is not a sort mode. Moving onto a sort tab applies it at
 // once; Search waits for Confirm, since opening a keyboard is not something a
@@ -122,7 +174,11 @@ constexpr int kRecentTab = 0;
 constexpr int kTitlesTab = 1;
 constexpr int kAuthorTab = 2;
 constexpr int kSortTabCount = 3;
-constexpr int kSearchTab = kSortTabCount;
+// ★ and Search are views rather than sorts: ★ narrows the list to favorites
+// composed with whatever order is current, Search waits for Confirm.
+constexpr int kFavTab = kSortTabCount;
+constexpr int kSearchTab = kFavTab + 1;
+constexpr int kTabSlots = kSearchTab + 1;
 
 // No longer one-to-one: both title orders map to the Titles tab.
 int sortTabIndex(const library::SortOrder order) {
@@ -159,9 +215,16 @@ void LibraryListActivity::flipTitleDirection() {
 }
 
 void LibraryListActivity::cycleSortOrder(const bool forward) {
-  const int slots = kSortTabCount + 1;
-  tabCursor = (tabCursor + (forward ? 1 : slots - 1)) % slots;
-  if (tabCursor != kSearchTab) {
+  tabCursor = (tabCursor + (forward ? 1 : kTabSlots - 1)) % kTabSlots;
+  if (tabCursor == kFavTab) {
+    // Landing on ★ applies it at once, like any sort tab. The order itself is
+    // untouched: favorites compose with whatever order is current.
+    favoritesOnly = true;
+    applyFilter();
+    selectedIndex = 0;
+    topIndex = 0;
+  } else if (tabCursor != kSearchTab) {
+    favoritesOnly = false;
     sortOrder = orderForTab(tabCursor);
     applyFilter();
     selectedIndex = 0;
@@ -220,13 +283,14 @@ void LibraryListActivity::measureRows() {
 }
 
 int LibraryListActivity::rowCount() const {
-  return query.empty() ? static_cast<int>(index.bookCount()) : static_cast<int>(filtered.size());
+  const bool filteredView = !query.empty() || favoritesOnly;
+  return filteredView ? static_cast<int>(filtered.size()) : static_cast<int>(index.bookCount());
 }
 
 // Entry position on screen to row position in the sort order. Identity while
 // unfiltered, so the shelf costs nothing when nothing is typed.
 int LibraryListActivity::rowFor(const int entry) const {
-  if (query.empty()) return entry;
+  if (query.empty() && !favoritesOnly) return entry;
   if (entry < 0 || entry >= static_cast<int>(filtered.size())) return 0;
   return filtered[entry];
 }
@@ -239,17 +303,29 @@ void LibraryListActivity::applyFilter() {
   // Cleared even on the empty-query path: dropping a filter changes the list just
   // as much as applying one.
   pageStarts.clear();
-  if (query.empty()) return;
+  if (query.empty() && !favoritesOnly) return;
 
   // Folded the same way the stored folds were, articles removed included —
   // otherwise "the hobbit" searches for a word no record contains.
-  const std::string needle = library::fold(query, /*stripArticle=*/true);
+  const std::string needle = query.empty() ? std::string() : library::fold(query, /*stripArticle=*/true);
   const int total = static_cast<int>(index.bookCount());
   filtered.reserve(static_cast<size_t>(total));
   for (int row = 0; row < total; row++) {
     const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(row));
     library::ClixRecord record{};
     if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) continue;
+    // ★ narrows first, and composes with the query rather than replacing it:
+    // searching within favorites is the natural reading of having both on.
+    if (favoritesOnly) {
+      std::string name;
+      if (!index.readName(record, name)) continue;
+      const library::FavoriteKey key{library::favoriteNameHash(name.data(), name.size()), record.fileSize};
+      if (!favorites.contains(key)) continue;
+    }
+    if (query.empty()) {
+      filtered.push_back(static_cast<uint16_t>(row));
+      continue;
+    }
     if (library::matchesQuery(std::string_view(record.fold, record.foldLen), needle)) {
       filtered.push_back(static_cast<uint16_t>(row));
       continue;
@@ -435,13 +511,18 @@ void LibraryListActivity::openSearch() {
 
 // Title and author for one entry, read straight from the index. Only ever called
 // for rows about to be drawn, so at most a screenful of strings exists at once.
-bool LibraryListActivity::rowTextFor(const int entry, std::string& title, std::string& author) {
+bool LibraryListActivity::rowTextFor(const int entry, std::string& title, std::string& author, bool* isFavorite) {
   title.clear();
   author.clear();
+  if (isFavorite != nullptr) *isFavorite = false;
   const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
   library::ClixRecord record{};
   std::string name;
   if (ordinal != 0xFFFF && index.readRecord(ordinal, record) && index.readName(record, name)) {
+    if (isFavorite != nullptr) {
+      const library::FavoriteKey key{library::favoriteNameHash(name.data(), name.size()), record.fileSize};
+      *isFavorite = favorites.contains(key);
+    }
     // The build already decided both fields — from the book's own metadata when
     // it has any, and with one spelling chosen per author across the library.
     // Re-parsing the name here would throw that away, and only works while the
@@ -457,6 +538,8 @@ bool LibraryListActivity::rowTextFor(const int entry, std::string& title, std::s
 }
 
 void LibraryListActivity::loop() {
+  // The menu owns every button while it is up, including the touch layer.
+  if (bookMenu.handleInput(mappedInput, [this] { requestUpdate(); })) return;
   if (TouchHeaderBackButton::wasTapped(mappedInput, renderer)) {
     finishAfterBackPress();
     return;
@@ -567,6 +650,17 @@ void LibraryListActivity::loop() {
     requestUpdate();
     return;
   }
+  // ★ is a view the reader must be able to back out of, exactly like an active
+  // search: the press they would reach for anyway undoes it.
+  if (favoritesOnly && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    favoritesOnly = false;
+    tabCursor = sortTabIndex(sortOrder);
+    applyFilter();
+    selectedIndex = 0;
+    topIndex = 0;
+    requestUpdate();
+    return;
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finishAfterBackPress();
     return;
@@ -576,11 +670,15 @@ void LibraryListActivity::loop() {
     // thing. A hold is the secondary action of the FOCUSED context — the rule
     // the whole gesture map follows.
     if (mappedInput.getHeldTime() >= 800) {
-      // On the strip's Titles tab the hold flips the direction; the triangle
-      // and the header both change, so the flip explains itself. Everywhere
-      // else the hold is deliberately inert for now — the row's own hold
-      // action arrives with the book menu.
-      if (tabsFocused && tabCursor == kTitlesTab) flipTitleDirection();
+      // The hold is the secondary action of what is focused. On the strip's
+      // Titles tab it flips the direction — the triangle and the header both
+      // change, so the flip explains itself. On a book row it opens the row's
+      // own menu.
+      if (tabsFocused) {
+        if (tabCursor == kTitlesTab) flipTitleDirection();
+      } else {
+        openBookMenu();
+      }
       return;
     }
     if (tabsFocused) {
@@ -612,7 +710,9 @@ void LibraryListActivity::loop() {
   // Up and Down (util/ButtonNavigator.h:47-53), so the second axis is unused and
   // paging is free — which matters at 69 books, where scrolling one row at a time
   // is 34 presses to the middle and paging is 5.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Right) && count > 0) {
+  // The strip stays navigable at zero rows — an empty ★ view is exactly when
+  // the reader needs to move to another tab rather than being trapped.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Right) && (tabsFocused || count > 0)) {
     if (tabsFocused) {
       cycleSortOrder(/*forward=*/true);
     } else {
@@ -620,7 +720,7 @@ void LibraryListActivity::loop() {
     }
     return;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Left) && count > 0) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left) && (tabsFocused || count > 0)) {
     if (tabsFocused) {
       cycleSortOrder(/*forward=*/false);
     } else {
@@ -645,7 +745,7 @@ void LibraryListActivity::loop() {
       // orders behind a hidden strip would repaint the same walk-order list
       // under a different title.
       tabsFocused = true;
-      tabCursor = sortTabIndex(sortOrder);
+      tabCursor = favoritesOnly ? kFavTab : sortTabIndex(sortOrder);
       requestUpdate();
     } else if (selectedIndex > topIndex) {
       selectedIndex--;
@@ -680,9 +780,21 @@ void LibraryListActivity::drawSortTabs(const int top) {
   // the eye with one texture. The pill alone carries the state.
 
   // Equal-width slots, as in Settings, so the tabs do not shift as labels change.
-  const int slots = kSortTabCount + 1;
-  const int slot = width / slots;
-  for (int i = 0; i < slots; i++) {
+  const int slot = width / kTabSlots;
+  for (int i = 0; i < kTabSlots; i++) {
+    if (i == kFavTab) {
+      // A drawn mark, not a word: nothing to translate, and it is the same
+      // diamond the favorite rows carry, so the strip teaches the marker.
+      constexpr int diaW = 13;
+      const int x = i * slot + (slot - diaW) / 2;
+      const bool selected = tabsFocused ? i == tabCursor : favoritesOnly;
+      if (selected && tabsFocused) {
+        renderer.fillRoundedRect(x - 6, top + 2, diaW + 12, height - 4, 4, Color::Black);
+      }
+      drawDiamond(renderer, x, top + 4 + (lineH - diaW) / 2, diaW, !(selected && tabsFocused));
+      if (selected && !tabsFocused) renderer.fillRect(x, top + 4 + lineH + 1, diaW, 1, true);
+      continue;
+    }
     const char* label = tabLabelFor(i);
     const int w = renderer.getTextWidth(SMALL_FONT_ID, label);
     // The active Titles tab carries its direction as a small drawn triangle, so
@@ -695,8 +807,10 @@ void LibraryListActivity::drawSortTabs(const int top) {
     constexpr int triGap = 5;
     const int blockW = activeTitles ? w + triGap + triW : w;
     const int x = i * slot + (slot - blockW) / 2;
-    // Focused, the cursor marks the pill; unfocused, the active sort does.
-    const bool selected = tabsFocused ? i == tabCursor : (i != kSearchTab && sortTabIndex(sortOrder) == i);
+    // Focused, the cursor marks the pill; unfocused, the active VIEW does —
+    // which is ★ while the favorites view is on, not the sort composing it.
+    const bool selected =
+        tabsFocused ? i == tabCursor : (!favoritesOnly && i != kSearchTab && sortTabIndex(sortOrder) == i);
 
     // Focused, the pill inverts, which is the strongest signal this panel has
     // that Left/Right now belong to the strip. Unfocused it stays a plain
@@ -721,6 +835,9 @@ void LibraryListActivity::drawSortTabs(const int top) {
 }
 
 void LibraryListActivity::render(RenderLock&&) {
+  // The menu paints over the retained frame — no clear, no page redraw, the
+  // same overlay idiom Settings uses for its popups.
+  if (bookMenu.processRender(renderer, mappedInput)) return;
   renderer.clearScreen();
   const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
   const char* title = degraded ? tr(STR_LIBRARY_TITLE_UNSORTED) : sortOrderLabel();
@@ -733,7 +850,15 @@ void LibraryListActivity::render(RenderLock&&) {
   if (letterGrid) {
     drawLetterGrid();
   } else if (rowCount() == 0) {
-    renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_LIBRARY_EMPTY));
+    // The strip stays visible over an empty FILTERED view — it is the way out.
+    // Only a card with no books at all drops it: there is nothing to sort.
+    if (!degraded && index.bookCount() > 0) {
+      measureRows();
+      drawSortTabs(tabsTop);
+    }
+    // The empty ★ view teaches the gesture that fills it.
+    renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2,
+                              favoritesOnly ? tr(STR_LIBRARY_FAVORITES_EMPTY) : tr(STR_LIBRARY_EMPTY));
   } else {
     measureRows();
     if (!degraded) drawSortTabs(tabsTop);
@@ -784,7 +909,8 @@ void LibraryListActivity::drawRows() {
   int y = listTop;
   int drawn = 0;
   for (int entry = topIndex; entry < count; entry++) {
-    rowTextFor(entry, title, author);
+    bool isFavorite = false;
+    rowTextFor(entry, title, author, &isFavorite);
     const auto lines = renderer.wrappedText(UI_10_FONT_ID, title.c_str(), textW, LIBRARY_TITLE_LINES);
     const int height = rowHeightFor(static_cast<int>(lines.size()), !grouped && !author.empty());
     // The first row of a page always carries its heading: without it a page can
@@ -821,8 +947,18 @@ void LibraryListActivity::drawRows() {
       renderer.fillRoundedRect(LIBRARY_SIDE_PADDING / 2 + groupIndent, y, width - LIBRARY_SIDE_PADDING - groupIndent,
                                height - 2, 6, Color::LightGray);
     }
-    renderer.drawIcon(icon_book_24_bits, LIBRARY_SIDE_PADDING + groupIndent, y + (height - LIBRARY_ICON_SIZE) / 2,
-                      LIBRARY_ICON_SIZE);
+    if (isFavorite && !favoritesOnly) {
+      // The mark replaces the row's book icon outright: the icon is decoration
+      // every row shares, the diamond is information, and reusing the slot
+      // moves no text. Skipped in the ★ view itself, where every row would
+      // carry it and it would say nothing.
+      constexpr int diaSize = 14;
+      drawDiamond(renderer, LIBRARY_SIDE_PADDING + groupIndent + (LIBRARY_ICON_SIZE - diaSize) / 2,
+                  y + (height - diaSize) / 2, diaSize, true);
+    } else {
+      renderer.drawIcon(icon_book_24_bits, LIBRARY_SIDE_PADDING + groupIndent, y + (height - LIBRARY_ICON_SIZE) / 2,
+                        LIBRARY_ICON_SIZE);
+    }
 
     int textY = y + LIBRARY_ROW_PADDING / 2;
     for (const auto& line : lines) {

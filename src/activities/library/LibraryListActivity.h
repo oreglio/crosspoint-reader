@@ -2,12 +2,14 @@
 
 #include <FreeInkApp.h>
 #include <FreeInkUIGfxRenderer.h>
+#include <LibraryFavoritesFile.h>
 #include <LibraryIndexFile.h>
 
 #include <string>
 #include <vector>
 
 #include "activities/Activity.h"
+#include "components/OptionPopup.h"
 
 // One flat list of every book on the card, newest first, with the title on line
 // 1 and the author on line 2 at a fixed column.
@@ -50,7 +52,7 @@ class LibraryListActivity final : public Activity {
   bool rebuildIndex();
   void measureRows();
   int rowHeightFor(int titleLines, bool hasAuthor) const;
-  bool rowTextFor(int entry, std::string& title, std::string& author);
+  bool rowTextFor(int entry, std::string& title, std::string& author, bool* isFavorite = nullptr);
   void drawRows();
   void drawPositionReadout();
   void nextPage();
@@ -59,6 +61,13 @@ class LibraryListActivity final : public Activity {
   // Swap TitleAsc/TitleDesc in place: the Titles tab keeps its slot and the
   // direction state lives for the whole power-on session (file-static).
   void flipTitleDirection();
+  // Long-press on a row: the row's secondary actions, headed by the book's own
+  // title so there is no doubt which row they land on.
+  void openBookMenu();
+  void toggleFavoriteAt(int entry);
+  // The favorites identity of one visible row: {fnv1a32(basename), fileSize},
+  // the same pair the index rebuild reconciles by.
+  bool rowKeyFor(int entry, library::FavoriteKey& key);
   void drawSortTabs(int top);
   int tabsTop = 0;
   // Left/Right turn pages, so the strip cannot own that axis outright. It takes
@@ -98,6 +107,11 @@ class LibraryListActivity final : public Activity {
 
   library::LibraryIndexFile index;
   library::SortOrder sortOrder = library::SortOrder::DateDesc;
+  library::LibraryFavoritesFile favorites;
+  // The ★ view: favorites only, composed with whatever sort is current. A tab
+  // like the others to reach, a filter like search underneath.
+  bool favoritesOnly = false;
+  OptionPopup bookMenu;
 
   int selectedIndex = 0;
   int topIndex = 0;
