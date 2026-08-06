@@ -156,22 +156,21 @@ void LibraryListActivity::openBookMenu() {
   requestUpdate();
 }
 
-// The strip's tab order, which is also the cycle order: Recent, Titles, Author,
-// then Search — which is not a sort mode. Moving onto a sort tab applies it at
-// once; Search waits for Confirm, since opening a keyboard is not something a
-// sideways press should do by itself.
+// The strip's tab order, which is also the cycle order: the ★ first, then
+// Recent, Titles, Author, Search. The star sits at the edge because a glyph
+// wedged between two words breaks the row's reading — first device feedback —
+// and an edge is where the eye expects the special place anyway. Moving onto
+// ★ or a sort tab applies it at once; Search waits for Confirm, since opening
+// a keyboard is not something a sideways press should do by itself.
 //
 // Both title directions live on ONE tab. Z-A paid a full strip slot for a rare
 // use, and French labels were already overflowing the right edge; direction is
 // state on the tab (the drawn triangle), not a place in the row.
-constexpr int kRecentTab = 0;
-constexpr int kTitlesTab = 1;
-constexpr int kAuthorTab = 2;
-constexpr int kSortTabCount = 3;
-// ★ and Search are views rather than sorts: ★ narrows the list to favorites
-// composed with whatever order is current, Search waits for Confirm.
-constexpr int kFavTab = kSortTabCount;
-constexpr int kSearchTab = kFavTab + 1;
+constexpr int kFavTab = 0;
+constexpr int kRecentTab = 1;
+constexpr int kTitlesTab = 2;
+constexpr int kAuthorTab = 3;
+constexpr int kSearchTab = 4;
 constexpr int kTabSlots = kSearchTab + 1;
 
 // No longer one-to-one: both title orders map to the Titles tab.
