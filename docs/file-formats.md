@@ -635,3 +635,36 @@ RAM.
 
 `selfSize` is the expected file size. Comparing it against the real one is a free
 truncation guard: a build cut short by a power failure cannot pass.
+
+## `/.crosspoint/favorites.dat`
+
+### Version 1
+
+The reader's favorite books. Primary data, deliberately NOT part of the CLX
+index: the index is a derived cache — rebuilt, atomically replaced, deleted as
+a repair step — and favorites must survive all of that. Parsing lives in
+`lib/LibraryIndex/LibraryFavorites.{h,cpp}` (pure, host-tested), file I/O in
+`LibraryFavoritesFile.{h,cpp}`.
+
+All integers little-endian, by explicit byte access:
+
+```
+[u8]  version    currently 1
+[u16] count
+count × {
+  [u32] nameHash   fnv1a32 of the on-disk basename
+  [u32] fileSize   in bytes, as captured by the index walk
+}
+```
+
+The `{nameHash, fileSize}` pair is the same identity the index rebuild uses to
+recognise a book across walks, so a favorite survives an index rebuild and a
+move to another folder. A rename loses the flag — the same accepted trade
+`firstSeen` makes — and there is deliberately no size-only fallback.
+
+Reading rejects a wrong version and any length that disagrees with the count
+the header claims (an interrupted write, trailing garbage, or a lying count all
+fail the same check), keeps at most 512 entries, and sorts and deduplicates
+whatever order the file held. Writes go through `favorites.new` and a rename,
+the same install step the index uses, so a power cut leaves either the old set
+or the new one.
