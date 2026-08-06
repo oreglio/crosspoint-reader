@@ -113,7 +113,6 @@ class LibraryListActivity final : public Activity {
   const char* sortOrderLabel() const;
 
   library::LibraryIndexFile index;
-  library::SortOrder sortOrder = library::SortOrder::DateDesc;
   library::LibraryFavoritesFile favorites;
   // The ★ view flag lives in a file-static (sFavoritesView), like the title
   // direction: with the star leading the strip, leaving the shelf in the ★

@@ -28,6 +28,10 @@ bool sTitleDescending = false;
 // leaving in the favorites view and returning to Recent read as a bug on the
 // device. A boot still starts on Recent — the full shelf is the honest default.
 bool sFavoritesView = false;
+// And the sort itself, for the same reason: choosing A-Z, leaving and coming
+// back to Recent read as "the filters do not save". One session-long shelf
+// state, three statics, zero settings.
+library::SortOrder sSortOrder = library::SortOrder::DateDesc;
 
 }  // namespace
 
@@ -59,6 +63,10 @@ void LibraryListActivity::onEnter() {
   // Corrupt or unreadable favorites degrade to an empty set, logged inside;
   // the shelf itself must never be held up by its smallest file.
   favorites.load();
+  // The view and sort survive as statics, but `filtered` belongs to THIS
+  // instance: without a rebuild here, a restored ★ view opened on an empty
+  // list until the reader wiggled the tabs — which it did, on the device.
+  applyFilter();
   requestUpdate(true);
 }
 
@@ -103,7 +111,7 @@ bool LibraryListActivity::rebuildIndex() {
 
 void LibraryListActivity::openSelectedBook() {
   if (!indexReady) return;
-  const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(selectedIndex)));
+  const uint16_t ordinal = index.ordinalForRow(sSortOrder, static_cast<uint16_t>(rowFor(selectedIndex)));
   if (ordinal == 0xFFFF) return;
 
   library::ClixRecord record{};
@@ -120,7 +128,7 @@ void LibraryListActivity::openSelectedBook() {
 }
 
 bool LibraryListActivity::rowKeyFor(const int entry, library::FavoriteKey& key) {
-  const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
+  const uint16_t ordinal = index.ordinalForRow(sSortOrder, static_cast<uint16_t>(rowFor(entry)));
   library::ClixRecord record{};
   std::string name;
   if (ordinal == 0xFFFF || !index.readRecord(ordinal, record) || !index.readName(record, name)) return false;
@@ -167,27 +175,27 @@ void LibraryListActivity::openFavoritesSortMenu() {
   const std::string titles = tr(STR_LIBRARY_TAB_TITLES);
   const std::vector<std::string> options{tr(STR_LIBRARY_TAB_RECENT), titles + " A-Z", titles + " Z-A",
                                          tr(STR_LIBRARY_TAB_AUTHOR)};
-  const int current = sortOrder == library::SortOrder::DateDesc    ? 0
-                      : sortOrder == library::SortOrder::TitleAsc  ? 1
-                      : sortOrder == library::SortOrder::TitleDesc ? 2
-                                                                   : 3;
+  const int current = sSortOrder == library::SortOrder::DateDesc    ? 0
+                      : sSortOrder == library::SortOrder::TitleAsc  ? 1
+                      : sSortOrder == library::SortOrder::TitleDesc ? 2
+                                                                    : 3;
   popup.show(tr(STR_LIBRARY_FAV_SORT_TITLE), options, current, [this](const int choice) {
     switch (choice) {
       case 0:
-        sortOrder = library::SortOrder::DateDesc;
+        sSortOrder = library::SortOrder::DateDesc;
         break;
       // The Titles tab's triangle keeps telling the truth if the reader
       // later leaves ★: direction state follows the choice made here.
       case 1:
-        sortOrder = library::SortOrder::TitleAsc;
+        sSortOrder = library::SortOrder::TitleAsc;
         sTitleDescending = false;
         break;
       case 2:
-        sortOrder = library::SortOrder::TitleDesc;
+        sSortOrder = library::SortOrder::TitleDesc;
         sTitleDescending = true;
         break;
       case 3:
-        sortOrder = library::SortOrder::AuthorAsc;
+        sSortOrder = library::SortOrder::AuthorAsc;
         break;
       default:
         return;
@@ -242,7 +250,7 @@ library::SortOrder orderForTab(const int tab) {
 // keeps announcing the full truth ("Library · Title Z-A").
 void LibraryListActivity::flipTitleDirection() {
   sTitleDescending = !sTitleDescending;
-  sortOrder = sTitleDescending ? library::SortOrder::TitleDesc : library::SortOrder::TitleAsc;
+  sSortOrder = sTitleDescending ? library::SortOrder::TitleDesc : library::SortOrder::TitleAsc;
   // Same invalidation as activating a tab: the filter holds POSITIONS in the
   // old order, and applyFilter also drops every remembered page boundary.
   applyFilter();
@@ -262,7 +270,7 @@ void LibraryListActivity::cycleSortOrder(const bool forward) {
     topIndex = 0;
   } else if (tabCursor != kSearchTab) {
     sFavoritesView = false;
-    sortOrder = orderForTab(tabCursor);
+    sSortOrder = orderForTab(tabCursor);
     applyFilter();
     selectedIndex = 0;
     topIndex = 0;
@@ -280,7 +288,7 @@ const char* tabLabelFor(const int tab) {
 }
 
 const char* LibraryListActivity::sortOrderLabel() const {
-  switch (sortOrder) {
+  switch (sSortOrder) {
     case library::SortOrder::DateDesc:
       return tr(STR_LIBRARY_SORT_RECENT);
     case library::SortOrder::TitleAsc:
@@ -348,7 +356,7 @@ void LibraryListActivity::applyFilter() {
   const int total = static_cast<int>(index.bookCount());
   filtered.reserve(static_cast<size_t>(total));
   for (int row = 0; row < total; row++) {
-    const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(row));
+    const uint16_t ordinal = index.ordinalForRow(sSortOrder, static_cast<uint16_t>(row));
     library::ClixRecord record{};
     if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) continue;
     // ★ narrows first, and composes with the query rather than replacing it:
@@ -398,7 +406,7 @@ char LibraryListActivity::letterOf(const library::ClixRecord& record) {
   // words so that "George Sand" and "Sand George" group as one person; reading
   // the display letter there gives S, the scan meets it early, and every letter
   // between G and S stops on that one row.
-  if (sortOrder == library::SortOrder::AuthorAsc) {
+  if (sSortOrder == library::SortOrder::AuthorAsc) {
     // The shelf is ordered by surname now, so the jump reads the same key. It is
     // derived from the displayed name, which after harmonisation is one string
     // per author — so the letters ascend down the list, which is what makes the
@@ -419,7 +427,7 @@ void LibraryListActivity::computeLettersPresent() {
   lettersPresent = 0;
   const int total = rowCount();
   for (int entry = 0; entry < total; entry++) {
-    const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
+    const uint16_t ordinal = index.ordinalForRow(sSortOrder, static_cast<uint16_t>(rowFor(entry)));
     library::ClixRecord record{};
     if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) continue;
     const char c = letterOf(record);
@@ -431,10 +439,10 @@ void LibraryListActivity::computeLettersPresent() {
 // lands under O and "Éluard" under E — which is what a reader looking under a
 // letter expects, and what the raw title would get wrong.
 void LibraryListActivity::jumpToLetter(const char letter) {
-  const bool descending = sortOrder == library::SortOrder::TitleDesc;
+  const bool descending = sSortOrder == library::SortOrder::TitleDesc;
   const int total = rowCount();
   for (int entry = 0; entry < total; entry++) {
-    const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
+    const uint16_t ordinal = index.ordinalForRow(sSortOrder, static_cast<uint16_t>(rowFor(entry)));
     library::ClixRecord record{};
     if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) continue;
     // Ordered by surname, the letters ascend, so "at or past" lands correctly
@@ -472,7 +480,7 @@ void LibraryListActivity::drawLetterGrid() {
   // Sorted by author the choice is which WORD the letters mean; sorted by title
   // it is the direction. One line, one idiom, one rule to learn. "A-Z"/"Z-A"
   // are letter symbols rather than words, so they carry no translation.
-  const bool titleOrder = sortOrder != library::SortOrder::AuthorAsc;
+  const bool titleOrder = sSortOrder != library::SortOrder::AuthorAsc;
   const char* labels[2] = {titleOrder ? "A-Z" : tr(STR_LIBRARY_JUMP_GIVEN),
                            titleOrder ? "Z-A" : tr(STR_LIBRARY_JUMP_SURNAME)};
   const int active = titleOrder ? (sTitleDescending ? 1 : 0) : (jumpByGivenName ? 0 : 1);
@@ -552,7 +560,7 @@ bool LibraryListActivity::rowTextFor(const int entry, std::string& title, std::s
   title.clear();
   author.clear();
   if (isFavorite != nullptr) *isFavorite = false;
-  const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
+  const uint16_t ordinal = index.ordinalForRow(sSortOrder, static_cast<uint16_t>(rowFor(entry)));
   library::ClixRecord record{};
   std::string name;
   if (ordinal != 0xFFFF && index.readRecord(ordinal, record) && index.readName(record, name)) {
@@ -622,7 +630,7 @@ void LibraryListActivity::loop() {
     if (letterCursor < 0) {
       if (mappedInput.wasReleased(MappedInputManager::Button::Left) ||
           mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-        if (sortOrder == library::SortOrder::AuthorAsc) {
+        if (sSortOrder == library::SortOrder::AuthorAsc) {
           jumpByGivenName = !jumpByGivenName;
           // The letters present as first names are not those present as
           // surnames. The cursor is on the mode line, not on a letter, so
@@ -726,7 +734,7 @@ void LibraryListActivity::loop() {
     if (tabsFocused) {
       if (tabCursor == kSearchTab) {
         openSearch();
-      } else if (sortOrder != library::SortOrder::DateDesc) {
+      } else if (sSortOrder != library::SortOrder::DateDesc) {
         // Only where an alphabet exists to jump through. Sorted by date there
         // is no letter order to walk, so the press stays inert rather than
         // opening a grid whose every choice would land somewhere arbitrary.
@@ -787,7 +795,7 @@ void LibraryListActivity::loop() {
       // orders behind a hidden strip would repaint the same walk-order list
       // under a different title.
       tabsFocused = true;
-      tabCursor = sFavoritesView ? kFavTab : sortTabIndex(sortOrder);
+      tabCursor = sFavoritesView ? kFavTab : sortTabIndex(sSortOrder);
       requestUpdate();
     } else if (selectedIndex > topIndex) {
       selectedIndex--;
@@ -846,7 +854,7 @@ void LibraryListActivity::drawSortTabs(const int top) {
     // direction is never hidden state. Drawn with fillRect rather than a font
     // glyph: ▴/▾ are not guaranteed in this face at this size, and a 7-pixel
     // triangle needs no glyph coverage at all.
-    const bool activeTitles = i == kTitlesTab && sortTabIndex(sortOrder) == kTitlesTab;
+    const bool activeTitles = i == kTitlesTab && sortTabIndex(sSortOrder) == kTitlesTab;
     constexpr int triW = 7;
     constexpr int triH = 4;
     constexpr int triGap = 5;
@@ -855,7 +863,7 @@ void LibraryListActivity::drawSortTabs(const int top) {
     // Focused, the cursor marks the pill; unfocused, the active VIEW does —
     // which is ★ while the favorites view is on, not the sort composing it.
     const bool selected =
-        tabsFocused ? i == tabCursor : (!sFavoritesView && i != kSearchTab && sortTabIndex(sortOrder) == i);
+        tabsFocused ? i == tabCursor : (!sFavoritesView && i != kSearchTab && sortTabIndex(sSortOrder) == i);
 
     // Focused, the pill inverts, which is the strongest signal this panel has
     // that Left/Right now belong to the strip. Unfocused it stays a plain
@@ -937,7 +945,7 @@ void LibraryListActivity::render(RenderLock&&) {
 // the first build — folder name, the book's own reading cache, or the EPUB
 // package document — and this is the screen honest enough to say it.
 void LibraryListActivity::drawDetails() {
-  const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(selectedIndex)));
+  const uint16_t ordinal = index.ordinalForRow(sSortOrder, static_cast<uint16_t>(rowFor(selectedIndex)));
   library::ClixRecord record{};
   if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) return;
 
@@ -1047,7 +1055,7 @@ void LibraryListActivity::drawRows() {
   // consecutively, so grouping costs one comparison per row and no extra pass.
   // The author then appears once above the run instead of under every title,
   // which is what makes the shelf answer "what else has this person written".
-  const bool grouped = sortOrder == library::SortOrder::AuthorAsc;
+  const bool grouped = sSortOrder == library::SortOrder::AuthorAsc;
   // Proximity does the grouping. The heading sits close to the books it names and
   // far from the run above, so it reads as belonging downward; equal gaps on both
   // sides — which is what the first cut had — leave it attached to nothing.
