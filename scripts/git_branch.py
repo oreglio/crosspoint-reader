@@ -1,7 +1,7 @@
 """
 PlatformIO pre-build script: inject git info into version defines.
 
-  default:       1.1.0-dev+<branch>.<hash>  (local development builds)
+  default:       1.1.0-dev+<branch>.<hash>.<YYYYMMDD-HHMMSS>  (local development builds)
   production:    1.1.0               (when $CROSSINK_RELEASE_VERSION is set)
   default RC:    1.1.0-rc+<hash>       (when $CROSSPOINT_RC_HASH is set)
   test & debug:          1.2.6-<branch>+<5-char-hash>
@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime
 
 
 def warn(msg):
@@ -139,7 +140,12 @@ def write_version_header(project_dir, version_string):
     header confines the churn to them.
 
     Written only when the content differs: an unchanged file keeps its mtime, and a
-    fresh mtime would rebuild those nine files on every single build.
+    fresh mtime would rebuild those nine files on every single build. With the
+    build timestamp in the dev version the content now differs on every build,
+    so those nine files and the link do rerun each time — accepted on purpose,
+    because a flashed test image that cannot say WHICH build it is costs more
+    than the ~30 seconds the rebuild does. Release and RC strings carry no
+    timestamp and still enjoy the only-on-change behaviour.
     """
     path = os.path.join(project_dir, GENERATED_HEADER)
     body = (
@@ -175,11 +181,18 @@ def inject_version(env):
             # reports the same string, so a device cannot say which one it is
             # running and a crash report cannot either — four different images were
             # flashed in one afternoon, all announcing 1.5.0-dev+feat-library.
+            #
+            # And the build instant, to the second: the hash alone cannot tell two
+            # builds of one commit apart (a dirty tree, or a rebuild before the
+            # commit landed), and those are exactly the images that get flashed
+            # back to back while testing. Dev builds only — the timestamp lives in
+            # the semver build-metadata part, which version comparison ignores.
             base_version = get_crossink_version(project_dir)
             branch = get_git_branch(project_dir)
             short_hash = get_git_short_hash(project_dir)
+            stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
             suffix = f'{branch}.{short_hash}' if short_hash else branch
-            version_string = f'{base_version}-dev+{sanitize_version_component(suffix)}'
+            version_string = f'{base_version}-dev+{sanitize_version_component(suffix)}.{stamp}'
             print(f'CrossInk build version: {version_string}')
         # Header, not a define: see write_version_header.
         write_version_header(project_dir, version_string)
