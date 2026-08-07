@@ -1346,7 +1346,7 @@ h2 {
       .action-icon-group .file-action-btn { width: 38px; height: 38px; display: grid; place-items: center; font-size: 17px; line-height: 1; padding: 0; margin: 0; }
       /* files: the row IS the checkbox; folders keep a visible one */
       tr.file-row .c-sel { display: none; }
-      tr.folder-row { grid-template-columns: auto 1fr auto; }
+      tr.folder-row { grid-template-columns: auto 1fr auto; align-items: center; }
       tr.folder-row .c-sel { grid-row: 1; align-self: center; }
       tr.folder-row .c-name { grid-column: 2; }
       tr.folder-row .c-type, tr.folder-row .c-size { display: none; }
