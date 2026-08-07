@@ -4056,7 +4056,10 @@ async function convertEpubFile(file, progressCallback) {
   let syncIdentityJson = null;
   if (preserveSyncIdentity) {
     try {
-      const existing = zip.files[SYNC_IDENTITY_PATH];
+      const existingKey = Object.keys(zip.files).find(
+        (p) => p.toLowerCase() === SYNC_IDENTITY_PATH.toLowerCase(),
+      );
+      const existing = existingKey ? zip.files[existingKey] : null;
       if (existing && !existing.dir) {
         const existingText = await existing.async("string");
         if (parseSyncIdentityId(existingText)) {
