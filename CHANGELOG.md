@@ -13,6 +13,7 @@
 - The long-press menu can also `Delete` a book, confirmed first. The file, its reading cache, bookmarks, clippings, recents entry and favorites entry all go; the index is reconciled on the spot so the shelf never lists a ghost. Reading stats are deliberately kept — deleting a book does not rewrite history.
 
 - `File Browser Display` gains a `Full Name` option in `Settings > System > Files & Cache`, wrapping file names over enough lines that long names are no longer cut short with an ellipsis. Rows are taller, so fewer books are listed per screen than in `2 Lines`.
+- Optimized EPUBs now keep their KOReader sync identity: the web optimizer embeds the original file's document hash, and Progress Sync uses it to pair the optimized copy with the original (e.g. the same book in KOReader on your phone). A "Preserve Sync Identity" toggle (default on) lives in the optimizer's Advanced Mode.
 
 ## [v1.5.0] - 2026-08-04
 

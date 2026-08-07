@@ -698,3 +698,24 @@ wrong length or out-of-range sort value.
 every ingestion path when a book lands on (or leaves) the card, and consumed by
 the Library's next entry, which rebuilds the index with reconciliation. Its
 existence is the whole message; it has no format to version.
+
+## Sync identity manifest (`META-INF/crossink-sync.json`)
+
+Embedded by the web optimizer inside optimized EPUBs; read by
+`KOReaderEmbeddedId` (lib/KOReaderSync). Carries the KOReader partial-MD5 of
+the ORIGINAL file so progress sync keeps pairing the optimized copy with its
+original across devices.
+
+```json
+{"version":1,"koreaderPartialMd5":"<32 lowercase hex>"}
+```
+
+- `version` — format version; readers MUST ignore the file when it is not `1`.
+- `koreaderPartialMd5` — MD5 over 1KB chunks of the original file at offsets
+  `0` and `1024 << (2*i)` for `i = 0..10`; offsets past EOF skipped
+  (KOReader's document-id algorithm, mirrored by `KOReaderDocumentId`).
+- Stored uncompressed (STORE); firmware rejects payloads over 512 bytes.
+- Re-optimizing an already-optimized EPUB preserves the existing manifest
+  verbatim (the original's identity chain survives repeated optimization).
+- Renaming or re-downloading the ORIGINAL changes nothing here (identity is
+  content-based); books optimized before this feature simply lack the entry.
