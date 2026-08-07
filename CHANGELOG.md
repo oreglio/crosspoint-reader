@@ -20,6 +20,7 @@
 ### Changed
 
 - The File Manager becomes cards on phone-sized screens: tap a card to select it, serif titles that wrap instead of crushing the table, and a download button on each card.
+- Opening a folder in the File Manager no longer reloads the whole page. Only the folder's listing is fetched, so browsing lands in a moment instead of downloading the page again each time; `Back` and `Forward` still walk through the folders you visited, and a link opened in a new tab still works. Pages now carry a validator, so reopening the portal costs nothing when nothing has changed.
 
 ### Fixed
 
