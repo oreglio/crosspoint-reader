@@ -16,6 +16,7 @@
 #include <WiFi.h>
 #include <esp_efuse.h>
 #include <esp_efuse_table.h>
+#include <strings.h>
 
 #include <algorithm>
 #include <cctype>
@@ -1289,6 +1290,14 @@ void CrossPointWebServer::handleReplace() const {
     server->send(400, "text/plain", "Staging must sit beside the target");
     return;
   }
+  // FAT paths are case-insensitive: `/x.EPUB.OPTIMIZING` and `/x.epub.optimizing`
+  // name the same file on card, so a case-sensitive compare would not catch a
+  // caller pointing `staging` at its own target, which would then delete the
+  // book's only copy.
+  if (strcasecmp(targetPath.c_str(), stagingPath.c_str()) == 0) {
+    server->send(400, "text/plain", "Staging and target are the same file");
+    return;
+  }
 
   uint32_t oldSize = 0;
   {
@@ -1339,8 +1348,14 @@ void CrossPointWebServer::handleReplace() const {
   }
   {
     HalFile staging = Storage.open(stagingPath.c_str());
-    const bool renamed = staging && staging.rename(targetPath.c_str());
-    if (staging) staging.close();
+    if (!staging) {
+      // Cannot even confirm the staging file is still there — do not claim it is.
+      LOG_ERR("WEB", "Replace: original removed and staging could not be reopened at %s", stagingPath.c_str());
+      server->send(500, "text/plain", "Rename failed - staging could not be reopened; check the folder on the card");
+      return;
+    }
+    const bool renamed = staging.rename(targetPath.c_str());
+    staging.close();
     if (!renamed) {
       // The book still exists — in the staging file. Say so instead of guessing.
       LOG_ERR("WEB", "Replace: original removed but rename failed; book lives at %s", stagingPath.c_str());
