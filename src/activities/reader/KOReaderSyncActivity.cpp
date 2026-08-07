@@ -17,6 +17,7 @@
 #include "EpubReaderUtils.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderDocumentId.h"
+#include "KOReaderEmbeddedId.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "SdCardFontSystem.h"
@@ -144,9 +145,10 @@ bool KOReaderSyncActivity::ensureLocalProgressLoaded() {
     localPos.visibleTextOffset = progress.visibleTextOffset;
     localPos.hasVisibleTextOffset = true;
   }
-  const PositionCoordinateSpace coordinateSpace = primaryMatchMethod == DocumentMatchMethod::FILENAME
-                                                      ? PositionCoordinateSpace::SourceDocument
-                                                      : PositionCoordinateSpace::CurrentDocument;
+  const PositionCoordinateSpace coordinateSpace =
+      (!embeddedHash.empty() || primaryMatchMethod == DocumentMatchMethod::FILENAME)
+          ? PositionCoordinateSpace::SourceDocument
+          : PositionCoordinateSpace::CurrentDocument;
   localProgress = ProgressMapper::toKOReader(epub, localPos, coordinateSpace);
   const int tocIdx = epub->getTocIndexForSpineIndex(currentSpineIndex);
   localChapterName = tocIdx >= 0 ? epub->getTocItem(tocIdx).title : "";
@@ -238,7 +240,11 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
 void KOReaderSyncActivity::performSync() {
   const DocumentMatchMethod primaryMethod = primaryMatchMethod;
   remoteMatchMethod = primaryMethod;
-  documentHash = calculateDocumentHashForMethod(epubPath, primaryMethod);
+  remoteMatchedEmbedded = false;
+
+  embeddedHash = KOReaderEmbeddedId::read(epubPath);
+  const std::string primaryHash = calculateDocumentHashForMethod(epubPath, primaryMethod);
+  documentHash = embeddedHash.empty() ? primaryHash : embeddedHash;
   if (documentHash.empty()) {
     {
       RenderLock lock(*this);
@@ -248,7 +254,8 @@ void KOReaderSyncActivity::performSync() {
     requestUpdate(true);
     return;
   }
-  const std::string primaryHash = documentHash;
+  remoteMatchedEmbedded = !embeddedHash.empty();
+  const std::string uploadHash = documentHash;
 
   {
     RenderLock lock(*this);
@@ -272,24 +279,44 @@ void KOReaderSyncActivity::performSync() {
   // different document matching method.
   auto result = KOReaderSyncClient::getProgress(documentHash, remoteProgress);
   LOG_DBG("KOSync", "Primary remote (%s): result=%d http=%d doc=%s remote=%.6f xpath=%s",
-          matchMethodName(primaryMethod), result, KOReaderSyncClient::lastHttpCode, documentHash.c_str(),
-          remoteProgress.percentage, remoteProgress.progress.c_str());
+          embeddedHash.empty() ? matchMethodName(primaryMethod) : "embedded", result, KOReaderSyncClient::lastHttpCode,
+          documentHash.c_str(), remoteProgress.percentage, remoteProgress.progress.c_str());
 
   if (smartSyncEnabled()) {
+    // Probe the remaining identities. With an embedded id the candidates are
+    // the configured method and its alternate; without one, just the
+    // alternate (today's behavior). Accept rule is unchanged: an alternate
+    // only replaces the accepted record when it is OK and either the current
+    // result is NOT_FOUND or it is further along.
+    struct ProbeCandidate {
+      std::string hash;
+      DocumentMatchMethod method;
+    };
+    ProbeCandidate candidates[2];
+    size_t candidateCount = 0;
+    if (!embeddedHash.empty()) {
+      candidates[candidateCount++] = {primaryHash, primaryMethod};
+    }
     const DocumentMatchMethod altMethod = alternateMatchMethod(primaryMethod);
-    const std::string altHash = calculateDocumentHashForMethod(epubPath, altMethod);
-    if (!altHash.empty() && altHash != documentHash) {
+    candidates[candidateCount++] = {calculateDocumentHashForMethod(epubPath, altMethod), altMethod};
+
+    for (size_t ci = 0; ci < candidateCount; ci++) {
+      const ProbeCandidate& candidate = candidates[ci];
+      if (candidate.hash.empty() || candidate.hash == uploadHash) continue;
+      if (ci > 0 && candidate.hash == candidates[0].hash) continue;
+
       KOReaderProgress altProgress;
-      const auto altResult = KOReaderSyncClient::getProgress(altHash, altProgress);
+      const auto altResult = KOReaderSyncClient::getProgress(candidate.hash, altProgress);
       LOG_DBG("KOSync", "Alternate remote (%s): result=%d http=%d doc=%s remote=%.6f xpath=%s",
-              matchMethodName(altMethod), altResult, KOReaderSyncClient::lastHttpCode, altHash.c_str(),
+              matchMethodName(candidate.method), altResult, KOReaderSyncClient::lastHttpCode, candidate.hash.c_str(),
               altProgress.percentage, altProgress.progress.c_str());
 
       if (altResult == KOReaderSyncClient::OK &&
           (result == KOReaderSyncClient::NOT_FOUND || altProgress.percentage > remoteProgress.percentage)) {
-        documentHash = altHash;
+        documentHash = candidate.hash;
         remoteProgress = std::move(altProgress);
-        remoteMatchMethod = altMethod;
+        remoteMatchMethod = candidate.method;
+        remoteMatchedEmbedded = false;
         result = KOReaderSyncClient::OK;
       }
     }
@@ -338,12 +365,14 @@ void KOReaderSyncActivity::performSync() {
 
   hasRemoteProgress = true;
 
-  const PositionCoordinateSpace remoteCoordinateSpace = remoteMatchMethod == DocumentMatchMethod::FILENAME
-                                                            ? PositionCoordinateSpace::SourceDocument
-                                                            : PositionCoordinateSpace::CurrentDocument;
+  const PositionCoordinateSpace remoteCoordinateSpace =
+      (remoteMatchedEmbedded || remoteMatchMethod == DocumentMatchMethod::FILENAME)
+          ? PositionCoordinateSpace::SourceDocument
+          : PositionCoordinateSpace::CurrentDocument;
   bool usedRichPosition = false;
   // The client only accepts rich positions from the official CrossPoint Sync server.
   // Filename matching still needs source-document mapping because optimized books can diverge.
+  // Embedded ids name the pre-optimization original, so they map like filename matches.
   if (remoteCoordinateSpace == PositionCoordinateSpace::CurrentDocument && remoteProgress.position.has_value()) {
     const auto richMapped = ProgressMapper::fromRichPosition(epub, *remoteProgress.position, renderer);
     if (richMapped.has_value()) {
@@ -446,9 +475,10 @@ void KOReaderSyncActivity::performSync() {
     }
 
     if (delta > 0) {
-      // Alternate hashes are only probes for newer remote state. Keep uploads
-      // on the user's configured matching method so its primary record heals.
-      documentHash = primaryHash;
+      // Alternate hashes are only probes for newer remote state. Uploads stay
+      // on the upload identity — the embedded id when present, else the
+      // user's configured matching method — so its primary record heals.
+      documentHash = uploadHash;
       performUpload();
       return;
     }
@@ -842,11 +872,9 @@ void KOReaderSyncActivity::loop() {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       // Calculate hash if not done yet
       if (documentHash.empty()) {
-        if (primaryMatchMethod == DocumentMatchMethod::FILENAME) {
-          documentHash = KOReaderDocumentId::calculateFromFilename(epubPath);
-        } else {
-          documentHash = KOReaderDocumentId::calculate(epubPath);
-        }
+        embeddedHash = KOReaderEmbeddedId::read(epubPath);
+        documentHash =
+            embeddedHash.empty() ? calculateDocumentHashForMethod(epubPath, primaryMatchMethod) : embeddedHash;
       }
       performUpload();
     }

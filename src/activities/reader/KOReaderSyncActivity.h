@@ -82,6 +82,14 @@ class KOReaderSyncActivity final : public Activity {
   DocumentMatchMethod primaryMatchMethod;
   DocumentMatchMethod remoteMatchMethod;
 
+  // Sync identity embedded by the web optimizer (original file's partial
+  // MD5); empty when the book doesn't carry one. When present it is the
+  // upload identity and the first probe, and it maps like a FILENAME match
+  // (SourceDocument): it names the pre-optimization original, whose layout
+  // this optimized copy no longer shares.
+  std::string embeddedHash;
+  bool remoteMatchedEmbedded = false;
+
   State state = WIFI_SELECTION;
   std::string statusMessage;
   std::string documentHash;
