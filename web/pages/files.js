@@ -2287,6 +2287,52 @@ async function runOptimizeQueue(items) {
   }
 }
 
+const OPTIMIZE_WALK_MAX_DEPTH = 8;
+
+/** Sequential recursive /api/files walk collecting {path, name} for every EPUB under a decoded folder path. */
+async function collectEpubsUnder(path, depth, out) {
+  if (depth > OPTIMIZE_WALK_MAX_DEPTH) return;
+  const resp = await fetch("/api/files?path=" + encodeURIComponent(path) + "&_=" + Date.now());
+  if (!resp.ok) throw new Error("Cannot list " + path);
+  const entries = await resp.json();
+  for (const entry of entries) {
+    const childPath = (path.endsWith("/") ? path : path + "/") + entry.name;
+    if (entry.isDirectory) {
+      await collectEpubsUnder(childPath, depth + 1, out);
+    } else if (entry.isEpub || /\.epub$/i.test(entry.name)) {
+      out.push({ path: childPath, name: entry.name });
+    }
+  }
+}
+
+/** Toolbar entry point: expands the current selection (files: EPUB only; folders: recursed) and hands it to runOptimizeQueue. */
+async function openOptimizeSelected() {
+  const selected = getSelectedItems();
+  if (!selected.length) {
+    alert("Select books or folders first.");
+    return;
+  }
+  const items = [];
+  try {
+    for (const sel of selected) {
+      // getSelectedItems() already decodes data-path, so sel.path is a plain path — do not decode again here.
+      if (sel.isFolder) {
+        await collectEpubsUnder(sel.path, 0, items);
+      } else if (/\.epub$/i.test(sel.name)) {
+        items.push({ path: sel.path, name: sel.name });
+      }
+    }
+  } catch (err) {
+    alert("Could not scan the selection: " + err.message);
+    return;
+  }
+  if (!items.length) {
+    alert("No EPUB files in the selection.");
+    return;
+  }
+  runOptimizeQueue(items);
+}
+
 /** First defined namespaceURI walking node -> ancestors, else the fallback. */
 function inheritedNs(nodes, fallback) {
   for (const node of nodes) if (node && node.namespaceURI) return node.namespaceURI;
