@@ -505,12 +505,15 @@ CrossPointWebServer::WsUploadStatus CrossPointWebServer::getWsUploadStatus() con
 // max-age: a firmware update must not leave a stale UI in the browser cache.
 static void sendHtmlContent(WebServer* server, const char* data, size_t len, const char* etag) {
   String quotedEtag = "\"" + String(etag) + "\"";
-  if (server->header("If-None-Match") == quotedEtag) {
+  bool notModified = server->header("If-None-Match") == quotedEtag;
+  // Per RFC 7232 4.1, a 304 SHOULD carry the validator headers too, so the client refreshes
+  // its cached copy's metadata even though the body isn't resent.
+  server->sendHeader("ETag", quotedEtag);
+  server->sendHeader("Cache-Control", "no-cache");
+  if (notModified) {
     server->send(304);
     return;
   }
-  server->sendHeader("ETag", quotedEtag);
-  server->sendHeader("Cache-Control", "no-cache");
   server->sendHeader("Content-Encoding", "gzip");
   server->send_P(200, "text/html", data, len);
 }

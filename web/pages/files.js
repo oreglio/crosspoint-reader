@@ -93,7 +93,13 @@ function formatFileSize(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)).toLocaleString() + " " + sizes[i];
 }
 
+// A newer hydrate() call owns the DOM: an older one that is still awaiting its listing must
+// not go on to write a table it no longer represents (rapid folder clicks, Back-button mashing —
+// scanFiles() yields during long scans, so per-folder fetch latency genuinely varies).
+let hydrateGeneration = 0;
+
 async function hydrate() {
+  const generation = ++hydrateGeneration;
   const breadcrumbs = document.getElementById("directory-breadcrumbs");
   const fileTable = document.getElementById("file-table");
 
@@ -119,12 +125,17 @@ async function hydrate() {
   let files = [];
   try {
     const response = await fetch("/api/files?path=" + encodeURIComponent(currentPath) + "&_=" + Date.now());
+    // A newer hydrate() may already be in flight (or done) by the time this resolves — bail
+    // rather than render a listing for a path the UI no longer points at.
+    if (generation !== hydrateGeneration) return;
     if (!response.ok) {
       throw new Error("Failed to load files: " + response.status + " " + response.statusText);
     }
     files = await response.json();
+    if (generation !== hydrateGeneration) return;
   } catch (e) {
     console.error(e);
+    if (generation !== hydrateGeneration) return;
     fileTable.innerHTML = '<div class="no-files">An error occurred while loading the files</div>';
     return;
   }
