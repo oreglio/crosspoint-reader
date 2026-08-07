@@ -1447,6 +1447,7 @@ function validateFile() {
 let failedUploadsGlobal = [];
 let wsConnection = null;
 let isUploadInProgress = false; // Prevent modal close during upload/conversion
+let isOptimizeInProgress = false; // Prevent concurrent optimize queues (they share the upload modal/WS with manual uploads)
 let operationCancelled = false; // Set by Cancel to stop conversion loops and upload async handlers
 let uploadGeneration = 0; // Incremented each uploadFile() call; guards stale restoreAfterCancel()
 let currentUploadWs = null; // Active WebSocket reference for external abort
@@ -2161,8 +2162,14 @@ async function deleteDevicePath(path) {
 
 /**
  * Optimize one on-card book in place. Phases via onPhase(label, pct 0-100).
- * Returns {skipped:true} for already-optimized books. Throws on failure —
- * the original is untouched; staging is cleaned up here on a failed replace.
+ * Returns {skipped:true} for already-optimized books. Throws on failure.
+ * Staging is deleted here only BEFORE a /replace attempt is sent (cleaning up
+ * an orphan from a previous run). Once /replace has been called, staging is
+ * never auto-deleted: on the firmware's post-removal failure cases, the
+ * original is already gone and the .optimizing file is the book's only
+ * surviving copy — deleting it would destroy the book. A stranded staging
+ * file is left for the user to find (or for the firmware to reconcile), not
+ * erased by a guess.
  */
 async function optimizeBookOnDevice(filePath, fileName, onPhase) {
   onPhase("Downloading", 2);
@@ -2203,8 +2210,13 @@ async function optimizeBookOnDevice(filePath, fileName, onPhase) {
   form.append("staging", stagingPath);
   const rep = await fetch("/replace", { method: "POST", body: form });
   if (!rep.ok) {
-    await deleteDevicePath(stagingPath);
-    throw new Error("Replace failed: " + (await rep.text()));
+    // Do NOT delete staging here: on the firmware's post-removal failures the
+    // .optimizing file is the book's only surviving copy. Leave it on the card
+    // and say so; the next run of this book cannot destroy it either (its
+    // download step fails first when the original is gone).
+    const detail = await rep.text();
+    logError(`Replace failed for ${fileName}: ${detail} — if the book is missing, look for ${stagingPath} in its folder.`);
+    throw new Error("Replace failed: " + detail);
   }
   onPhase("Done", 100);
   return { replaced: true, oldSize: blob.size, newSize: converted.size };
@@ -2213,42 +2225,66 @@ async function optimizeBookOnDevice(filePath, fileName, onPhase) {
 /** Sequential queue over [{path, name}]; drives the upload modal in optimize mode. */
 async function runOptimizeQueue(items) {
   if (!items.length) return;
+  if (isOptimizeInProgress || isUploadInProgress) {
+    alert("An operation is already running.");
+    return;
+  }
   if (items.length > 1 && !confirm(`Optimize ${items.length} books? Each original is replaced in place (reading progress and favorites are kept).`)) {
     return;
   }
-  const progressFill = document.getElementById("progress-fill");
-  const progressText = document.getElementById("progress-text");
-  document.getElementById("uploadModal").classList.add("open", "optimize-mode");
-  document.getElementById("progress-container").style.display = "block";
-  clearLog();
-  showLog();
+  isOptimizeInProgress = true;
+  try {
+    const progressFill = document.getElementById("progress-fill");
+    const progressText = document.getElementById("progress-text");
+    document.getElementById("uploadModal").classList.add("open", "optimize-mode");
+    document.getElementById("progress-container").style.display = "block";
 
-  let done = 0, skipped = 0, failed = 0;
-  for (let i = 0; i < items.length; i++) {
-    const { path, name } = items[i];
-    const label = `(${i + 1}/${items.length}) ${name}`;
-    try {
-      const result = await optimizeBookOnDevice(path, name, (phase, pct) => {
-        progressFill.style.width = pct + "%";
-        progressText.textContent = `${phase} ${label}`;
-      });
-      if (result.skipped) {
-        skipped++;
-        log(`Already optimized — skipped: ${name}`, "", "INFO");
-      } else {
-        done++;
-        log(`Optimized: ${name} (${formatBytes(result.oldSize)} → ${formatBytes(result.newSize)})`, "success", "DONE");
-      }
-    } catch (err) {
-      failed++;
-      console.error("Optimize failed:", name, err);
-      logError(`Failed (original untouched): ${name} — ${err.message}`);
+    // Mirrors uploadFile()'s batch-log trigger: >1 file + the persisted
+    // export-log toggle. startBatchLog() clears the log itself.
+    const useBatchLog = items.length > 1 && exportLogCheckbox && exportLogCheckbox.checked;
+    if (useBatchLog) {
+      startBatchLog(items.length);
+    } else {
+      clearLog();
     }
+    showLog();
+
+    let done = 0, skipped = 0, failed = 0;
+    for (let i = 0; i < items.length; i++) {
+      const { path, name } = items[i];
+      const label = `(${i + 1}/${items.length}) ${name}`;
+      try {
+        const result = await optimizeBookOnDevice(path, name, (phase, pct) => {
+          progressFill.style.width = pct + "%";
+          progressText.textContent = `${phase} ${label}`;
+        });
+        if (result.skipped) {
+          skipped++;
+          log(`Already optimized — skipped: ${name}`, "", "INFO");
+          if (useBatchLog) saveToFileBatchLog(name, true, 0, 0);
+        } else {
+          done++;
+          log(`Optimized: ${name} (${formatBytes(result.oldSize)} → ${formatBytes(result.newSize)})`, "success", "DONE");
+          if (useBatchLog) saveToFileBatchLog(name, true, result.oldSize, result.newSize);
+        }
+      } catch (err) {
+        failed++;
+        console.error("Optimize failed:", name, err);
+        logError(`Failed (original untouched): ${name} — ${err.message}`);
+        if (useBatchLog) saveToFileBatchLog(name, false, 0, 0);
+      }
+    }
+    progressFill.style.width = "100%";
+    progressText.textContent = `Optimize complete: ${done} optimized · ${skipped} already optimized · ${failed} failed`;
+    if (useBatchLog) {
+      finalizeBatchLog();
+    } else {
+      log(`Summary: ${done} optimized · ${skipped} already optimized · ${failed} failed`, "", "DONE");
+    }
+    await hydrate(); // refresh the listing without a full reload
+  } finally {
+    isOptimizeInProgress = false;
   }
-  progressFill.style.width = "100%";
-  progressText.textContent = `Optimize complete: ${done} optimized · ${skipped} already optimized · ${failed} failed`;
-  log(`Summary: ${done} optimized · ${skipped} already optimized · ${failed} failed`, "", "DONE");
-  await hydrate(); // refresh the listing without a full reload
 }
 
 /** First defined namespaceURI walking node -> ancestors, else the fallback. */
