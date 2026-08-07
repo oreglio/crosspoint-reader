@@ -4,6 +4,7 @@
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <LibraryState.h>
 #include <Logging.h>
 #include <Memory.h>
 
@@ -530,6 +531,8 @@ bool NearbyBookTransferActivity::finishReceivedFile(const uint64_t expectedBytes
     return false;
   }
   if (replacing) Storage.remove(backupPath_.c_str());
+  // A book just landed: the Library rebuilds, reconciled, on its next entry.
+  library::markShelfStaleIfBook(finalPath_.c_str());
   return true;
 }
 

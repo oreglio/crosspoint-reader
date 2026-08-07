@@ -1,13 +1,17 @@
 #include "LibraryState.h"
 
+#include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
+
+#include <string>
 
 namespace library {
 
 namespace {
 constexpr char STATE_PATH[] = "/.crosspoint/library.state";
 constexpr char STATE_NEW_PATH[] = "/.crosspoint/library.state.new";
+constexpr char STALE_PATH[] = "/.crosspoint/library.stale";
 constexpr uint8_t STATE_VERSION = 1;
 constexpr size_t STATE_BYTES = 12;
 constexpr uint8_t FLAG_FAV_VIEW = 1 << 0;
@@ -80,6 +84,27 @@ bool saveLibraryState(const LibraryShelfState& state) {
     LOG_ERR("LIBST", "cannot install %s", STATE_PATH);
     return false;
   }
+  return true;
+}
+
+void markShelfStaleIfBook(const char* path) {
+  if (path == nullptr) return;
+  const std::string name(path);
+  const bool book = FsHelpers::hasEpubExtension(name) || FsHelpers::checkFileExtension(name, ".txt") ||
+                    FsHelpers::checkFileExtension(name, ".md") || FsHelpers::checkFileExtension(name, ".xtc");
+  if (!book) return;
+  // An empty file is the whole message. Failure is not worth failing the
+  // transfer over — the manual rebuild button still exists.
+  HalFile marker;
+  if (Storage.openFileForWrite("LIBST", STALE_PATH, marker)) {
+    marker.close();
+    LOG_INF("LIBST", "shelf marked stale by %s", name.c_str());
+  }
+}
+
+bool takeShelfStale() {
+  if (!Storage.exists(STALE_PATH)) return false;
+  Storage.remove(STALE_PATH);
   return true;
 }
 

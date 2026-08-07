@@ -693,3 +693,8 @@ The selection anchor is an identity rather than a row number, so it survives a
 sort change, a filter and an index rebuild. Written once per shelf exit through
 `library.state.new` and a rename; read at entry, rejecting any wrong version,
 wrong length or out-of-range sort value.
+
+`/.crosspoint/library.stale` is its companion: an empty marker file created by
+every ingestion path when a book lands on (or leaves) the card, and consumed by
+the Library's next entry, which rebuilds the index with reconciliation. Its
+existence is the whole message; it has no format to version.

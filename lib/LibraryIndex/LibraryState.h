@@ -44,4 +44,15 @@ bool saveLibraryState(const LibraryShelfState& state);
 
 const char* libraryStatePath();
 
+// Freshness. Every ingestion path — nearby transfer, web upload, WebDAV, OPDS
+// and Calibre downloads, USB serial — calls the first when a file lands on the
+// card; the Library consumes the flag on its next entry and rebuilds,
+// reconciled, so the newcomer tops Recently added and everyone else keeps
+// their place. Only book files mark it: a font or image upload must not cost
+// a rebuild. A file rather than RAM because ingesters and shelf do not always
+// share a boot — web uploads arrive in a dedicated network boot mode.
+void markShelfStaleIfBook(const char* path);
+// True exactly once per marking: reading consumes the flag.
+bool takeShelfStale();
+
 }  // namespace library

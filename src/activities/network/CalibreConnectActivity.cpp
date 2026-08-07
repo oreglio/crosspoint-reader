@@ -3,6 +3,7 @@
 #include <ESPmDNS.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <LibraryState.h>
 #include <WiFi.h>
 #include <esp_task_wdt.h>
 
@@ -156,6 +157,8 @@ void CalibreConnectActivity::loop() {
       lastCompleteAt = status.lastCompleteAt;
       lastCompleteName = status.lastCompleteName;
       lastProcessedCompleteAt = status.lastCompleteAt;  // Mark this value as processed
+      // A book just landed: the Library rebuilds, reconciled, on its next entry.
+      library::markShelfStaleIfBook(lastCompleteName.c_str());
       changed = true;
     }
     if (lastCompleteAt > 0 && (millis() - lastCompleteAt) >= 6000) {

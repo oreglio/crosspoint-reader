@@ -61,6 +61,13 @@ void LibraryListActivity::onEnter() {
   // user decide when to refresh. Only a missing or unreadable index forces the
   // walk, so entering the screen is normally instant.
   indexReady = openIndex();
+  // Books arrived (or left) since the last build: every ingestion path marks
+  // one flag, consumed here. The rebuild reconciles, so the newcomer tops
+  // Recently added and every other book keeps its place.
+  if (library::takeShelfStale() && indexReady) {
+    index.close();
+    indexReady = false;
+  }
   if (!indexReady) {
     // Held across the popup and the build, for the same reason the Settings
     // rebuild holds it: the render task's SD-loaded fonts read glyph data at

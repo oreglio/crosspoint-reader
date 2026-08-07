@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
+#include <LibraryState.h>
 #include <Logging.h>
 #include <esp_rom_crc.h>
 #include <esp_task_wdt.h>
@@ -452,6 +453,7 @@ void handleWrite() {
   }
 
   clearCachesForPath(path);
+  library::markShelfStaleIfBook(path);
   writeLine("OK\n");
 }
 
@@ -504,6 +506,8 @@ void handleRename() {
   if (Storage.rename(src, dst)) {
     clearCachesForPath(src);
     clearCachesForPath(dst);
+    // A moved book changes its folder on the shelf.
+    library::markShelfStaleIfBook(dst);
     writeLine("OK\n");
   } else {
     writeLine("ERR:rename_failed\n");

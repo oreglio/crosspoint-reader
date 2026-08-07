@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <BoardConfig.h>
+#include <LibraryState.h>
 #ifdef SIMULATOR
 #include <ArduinoJsonStringCompat.h>
 #endif
@@ -948,6 +949,8 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
 
 void CrossPointWebServer::handleUploadPost(UploadState& state) const {
   if (state.success) {
+    // A book just landed: the Library rebuilds, reconciled, on its next entry.
+    library::markShelfStaleIfBook(state.fileName.c_str());
     server->send(200, "text/plain", "File uploaded successfully: " + state.fileName);
   } else {
     const String error = state.error.isEmpty() ? "Unknown error during upload" : state.error;

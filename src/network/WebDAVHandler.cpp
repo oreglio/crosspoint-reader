@@ -4,6 +4,7 @@
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
+#include <LibraryState.h>
 #include <Logging.h>
 
 #include <algorithm>
@@ -386,6 +387,8 @@ void WebDAVHandler::handlePut(WebServer& s) {
   }
 
   clearBookCachePreservingUserState(path.c_str());
+  // Arrivals and departures both reshape the shelf.
+  library::markShelfStaleIfBook(path.c_str());
   s.send(_putExisted ? 204 : 201);
 }
 
@@ -435,6 +438,7 @@ void WebDAVHandler::handleDelete(WebServer& s) {
     file.close();
     clearBookCache(path.c_str());
     if (Storage.remove(path.c_str())) {
+      library::markShelfStaleIfBook(path.c_str());
       s.send(204);
     } else {
       s.send(500, "text/plain", "Failed to delete file");

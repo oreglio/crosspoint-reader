@@ -5,6 +5,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <LibraryState.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <OpdsStream.h>
@@ -671,6 +672,8 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
 
   if (result == HttpDownloader::OK) {
     clearBookCache(filename);
+    // A book just landed: the Library rebuilds, reconciled, on its next entry.
+    library::markShelfStaleIfBook(filename.c_str());
     state = BrowserState::BROWSING;
   } else if (result == HttpDownloader::ABORTED) {
     LOG_INF("OPDS", "Download cancelled");
