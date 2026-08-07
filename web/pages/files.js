@@ -2023,6 +2023,88 @@ const XHTML_NS = "http://www.w3.org/1999/xhtml";
 const OPF_NS = "http://www.idpf.org/2007/opf";
 const DEFLATE_OPTS = { compression: "DEFLATE", compressionOptions: { level: 8 }, createFolders: false };
 
+// --- sync-identity (node-testable block) ---
+// KOReader identifies a document by a "partial MD5": MD5 over up to twelve
+// 1KB chunks read at offsets 0, then 1024 << (2*i) for i = 0..10. The web
+// optimizer rewrites every zip entry, which changes that id — so we compute
+// the ORIGINAL file's id here, before rewriting, and embed it in the output
+// (META-INF/crossink-sync.json). The firmware reads it back as the book's
+// sync identity. Mirrors KOReaderDocumentId::calculate() byte-for-byte.
+const SYNC_IDENTITY_PATH = "META-INF/crossink-sync.json";
+
+/** One-shot RFC 1321 MD5 over a Uint8Array; returns 32 lowercase hex chars. */
+function md5Hex(bytes) {
+  const S = [7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+             5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+             4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+             6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21];
+  const K = new Uint32Array(64);
+  for (let i = 0; i < 64; i++) K[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 4294967296);
+
+  const msgLen = bytes.length;
+  const padded = new Uint8Array((((msgLen + 8) >> 6) + 1) << 6);
+  padded.set(bytes);
+  padded[msgLen] = 0x80;
+  const dv = new DataView(padded.buffer);
+  dv.setUint32(padded.length - 8, (msgLen * 8) >>> 0, true);
+  dv.setUint32(padded.length - 4, Math.floor(msgLen / 536870912), true);
+
+  let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
+  const M = new Uint32Array(16);
+  for (let off = 0; off < padded.length; off += 64) {
+    for (let j = 0; j < 16; j++) M[j] = dv.getUint32(off + j * 4, true);
+    let A = a0, B = b0, C = c0, D = d0;
+    for (let i = 0; i < 64; i++) {
+      let F, g;
+      if (i < 16) { F = (B & C) | (~B & D); g = i; }
+      else if (i < 32) { F = (D & B) | (~D & C); g = (5 * i + 1) % 16; }
+      else if (i < 48) { F = B ^ C ^ D; g = (3 * i + 5) % 16; }
+      else { F = C ^ (B | ~D); g = (7 * i) % 16; }
+      const tmp = D;
+      D = C;
+      C = B;
+      const sum = (A + F + K[i] + M[g]) >>> 0;
+      B = (B + ((sum << S[i]) | (sum >>> (32 - S[i])))) >>> 0;
+      A = tmp;
+    }
+    a0 = (a0 + A) >>> 0; b0 = (b0 + B) >>> 0; c0 = (c0 + C) >>> 0; d0 = (d0 + D) >>> 0;
+  }
+  const digest = new Uint8Array(16);
+  const outDv = new DataView(digest.buffer);
+  outDv.setUint32(0, a0, true); outDv.setUint32(4, b0, true);
+  outDv.setUint32(8, c0, true); outDv.setUint32(12, d0, true);
+  let hex = "";
+  for (let i = 0; i < 16; i++) hex += digest[i].toString(16).padStart(2, "0");
+  return hex;
+}
+
+/** KOReader partial-MD5 of a Blob/File. Offsets past EOF are skipped, like the firmware. */
+async function computeKoreaderPartialMd5(blob) {
+  const CHUNK = 1024;
+  const parts = [];
+  let total = 0;
+  for (let i = -1; i <= 10; i++) {
+    const offset = i < 0 ? 0 : CHUNK << (2 * i);
+    if (offset >= blob.size) continue;
+    const end = Math.min(offset + CHUNK, blob.size);
+    const part = new Uint8Array(await blob.slice(offset, end).arrayBuffer());
+    parts.push(part);
+    total += part.length;
+  }
+  const all = new Uint8Array(total);
+  let cursor = 0;
+  for (const part of parts) { all.set(part, cursor); cursor += part.length; }
+  return md5Hex(all);
+}
+
+/** Extract the 32-hex id from a crossink-sync.json payload; null if malformed. */
+function parseSyncIdentityId(text) {
+  if (!/"version"\s*:\s*1\s*[,}]/.test(text)) return null;
+  const m = /"koreaderPartialMd5"\s*:\s*"([0-9a-f]{32})"/.exec(text);
+  return m ? m[1] : null;
+}
+// --- end sync-identity ---
+
 /** First defined namespaceURI walking node -> ancestors, else the fallback. */
 function inheritedNs(nodes, fallback) {
   for (const node of nodes) if (node && node.namespaceURI) return node.namespaceURI;
