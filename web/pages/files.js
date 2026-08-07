@@ -2148,6 +2148,16 @@ function parseSyncIdentityId(text) {
 
 const OPTIMIZING_SUFFIX = ".optimizing";
 
+/**
+ * Staging path for a book: md5 of the book's PATH + suffix, in the book's own
+ * folder. Fixed 43-byte name — immune to the server's 150-byte filename cap —
+ * and deterministic per path, so a re-run cleans up the same orphan.
+ */
+function stagingPathFor(filePath) {
+  const dir = filePath.slice(0, filePath.lastIndexOf("/")) || "";
+  return dir + "/" + md5Hex(new TextEncoder().encode(filePath)) + OPTIMIZING_SUFFIX;
+}
+
 async function deleteDevicePath(path) {
   try {
     await fetch("/delete", {
@@ -2172,14 +2182,6 @@ async function deleteDevicePath(path) {
  * erased by a guess.
  */
 async function optimizeBookOnDevice(filePath, fileName, onPhase) {
-  // The WS server's sanitizeFilename caps names at 150 bytes (extension
-  // preserved). A staging name that gets truncated server-side would land
-  // under a different name than the `staging` arg sent to /replace, which
-  // 404s and leaves a permanent orphan. Fail fast, before touching the network.
-  if (new TextEncoder().encode(fileName + OPTIMIZING_SUFFIX).length > 150) {
-    throw new Error("Name too long to stage safely — rename the book (or enable 'Rename from Book Metadata') and retry.");
-  }
-
   onPhase("Downloading", 2);
   const resp = await fetch(downloadUrl(filePath));
   if (!resp.ok) throw new Error("Download failed: " + resp.status);
@@ -2197,8 +2199,8 @@ async function optimizeBookOnDevice(filePath, fileName, onPhase) {
     forceSyncIdentity: true,
   });
 
-  const stagingPath = filePath + OPTIMIZING_SUFFIX;
-  const stagingName = fileName + OPTIMIZING_SUFFIX;
+  const stagingPath = stagingPathFor(filePath);
+  const stagingName = stagingPath.slice(stagingPath.lastIndexOf("/") + 1);
   const bookDir = filePath.slice(0, filePath.lastIndexOf("/")) || "/";
   await deleteDevicePath(stagingPath); // orphan from a previous failed run
 

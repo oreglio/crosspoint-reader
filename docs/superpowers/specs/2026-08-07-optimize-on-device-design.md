@@ -31,7 +31,8 @@ same two files (`web/pages/files.{js,css,html}`) plus one new firmware endpoint.
 3. **Swap mechanics — approach A**: a dedicated firmware endpoint does the whole
    replacement in one round trip (see Flow). Never a direct overwrite, never
    delete-then-upload: the optimized copy is uploaded BESIDE the original as
-   `<name>.optimizing`, and the swap window (delete + rename) lives entirely
+   `md5(path).optimizing` (a hash of the book's own path, not its name, so any
+   filename length works), and the swap window (delete + rename) lives entirely
    inside the firmware, milliseconds long, Wi-Fi-independent.
 4. **Identity hook**: the firmware re-anchors `favorites.dat` and
    `library.state` from `{nameHash, oldSize}` to `{nameHash, newSize}` — the
@@ -61,8 +62,8 @@ GET /download?path=<book>            → Blob
 JSZip probe: optimized markers?      → yes: count "already optimized", next book
 convertEpubFile(blob, settings)      → optimized Blob (identity embedded, from the
                                        downloaded original's bytes)
-[leftover <name>.optimizing on card?]→ POST /delete it (orphan from a failed run)
-WS upload as <name>.optimizing       → staging beside the original
+[leftover md5(path).optimizing?]     → POST /delete it (orphan from a failed run)
+WS upload as md5(path).optimizing    → staging beside the original
 POST /replace {path, staging}        → firmware does the swap (below)
 next book
 ```
@@ -108,10 +109,15 @@ in-card live progress as a requirement; translations (portal is English-only).
 
 ## Risks & mitigations
 
-- Interrupted flow leaves an `<name>.optimizing` orphan: visible and deletable
-  in the File Manager; the next optimize run of that book deletes it first.
-- `sanitizeFilename` keeps the `.optimizing` suffix intact (verified), and the
-  suffix keeps every book mechanism dormant (stale marker, cache, epub badge).
+- Interrupted flow leaves a `md5(path).optimizing` orphan: opaque but
+  deterministic, still visible in the File Manager; the next optimize run of
+  that book recomputes the same hash and deletes it first.
+- Staging names are a fixed-length hash, not the book's name, so the server's
+  150-byte filename cap (`sanitizeFilename`) can never truncate one into a
+  name that mismatches the `staging` arg sent to `/replace` — the length risk
+  that motivated an earlier client-side fail-fast guard no longer exists. The
+  `.optimizing` suffix still keeps every book mechanism dormant (stale marker,
+  cache, epub badge).
 - One WS upload at a time server-side: the queue is strictly sequential by
   construction (`uploadNextFile` idiom).
 - `/rename` and `/move` never touch the target's cache — irrelevant here because
