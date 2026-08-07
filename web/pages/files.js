@@ -184,10 +184,10 @@ async function hydrate() {
 
         // Checkbox cell + folder row
         fileTableContent += `<tr class="folder-row">`;
-        fileTableContent += `<td><input type="checkbox" class="select-item" data-path="${encodeURIComponent(folderPath)}" data-name="${escapeHtml(file.name)}" data-type="folder"></td>`;
-        fileTableContent += `<td><span class="file-icon">📁</span><a href="/files?path=${encodeURIComponent(folderPath)}" class="folder-link">${escapeHtml(file.name)}</a></td>`;
-        fileTableContent += '<td><span class="folder-badge">FOLDER</span></td>';
-        fileTableContent += "<td>-</td>";
+        fileTableContent += `<td class="c-sel"><input type="checkbox" class="select-item" data-path="${encodeURIComponent(folderPath)}" data-name="${escapeHtml(file.name)}" data-type="folder"></td>`;
+        fileTableContent += `<td class="c-name"><span class="file-icon">📁</span><a href="/files?path=${encodeURIComponent(folderPath)}" class="folder-link">${escapeHtml(file.name)}</a></td>`;
+        fileTableContent += '<td class="c-type"><span class="folder-badge">FOLDER</span></td>';
+        fileTableContent += '<td class="c-size">-</td>';
         fileTableContent += `<td class="actions-col"><div class="action-icon-group"><button class="delete-btn file-action-btn" data-action="delete" data-name="${escapeHtml(file.name)}" data-path="${encodeURIComponent(folderPath)}" data-is-folder="true" title="Delete folder">🗑️</button></div></td>`;
         fileTableContent += "</tr>";
       } else {
@@ -196,10 +196,10 @@ async function hydrate() {
         filePath += file.name;
 
         // Checkbox cell + file row
-        fileTableContent += `<tr class="${file.isEpub ? "epub-file" : ""}">`;
-        fileTableContent += `<td><input type="checkbox" class="select-item" data-path="${encodeURIComponent(filePath)}" data-name="${escapeHtml(file.name)}" data-type="file"></td>`;
+        fileTableContent += `<tr class="file-row ${file.isEpub ? "epub-file" : ""}">`;
+        fileTableContent += `<td class="c-sel"><input type="checkbox" class="select-item" data-path="${encodeURIComponent(filePath)}" data-name="${escapeHtml(file.name)}" data-type="file"></td>`;
         const fileIsImage = isImageFile(file.name);
-        fileTableContent += `<td><span class="file-icon">${file.isEpub ? "📗" : fileIsImage ? "🖼️" : "📄"}</span>`;
+        fileTableContent += `<td class="c-name"><span class="file-icon">${file.isEpub ? "📗" : fileIsImage ? "🖼️" : "📄"}</span>`;
         if (fileIsImage) {
           fileTableContent += `<a href="${downloadUrl(filePath)}" class="file-link image-preview-link">${escapeHtml(file.name)}</a>`;
         } else {
@@ -207,10 +207,11 @@ async function hydrate() {
         }
         fileTableContent += "</td>";
         fileTableContent += file.isEpub
-          ? '<td><span class="epub-badge">EPUB</span></td>'
-          : `<td>${escapeHtml(file.name.split(".").pop().toUpperCase())}</td>`;
-        fileTableContent += `<td>${formatFileSize(file.size)}</td>`;
+          ? '<td class="c-type"><span class="epub-badge">EPUB</span></td>'
+          : `<td class="c-type">${escapeHtml(file.name.split(".").pop().toUpperCase())}</td>`;
+        fileTableContent += `<td class="c-size">${formatFileSize(file.size)}</td>`;
         fileTableContent += `<td class="actions-col"><div class="action-icon-group">`;
+        fileTableContent += `<button class="dl-btn file-action-btn" data-action="download" data-name="${escapeHtml(file.name)}" data-path="${encodeURIComponent(filePath)}" title="Download">⬇</button>`;
         fileTableContent += `<button class="move-btn file-action-btn" data-action="move" data-name="${escapeHtml(file.name)}" data-path="${encodeURIComponent(filePath)}" title="Move file">📂</button>`;
         fileTableContent += `<button class="rename-btn file-action-btn" data-action="rename" data-name="${escapeHtml(file.name)}" data-path="${encodeURIComponent(filePath)}" title="Rename file">✏️</button>`;
         fileTableContent += `<button class="delete-btn file-action-btn" data-action="delete" data-name="${escapeHtml(file.name)}" data-path="${encodeURIComponent(filePath)}" data-is-folder="false" title="Delete file">🗑️</button>`;
@@ -223,6 +224,19 @@ async function hydrate() {
     fileTable.innerHTML = fileTableContent;
     fileTable.querySelectorAll(".file-action-btn").forEach((button) => {
       button.addEventListener("click", handleFileActionClick);
+    });
+
+    // Mobile cards: the whole row is the checkbox (variante 3). Desktop keeps
+    // the real checkboxes; guard on the same width the CSS card layout uses.
+    fileTable.querySelectorAll("tr.file-row").forEach((row) => {
+      row.addEventListener("click", (e) => {
+        if (window.innerWidth > 600) return;
+        if (e.target.closest(".action-icon-group, input, a")) return;
+        const box = row.querySelector(".select-item");
+        if (!box) return;
+        box.checked = !box.checked;
+        box.dispatchEvent(new Event("change", { bubbles: true }));
+      });
     });
   }
 }
@@ -254,7 +268,9 @@ function handleFileActionClick(event) {
   const name = button.dataset.name || "";
   const path = decodeURIComponent(button.dataset.path || "");
 
-  if (button.dataset.action === "move") {
+  if (button.dataset.action === "download") {
+    window.open(downloadUrl(path), "_blank");
+  } else if (button.dataset.action === "move") {
     openMoveModal(name, path);
   } else if (button.dataset.action === "rename") {
     openRenameModal(name, path);

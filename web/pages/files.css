@@ -1057,7 +1057,8 @@ h2 {
 /* Action button styles */
     .delete-btn,
     .rename-btn,
-    .move-btn {
+    .move-btn,
+    .dl-btn {
       background: none;
       border: none;
       cursor: pointer;
@@ -1084,6 +1085,19 @@ h2 {
     }
 .move-btn:hover {
       background-color: #e6f7f4;
+    }
+.dl-btn {
+      display: none; /* download is the name link on desktop; mobile cards show it */
+      color: var(--accent-color);
+    }
+.dl-btn:hover {
+      background-color: var(--accent-soft);
+      color: var(--accent-hover-color);
+    }
+@media (max-width: 600px) {
+      .dl-btn {
+        display: inline-flex;
+      }
     }
 .actions-col {
       width: 140px;
@@ -1288,22 +1302,51 @@ h2 {
         padding: 8px 10px;
         font-size: 0.85em;
       }
-      .file-table th,
-      .file-table td {
-        padding: 8px 6px;
-        font-size: 0.9em;
+      /* ——— cards replace the table (variante 3: whole-row select, ring) ——— */
+      .file-table, .file-table tbody { display: block; }
+      .file-table tr:first-child { display: none; } /* header row */
+      .file-table tr {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 2px 8px;
+        background: var(--card-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 14px;
+        padding: 10px 12px;
+        margin: 0 0 10px;
       }
-      .file-table th {
-        font-size: 0.85em;
+      .file-table tr:hover { background: var(--card-bg); }
+      .file-table td, .file-table th { display: block; border: 0; padding: 0; }
+      .c-name { grid-column: 1 / -1; min-width: 0; }
+      .c-name .file-link, .c-name .folder-link {
+        font-family: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
+        font-size: 15.5px; line-height: 1.35; font-weight: 600;
+        display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+        overflow: hidden; overflow-wrap: anywhere; text-decoration: none;
       }
-      .file-icon {
-        margin-right: 4px;
+      .c-type, .c-size { display: inline-block; }
+      .c-type { grid-row: 2; grid-column: 1; }
+      .c-size { grid-row: 2; grid-column: 1; margin-left: 64px; color: var(--label-color); font-size: 12px; font-variant-numeric: tabular-nums; align-self: center; }
+      .actions-col { grid-row: 2; grid-column: 2; justify-self: end; }
+      .action-icon-group .file-action-btn { width: 38px; height: 38px; font-size: 15px; }
+      /* files: the row IS the checkbox; folders keep a visible one */
+      tr.file-row .c-sel { display: none; }
+      tr.folder-row { grid-template-columns: auto 1fr auto; }
+      tr.folder-row .c-sel { grid-row: 1; align-self: center; }
+      tr.folder-row .c-name { grid-column: 2; }
+      tr.folder-row .c-type, tr.folder-row .c-size { display: none; }
+      tr.folder-row .actions-col { grid-row: 1; grid-column: 3; }
+      /* selection: sage wash + ring + ✓ (variante 3) */
+      .file-table tr:has(.select-item:checked) {
+        background: var(--accent-soft);
+        border-color: var(--accent-color);
+        box-shadow: 0 0 0 1.5px var(--accent-color);
       }
-      .epub-badge,
-      .folder-badge {
-        padding: 2px 5px;
-        font-size: 0.65em;
+      tr.file-row:has(.select-item:checked) .c-name .file-link::before {
+        content: "✓ "; color: var(--accent-hover-color); font-weight: 800;
       }
+      /* row-tap selects: the name must not hijack the tap; ⬇ replaces it */
+      tr.file-row .file-link { pointer-events: none; color: inherit; }
       .contents-header {
         margin-bottom: 8px;
         flex-wrap: wrap;
@@ -1320,18 +1363,6 @@ h2 {
       }
       .modal h3 {
         font-size: 1.1em;
-      }
-      .actions-col {
-        width: 120px;
-      }
-      .delete-btn,
-      .rename-btn,
-      .move-btn {
-        font-size: 1em;
-        padding: 2px 4px;
-      }
-      .action-icon-group {
-        gap: 4px;
       }
       .no-files {
         padding: 20px;
