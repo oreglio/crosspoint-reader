@@ -14,6 +14,15 @@
 
 - `File Browser Display` gains a `Full Name` option in `Settings > System > Files & Cache`, wrapping file names over enough lines that long names are no longer cut short with an ellipsis. Rows are taller, so fewer books are listed per screen than in `2 Lines`.
 - Optimized EPUBs now keep their KOReader sync identity: the web optimizer embeds the original file's document hash, and Progress Sync uses it to pair the optimized copy with the original (e.g. the same book in KOReader on your phone). A "Preserve Sync Identity" toggle (default on) lives in the optimizer's Advanced Mode.
+- Optimize on device: the File Manager can now optimize books that are already on the SD card — select books or folders (or use the per-book ⚡ action) and each one is downloaded, optimized in the browser, and swapped in place. Reading progress, favorites and the library cursor survive the swap; already-optimized books are detected and skipped; the original is never deleted before its optimized copy is safely on the card.
+
+### Changed
+
+- The File Manager becomes cards on phone-sized screens: tap a card to select it, serif titles that wrap instead of crushing the table, and a download button on each card.
+
+### Fixed
+
+- Books uploaded through the fast (WebSocket) upload path now appear in the Library without a manual index rebuild.
 
 ## [v1.5.0] - 2026-08-04
 
