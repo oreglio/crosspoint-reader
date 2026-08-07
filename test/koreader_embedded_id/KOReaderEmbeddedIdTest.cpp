@@ -67,3 +67,17 @@ TEST(EmbeddedIdRead, EmptyWhenZipUnopenable) {
   ZipFile::entryContent = VALID_JSON;
   EXPECT_EQ(KOReaderEmbeddedId::read("/books/x.epub"), "");
 }
+
+TEST(EmbeddedIdRead, EmptyWhenSizeZero) {
+  ZipFile::openable = true;
+  ZipFile::entryName = KOReaderEmbeddedId::SYNC_ID_PATH;
+  ZipFile::entryContent = "";
+  EXPECT_EQ(KOReaderEmbeddedId::read("/books/x.epub"), "");
+}
+
+TEST(EmbeddedIdRead, EmptyWhenPayloadMalformed) {
+  ZipFile::openable = true;
+  ZipFile::entryName = KOReaderEmbeddedId::SYNC_ID_PATH;
+  ZipFile::entryContent = "{\"version\":1,\"koreaderPartialMd5\":\"0123456789ABCDEF0123456789ABCDEF\"}";
+  EXPECT_EQ(KOReaderEmbeddedId::read("/books/x.epub"), "");
+}
