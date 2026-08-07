@@ -342,7 +342,7 @@ function restoreAfterCancel() {
 
 function closeUploadModal() {
   // Prevent closing during upload/conversion
-  if (isUploadInProgress) {
+  if (isUploadInProgress || isOptimizeInProgress) {
     return;
   }
   document.getElementById("uploadModal").classList.remove("open", "optimize-mode");
@@ -2172,6 +2172,14 @@ async function deleteDevicePath(path) {
  * erased by a guess.
  */
 async function optimizeBookOnDevice(filePath, fileName, onPhase) {
+  // The WS server's sanitizeFilename caps names at 150 bytes (extension
+  // preserved). A staging name that gets truncated server-side would land
+  // under a different name than the `staging` arg sent to /replace, which
+  // 404s and leaves a permanent orphan. Fail fast, before touching the network.
+  if (new TextEncoder().encode(fileName + OPTIMIZING_SUFFIX).length > 150) {
+    throw new Error("Name too long to stage safely — rename the book (or enable 'Rename from Book Metadata') and retry.");
+  }
+
   onPhase("Downloading", 2);
   const resp = await fetch(downloadUrl(filePath));
   if (!resp.ok) throw new Error("Download failed: " + resp.status);
@@ -2270,7 +2278,11 @@ async function runOptimizeQueue(items) {
       } catch (err) {
         failed++;
         console.error("Optimize failed:", name, err);
-        logError(`Failed (original untouched): ${name} — ${err.message}`);
+        // A /replace failure may have already removed the original before
+        // failing (the honest, staging-path-naming logError already ran
+        // inside optimizeBookOnDevice) — don't also claim it's untouched.
+        const untouchedNote = err.message.startsWith("Replace failed") ? "" : " (original untouched)";
+        logError(`Failed${untouchedNote}: ${name} — ${err.message}`);
         if (useBatchLog) saveToFileBatchLog(name, false, 0, 0);
       }
     }
@@ -4865,7 +4877,7 @@ function uploadFileHTTP(file, onProgress, onComplete, onError) {
 }
 
 async function uploadFile() {
-  if (isUploadInProgress) return;
+  if (isUploadInProgress || isOptimizeInProgress) return;
 
   const fileInput = document.getElementById("fileInput");
   const files = Array.from(fileInput.files);

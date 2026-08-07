@@ -67,8 +67,12 @@ POST /replace {path, staging}        → firmware does the swap (below)
 next book
 ```
 
-Any failure: the staging file is deleted (best effort), the original is never
-touched, the book is counted failed, the queue continues. Progress reuses the
+Staging cleanup only happens for failures *before* `/replace` is sent (best
+effort, e.g. an orphan from a previous failed run). Once a `/replace` attempt
+has been sent, staging is never auto-deleted: the firmware's post-removal
+failure cases can leave it as the book's only surviving copy, so the client
+leaves it in place and names it in the error instead of guessing. Either way
+the book is counted failed, the queue continues. Progress reuses the
 upload modal (per-book phases: download → optimize → upload → replace) with the
 existing log; summary line "N optimized · M already optimized · K failed".
 Nice-to-have, not required: a `.busy` hatched state on the current row/card.
