@@ -1,10 +1,13 @@
 // get current path from query parameter
-const currentPath = decodeURIComponent(new URLSearchParams(window.location.search).get("path") || "/");
+let currentPath = decodeURIComponent(new URLSearchParams(window.location.search).get("path") || "/");
 
-if (currentPath !== "/") {
-  const leaf = currentPath.split("/").filter(Boolean).pop();
-  if (leaf) document.title = leaf + " - Files - CrossInk Reader";
+function applyPathTitle() {
+  if (currentPath !== "/") {
+    const leaf = currentPath.split("/").filter(Boolean).pop();
+    if (leaf) document.title = leaf + " - Files - CrossInk Reader";
+  }
 }
+applyPathTitle();
 
 // Network status monitoring
 let isNetworkOnline = navigator.onLine;
@@ -91,25 +94,6 @@ function formatFileSize(bytes) {
 }
 
 async function hydrate() {
-  // Fetch CrossInk version
-  fetchVersion();
-
-  // Close modals when clicking overlay - call proper cleanup functions
-  document.querySelectorAll(".modal-overlay").forEach(function (overlay) {
-    overlay.addEventListener("click", function (e) {
-      if (e.target === overlay) {
-        // Call the appropriate close function for each modal to ensure cleanup
-        if (overlay.id === "uploadModal") return closeUploadModal();
-        if (overlay.id === "folderModal") return closeFolderModal();
-        if (overlay.id === "deleteModal") return closeDeleteModal();
-        if (overlay.id === "renameModal") return closeRenameModal();
-        if (overlay.id === "moveModal") return closeMoveModal();
-        if (overlay.id === "imagePreviewModal") return closeImagePreview();
-        overlay.classList.remove("open");
-      }
-    });
-  });
-
   const breadcrumbs = document.getElementById("directory-breadcrumbs");
   const fileTable = document.getElementById("file-table");
 
@@ -242,6 +226,65 @@ async function hydrate() {
       });
     });
   }
+}
+
+/** Navigate to a folder without a full page reload: updates history and title, then re-hydrates the listing. */
+async function navigateTo(path, { push = true } = {}) {
+  currentPath = path;
+  applyPathTitle();
+  if (push) {
+    history.pushState({ path }, "", "/files?path=" + encodeURIComponent(path));
+  }
+  await hydrate();
+  window.scrollTo(0, 0);
+}
+
+/**
+ * Delegated click handler: intercepts a plain left-click on a `selector` link inside the
+ * listener's container and routes it through navigateTo() instead of a full page load.
+ * Modifier-clicks and non-primary buttons are left alone so the browser's normal link
+ * handling (new tab, copy link, etc.) still applies.
+ */
+function handleNavLinkClick(e, selector) {
+  const link = e.target.closest(selector);
+  if (!link) return;
+  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  const url = new URL(link.href);
+  navigateTo(decodeURIComponent(url.searchParams.get("path") || "/"));
+}
+
+// One-time setup: modal-overlay dismissal, folder/breadcrumb navigation delegation, back/forward
+// handling, and the initial version fetch. hydrate() now re-runs on every folder click, so
+// anything that only needs to bind once against static elements belongs here, not in hydrate().
+function initFilesPage() {
+  fetchVersion();
+
+  // Close modals when clicking overlay - call proper cleanup functions
+  document.querySelectorAll(".modal-overlay").forEach(function (overlay) {
+    overlay.addEventListener("click", function (e) {
+      if (e.target === overlay) {
+        // Call the appropriate close function for each modal to ensure cleanup
+        if (overlay.id === "uploadModal") return closeUploadModal();
+        if (overlay.id === "folderModal") return closeFolderModal();
+        if (overlay.id === "deleteModal") return closeDeleteModal();
+        if (overlay.id === "renameModal") return closeRenameModal();
+        if (overlay.id === "moveModal") return closeMoveModal();
+        if (overlay.id === "imagePreviewModal") return closeImagePreview();
+        overlay.classList.remove("open");
+      }
+    });
+  });
+
+  // Folder rows and breadcrumb segments are rebuilt by hydrate() (innerHTML), but their
+  // containers are static, so delegation here needs to attach exactly once.
+  document.getElementById("file-table").addEventListener("click", (e) => handleNavLinkClick(e, ".folder-link"));
+  document.getElementById("directory-breadcrumbs").addEventListener("click", (e) => handleNavLinkClick(e, "a"));
+
+  window.addEventListener("popstate", () => {
+    const path = decodeURIComponent(new URLSearchParams(window.location.search).get("path") || "/");
+    navigateTo(path, { push: false });
+  });
 }
 
 function isImageFile(name) {
@@ -2248,6 +2291,7 @@ async function runOptimizeQueue(items) {
     const progressText = document.getElementById("progress-text");
     document.getElementById("uploadModal").classList.add("open", "optimize-mode");
     document.getElementById("progress-container").style.display = "block";
+    progressFill.style.backgroundColor = "#9b59b6"; // Purple for conversion — matches the optimize phase color used elsewhere
 
     // Mirrors uploadFile()'s batch-log trigger: >1 file + the persisted
     // export-log toggle. startBatchLog() clears the log itself.
@@ -5455,4 +5499,5 @@ function confirmMove() {
 
   xhr.send(formData);
 }
+initFilesPage();
 hydrate();

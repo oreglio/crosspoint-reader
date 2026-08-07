@@ -351,9 +351,11 @@ void CrossPointWebServer::begin() {
 
   server->onNotFound([this] { handleNotFound(); });
 
-  // Collect WebDAV headers and register handler
-  const char* davHeaders[] = {"Depth", "Destination", "Overwrite", "If", "Lock-Token", "Timeout"};
-  server->collectHeaders(davHeaders, 6);
+  // Collect WebDAV headers, plus If-None-Match for the page-HTML ETag/304 check
+  // in sendHtmlContent(): the WebServer library only stores headers named
+  // here, so a name missing from this list always reads back empty.
+  const char* davHeaders[] = {"Depth", "Destination", "Overwrite", "If", "Lock-Token", "Timeout", "If-None-Match"};
+  server->collectHeaders(davHeaders, std::size(davHeaders));
   server->addHandler(new WebDAVHandler());  // Note: WebDAVHandler will be deleted by WebServer when server is stopped
 
   server->begin();
@@ -499,12 +501,23 @@ CrossPointWebServer::WsUploadStatus CrossPointWebServer::getWsUploadStatus() con
   return status;
 }
 
-static void sendHtmlContent(WebServer* server, const char* data, size_t len) {
+// Revalidates every request against the page's content hash rather than a long
+// max-age: a firmware update must not leave a stale UI in the browser cache.
+static void sendHtmlContent(WebServer* server, const char* data, size_t len, const char* etag) {
+  String quotedEtag = "\"" + String(etag) + "\"";
+  if (server->header("If-None-Match") == quotedEtag) {
+    server->send(304);
+    return;
+  }
+  server->sendHeader("ETag", quotedEtag);
+  server->sendHeader("Cache-Control", "no-cache");
   server->sendHeader("Content-Encoding", "gzip");
   server->send_P(200, "text/html", data, len);
 }
 
-void CrossPointWebServer::handleRoot() const { sendHtmlContent(server.get(), HomePageHtml, sizeof(HomePageHtml)); }
+void CrossPointWebServer::handleRoot() const {
+  sendHtmlContent(server.get(), HomePageHtml, sizeof(HomePageHtml), HomePageHtmlEtag);
+}
 
 void CrossPointWebServer::handleJszip() const {
   server->sendHeader("Content-Encoding", "gzip");
@@ -653,7 +666,7 @@ void CrossPointWebServer::scanFiles(const char* path, const FileVisitor visitor,
 bool CrossPointWebServer::isEpubFile(const String& filename) const { return FsHelpers::hasEpubExtension(filename); }
 
 void CrossPointWebServer::handleFileList() const {
-  sendHtmlContent(server.get(), FilesPageHtml, sizeof(FilesPageHtml));
+  sendHtmlContent(server.get(), FilesPageHtml, sizeof(FilesPageHtml), FilesPageHtmlEtag);
 }
 
 void CrossPointWebServer::handleFileListData() const {
@@ -1378,7 +1391,7 @@ void CrossPointWebServer::handleReplace() const {
 }
 
 void CrossPointWebServer::handleSettingsPage() const {
-  sendHtmlContent(server.get(), SettingsPageHtml, sizeof(SettingsPageHtml));
+  sendHtmlContent(server.get(), SettingsPageHtml, sizeof(SettingsPageHtml), SettingsPageHtmlEtag);
 }
 
 void CrossPointWebServer::handleGetSettings() const {
@@ -2028,7 +2041,7 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
 // --- Font management handlers ---
 
 void CrossPointWebServer::handleFontsPage() const {
-  sendHtmlContent(server.get(), FontsPageHtml, sizeof(FontsPageHtml));
+  sendHtmlContent(server.get(), FontsPageHtml, sizeof(FontsPageHtml), FontsPageHtmlEtag);
 }
 
 void CrossPointWebServer::handleFontList() const {

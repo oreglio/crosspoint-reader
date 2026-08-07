@@ -82,6 +82,16 @@ h2 {
       color: #e74c3c;
       background-color: rgba(231, 76, 60, 0.05);
     }
+.optimize-action-btn {
+      background: transparent;
+      border-color: var(--border-color);
+      color: var(--label-color);
+    }
+.optimize-action-btn:hover {
+      border-color: #7c3aed;
+      color: #7c3aed;
+      background-color: rgba(124, 58, 237, 0.05);
+    }
 /* Upload modal */
     .modal-overlay {
       display: none;
