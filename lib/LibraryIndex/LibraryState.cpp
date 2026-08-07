@@ -87,6 +87,14 @@ bool saveLibraryState(const LibraryShelfState& state) {
   return true;
 }
 
+bool reanchorLibraryStateSelection(const FavoriteKey& from, const FavoriteKey& to) {
+  LibraryShelfState state;
+  loadLibraryState(state);
+  if (!(state.selected == from)) return false;
+  state.selected = to;
+  return saveLibraryState(state);
+}
+
 void markShelfStaleIfBook(const char* path) {
   if (path == nullptr) return;
   const std::string name(path);

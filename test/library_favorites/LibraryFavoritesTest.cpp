@@ -142,3 +142,31 @@ TEST(FavoritesFormat, SerializeCapsAtMax) {
   EXPECT_EQ(bytes.size(), FAVORITES_HEADER_BYTES + static_cast<size_t>(FAVORITES_MAX) * FAVORITES_ENTRY_BYTES);
   EXPECT_EQ(bytes[1] | (bytes[2] << 8), FAVORITES_MAX);
 }
+
+TEST(FavoritesReanchor, MovesAPresentKeyToItsNewSize) {
+  std::vector<library::FavoriteKey> keys = {{100, 10}, {200, 20}, {300, 30}};
+  EXPECT_TRUE(library::reanchorFavoriteKey(keys, {200, 20}, {200, 25}));
+  EXPECT_TRUE(std::binary_search(keys.begin(), keys.end(), library::FavoriteKey{200, 25}));
+  EXPECT_FALSE(std::binary_search(keys.begin(), keys.end(), library::FavoriteKey{200, 20}));
+  EXPECT_EQ(keys.size(), 3u);
+  EXPECT_TRUE(std::is_sorted(keys.begin(), keys.end()));
+}
+
+TEST(FavoritesReanchor, AbsentFromIsANoOp) {
+  std::vector<library::FavoriteKey> keys = {{100, 10}};
+  EXPECT_FALSE(library::reanchorFavoriteKey(keys, {200, 20}, {200, 25}));
+  EXPECT_EQ(keys.size(), 1u);
+}
+
+TEST(FavoritesReanchor, ToAlreadyPresentDeduplicates) {
+  std::vector<library::FavoriteKey> keys = {{200, 20}, {200, 25}};
+  EXPECT_TRUE(library::reanchorFavoriteKey(keys, {200, 20}, {200, 25}));
+  EXPECT_EQ(keys.size(), 1u);
+  EXPECT_TRUE(std::binary_search(keys.begin(), keys.end(), library::FavoriteKey{200, 25}));
+}
+
+TEST(FavoritesReanchor, IdenticalFromAndToIsANoOp) {
+  std::vector<library::FavoriteKey> keys = {{200, 20}};
+  EXPECT_FALSE(library::reanchorFavoriteKey(keys, {200, 20}, {200, 20}));
+  EXPECT_EQ(keys.size(), 1u);
+}

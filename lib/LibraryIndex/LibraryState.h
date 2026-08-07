@@ -41,6 +41,9 @@ bool loadLibraryState(LibraryShelfState& out);
 // Written through the same write-beside-then-rename install step the index
 // and favorites use.
 bool saveLibraryState(const LibraryShelfState& state);
+// If the remembered cursor sits on `from`, follow the book to its new
+// identity. No-op (false) when the selection is elsewhere or unset.
+bool reanchorLibraryStateSelection(const FavoriteKey& from, const FavoriteKey& to);
 
 const char* libraryStatePath();
 

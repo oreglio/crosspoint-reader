@@ -19,6 +19,9 @@ class LibraryFavoritesFile {
   // Flips membership and writes through. Returns the NEW state, honestly: an
   // add refused at FAVORITES_MAX logs and returns false — still not a favorite.
   bool toggle(const FavoriteKey& key);
+  // In-place file replacement changed the size half of a key: move the star
+  // to the new identity. Count is unchanged, so the cap cannot refuse it.
+  bool reanchor(const FavoriteKey& from, const FavoriteKey& to);
   uint16_t count() const { return static_cast<uint16_t>(keys.size()); }
 
  private:

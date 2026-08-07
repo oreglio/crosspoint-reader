@@ -76,4 +76,14 @@ void serializeFavorites(const std::vector<FavoriteKey>& keys, std::vector<uint8_
   }
 }
 
+bool reanchorFavoriteKey(std::vector<FavoriteKey>& keys, const FavoriteKey& from, const FavoriteKey& to) {
+  if (from == to) return false;
+  const auto it = std::lower_bound(keys.begin(), keys.end(), from);
+  if (it == keys.end() || !(*it == from)) return false;
+  keys.erase(it);
+  const auto dst = std::lower_bound(keys.begin(), keys.end(), to);
+  if (dst == keys.end() || !(*dst == to)) keys.insert(dst, to);
+  return true;
+}
+
 }  // namespace library

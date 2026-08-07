@@ -67,4 +67,9 @@ bool parseFavorites(const uint8_t* data, size_t len, std::vector<FavoriteKey>& o
 // re-sort), writes at most FAVORITES_MAX entries.
 void serializeFavorites(const std::vector<FavoriteKey>& keys, std::vector<uint8_t>& out);
 
+// Re-anchors a key to a new identity (same book, new file size after an
+// in-place replacement). Keeps `keys` sorted; dedups if `to` already exists.
+// Returns true when the vector changed.
+bool reanchorFavoriteKey(std::vector<FavoriteKey>& keys, const FavoriteKey& from, const FavoriteKey& to);
+
 }  // namespace library

@@ -79,6 +79,12 @@ bool LibraryFavoritesFile::toggle(const FavoriteKey& key) {
   return true;
 }
 
+bool LibraryFavoritesFile::reanchor(const FavoriteKey& from, const FavoriteKey& to) {
+  if (!reanchorFavoriteKey(keys, from, to)) return false;
+  if (!save()) LOG_ERR("LIBFAV", "favorite re-anchored in RAM but not saved");
+  return true;
+}
+
 bool LibraryFavoritesFile::save() const {
   std::vector<uint8_t> bytes;
   serializeFavorites(keys, bytes);
