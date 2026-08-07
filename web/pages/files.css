@@ -341,6 +341,11 @@ h2 {
       line-height: 1.4;
       text-align: center;
     }
+.convert-warning.soft {
+      color: #2471a3;
+      border-color: #2471a3;
+      background: rgba(36, 113, 163, 0.08);
+    }
 .convert-info {
       font-size: 0.85em;
       color: var(--label-color);

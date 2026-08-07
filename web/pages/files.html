@@ -97,6 +97,23 @@
                 </label>
               </div>
             </div>
+            <div class="advanced-setting-row">
+              <div class="setting-label">
+                <div class="setting-title">Preserve Sync Identity</div>
+                <div class="setting-desc">Embed the original's KOReader hash so progress sync still pairs</div>
+              </div>
+              <div class="setting-controls">
+                <label class="toggle-switch">
+                  <input
+                    type="checkbox"
+                    id="preserveSyncIdentityToggle"
+                    checked
+                    onchange="onPreserveSyncIdentityChange()"
+                  />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
             <!-- JPEG Quality -->
             <div class="advanced-setting-row quality-row">
               <div class="setting-title">📦 JPEG Quality</div>

@@ -371,10 +371,26 @@ function updateBatchModeUI(isBatch) {
   if (overlapRow) overlapRow.style.display = isBatch ? "none" : "";
 }
 
+function onPreserveSyncIdentityChange() {
+  updateConvertWarning();
+  updateUploadSettingsPersistence();
+}
+
+function updateConvertWarning() {
+  const warning = document.getElementById("convertWarning");
+  if (!warning) return;
+  const preserve = !!document.getElementById("preserveSyncIdentityToggle")?.checked;
+  warning.classList.toggle("soft", preserve);
+  warning.innerHTML = preserve
+    ? "ℹ️ Optimizing keeps this book's sync identity: the original's KOReader hash travels inside the optimized EPUB, so progress sync still pairs with the original file."
+    : "⚠️ Converting will modify files and can break hash‑based sync. ⚠️<br />Please back up or disable sync before proceeding.";
+}
+
 function toggleConvertOptions() {
   const checked = document.getElementById("convertBeforeUpload").checked;
   const uploadBtn = document.getElementById("uploadBtn");
   document.getElementById("convertWarning").style.display = checked ? "block" : "none";
+  updateConvertWarning();
   document.getElementById("convertInfo").style.display = checked ? "block" : "none";
   // Update button text and style
   if (checked) {
@@ -1454,6 +1470,7 @@ const DEFAULT_UPLOAD_SETTINGS = Object.freeze({
   convertBeforeUpload: false,
   renameFromMetadata: false,
   splitLongSections: true,
+  preserveSyncIdentity: true,
   quality: DEFAULT_JPEG_QUALITY,
   referenceCharacters: X_DEFAULT_REFERENCE_CHARACTERS_PER_PAGE,
   deviceTarget: "auto",
@@ -1468,6 +1485,7 @@ function getCurrentUploadSettings() {
     convertBeforeUpload: !!document.getElementById("convertBeforeUpload")?.checked,
     renameFromMetadata: !!document.getElementById("renameFromMetadataToggle")?.checked,
     splitLongSections: !!document.getElementById("splitLongSectionsToggle")?.checked,
+    preserveSyncIdentity: !!document.getElementById("preserveSyncIdentityToggle")?.checked,
     quality: parseInt(document.getElementById("qualitySlider")?.value || JPEG_QUALITY, 10),
     referenceCharacters: parseInt(
       document.getElementById("referenceCharactersInput")?.value || X_DEFAULT_REFERENCE_CHARACTERS_PER_PAGE,
@@ -1487,6 +1505,7 @@ function applyUploadSettings(settings = {}) {
     document.getElementById("convertBeforeUpload").checked = !!merged.convertBeforeUpload;
     document.getElementById("renameFromMetadataToggle").checked = !!merged.renameFromMetadata;
     document.getElementById("splitLongSectionsToggle").checked = !!merged.splitLongSections;
+    document.getElementById("preserveSyncIdentityToggle").checked = !!merged.preserveSyncIdentity;
     document.getElementById("export-log-checkbox").checked = !!merged.exportLog;
     document.getElementById("rememberUploadSettings").checked = !!settings.rememberSettings;
     document.getElementById("referenceCharactersInput").value = normalizedReferenceCharactersPerPage(
@@ -4027,6 +4046,36 @@ async function convertEpubFile(file, progressCallback) {
   );
 
   const zip = await JSZip.loadAsync(file);
+
+  // Sync identity: computed from the picked file's BYTES before any rewrite.
+  // Renames (metadata/collision) wrap the same bytes in a new File, so this
+  // is still the original's identity. If the source already carries one
+  // (re-optimizing an optimized book), preserve it — recomputing here would
+  // capture the optimized bytes, not the true original's.
+  const preserveSyncIdentity = !!document.getElementById("preserveSyncIdentityToggle")?.checked;
+  let syncIdentityJson = null;
+  if (preserveSyncIdentity) {
+    try {
+      const existing = zip.files[SYNC_IDENTITY_PATH];
+      if (existing && !existing.dir) {
+        const existingText = await existing.async("string");
+        if (parseSyncIdentityId(existingText)) {
+          syncIdentityJson = existingText;
+          log("Sync identity: preserved from source EPUB", "", "INFO");
+        }
+      }
+      if (!syncIdentityJson) {
+        const syncId = await computeKoreaderPartialMd5(file);
+        syncIdentityJson = JSON.stringify({ version: 1, koreaderPartialMd5: syncId });
+        log(`Sync identity: ${syncId}`, "", "INFO");
+      }
+    } catch (err) {
+      console.error("Sync identity error:", err);
+      log("Sync identity could not be computed; continuing without it", "warning", "INFO");
+      syncIdentityJson = null;
+    }
+  }
+
   const renamed = {};
   zip.forEach((p) => {
     const l = p.toLowerCase();
@@ -4392,6 +4441,7 @@ async function convertEpubFile(file, progressCallback) {
     if (fileObj.dir || path === "mimetype") continue;
     const low = path.toLowerCase();
     if (low === X_LOCATION_MANIFEST_PATH.toLowerCase()) continue;
+    if (syncIdentityJson && low === SYNC_IDENTITY_PATH.toLowerCase()) continue;
     if (low.match(/\.(png|gif|webp|bmp|jpg|jpeg|svg)$/) || low.match(/\.(xhtml|html|htm)$/) || low.endsWith(".opf"))
       continue;
 
@@ -4416,6 +4466,10 @@ async function convertEpubFile(file, progressCallback) {
       data = new TextEncoder().encode(t);
     }
     out.file(path, data, DEFLATE_OPTS);
+  }
+
+  if (syncIdentityJson) {
+    out.file(SYNC_IDENTITY_PATH, syncIdentityJson, { compression: "STORE", createFolders: false });
   }
 
   if (progressCallback) progressCallback(100);
