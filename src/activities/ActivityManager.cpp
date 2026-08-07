@@ -44,6 +44,21 @@ uint32_t fileTransferBootPayload(const NetworkMode mode, const bool returnToRead
 void restartToFileTransfer(const NetworkMode mode, const std::string& returnBookPath) {
   silentRestartToNetwork(NetworkBootTarget::FILE_TRANSFER, fileTransferBootPayload(mode, !returnBookPath.empty()));
 }
+
+// Which Home menu entry the reader just came from, by activity name. Shared by
+// goHome and the pop path, which must capture it BEFORE the activity is
+// destroyed — it used to inspect a reset pointer there, so the repositioning
+// silently never ran for activities that replace Home (the Library).
+HomeMenuItem homeMenuItemForActivityName(const std::string& activityName) {
+  if (activityName == "FileBrowser") return HomeMenuItem::FILE_BROWSER;
+  if (activityName == "Library") return HomeMenuItem::LIBRARY;
+  if (activityName == "RecentBooks") return HomeMenuItem::RECENTS;
+  if (activityName == "OpdsBookBrowser") return HomeMenuItem::OPDS_BROWSER;
+  if (activityName == "CrossPointWebServer") return HomeMenuItem::FILE_TRANSFER;
+  if (activityName == "NearbyStatsSync") return HomeMenuItem::FILE_TRANSFER;
+  if (activityName == "Settings") return HomeMenuItem::SETTINGS_MENU;
+  return HomeMenuItem::NONE;
+}
 }  // namespace
 
 void ActivityManager::begin(const uint32_t renderTaskStackBytes) {
@@ -127,6 +142,10 @@ void ActivityManager::loop() {
       }
 
       ActivityResult pendingResult = std::move(currentActivity->result);
+      // Captured while the activity still exists: goHome positions the menu by
+      // the name of what just exited, and by the time it runs the activity is
+      // gone.
+      const HomeMenuItem exitedItem = homeMenuItemForActivityName(currentActivity->name);
 
       // Destroy the current activity
       exitActivity(lock);
@@ -134,7 +153,7 @@ void ActivityManager::loop() {
 
       if (stackActivities.empty()) {
         lock.unlock();  // goHome may acquire its own lock
-        goHome();
+        goHome(exitedItem);
         continue;  // Will launch goHome immediately
 
       } else {
@@ -418,22 +437,7 @@ void ActivityManager::goToFullScreenMessage(std::string message, EpdFontFamily::
 
 void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
   if (initialMenuItem == HomeMenuItem::NONE && currentActivity) {
-    const auto& activityName = currentActivity->name;
-    if (activityName == "FileBrowser") {
-      initialMenuItem = HomeMenuItem::FILE_BROWSER;
-    } else if (activityName == "Library") {
-      initialMenuItem = HomeMenuItem::LIBRARY;
-    } else if (activityName == "RecentBooks") {
-      initialMenuItem = HomeMenuItem::RECENTS;
-    } else if (activityName == "OpdsBookBrowser") {
-      initialMenuItem = HomeMenuItem::OPDS_BROWSER;
-    } else if (activityName == "CrossPointWebServer") {
-      initialMenuItem = HomeMenuItem::FILE_TRANSFER;
-    } else if (activityName == "NearbyStatsSync") {
-      initialMenuItem = HomeMenuItem::FILE_TRANSFER;
-    } else if (activityName == "Settings") {
-      initialMenuItem = HomeMenuItem::SETTINGS_MENU;
-    }
+    initialMenuItem = homeMenuItemForActivityName(currentActivity->name);
   }
   replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem));
 }
