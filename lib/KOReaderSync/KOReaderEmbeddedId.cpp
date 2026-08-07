@@ -53,15 +53,19 @@ std::string KOReaderEmbeddedId::read(const std::string& epubPath) {
 
   std::string id;
   size_t inflatedSize = 0;
-  if (zip.getInflatedFileSize(SYNC_ID_PATH, &inflatedSize) && inflatedSize > 0 && inflatedSize <= MAX_INFLATED_BYTES) {
-    size_t size = 0;
-    uint8_t* data = zip.readFileToMemory(SYNC_ID_PATH, &size, /*trailingNullByte=*/false);
-    if (data) {
-      id = parse(std::string_view(reinterpret_cast<const char*>(data), size));
-      free(data);  // readFileToMemory hands over a malloc'd buffer
-      if (id.empty()) LOG_ERR("KOSync", "Embedded sync id present but malformed; ignoring");
+  if (zip.getInflatedFileSize(SYNC_ID_PATH, &inflatedSize)) {
+    if (inflatedSize > 0 && inflatedSize <= MAX_INFLATED_BYTES) {
+      size_t size = 0;
+      uint8_t* data = zip.readFileToMemory(SYNC_ID_PATH, &size, /*trailingNullByte=*/false);
+      if (data) {
+        id = parse(std::string_view(reinterpret_cast<const char*>(data), size));
+        free(data);  // readFileToMemory hands over a malloc'd buffer
+        if (id.empty()) LOG_ERR("KOSync", "Embedded sync id present but malformed; ignoring");
+      } else {
+        LOG_ERR("KOSync", "Embedded sync id could not be read");
+      }
     } else {
-      LOG_ERR("KOSync", "Embedded sync id could not be read");
+      LOG_ERR("KOSync", "Embedded sync id has implausible size %zu; ignoring", inflatedSize);
     }
   }
   zip.close();

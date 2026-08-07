@@ -522,11 +522,12 @@ void KOReaderSyncActivity::performUpload() {
     epub.reset();
   }
 
-  // localProgress was pre-computed in EpubReaderActivity before the Epub was released.
+  // localProgress was reconstructed by ensureLocalProgressLoaded() before the Epub was released.
   KOReaderProgress progress;
   progress.document = documentHash;
   progress.progress = localProgress.xpath;
   progress.percentage = localProgress.percentage;
+  LOG_DBG("KOSync", "Upload: doc=%s pct=%.6f", documentHash.c_str(), progress.percentage);
   progress.device = SETTINGS.getEffectiveDeviceName();
 
   // Rich CrossPoint position for the default CrossPoint sync server (lossless
