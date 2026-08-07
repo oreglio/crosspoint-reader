@@ -1826,6 +1826,7 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
             wsLastCompleteAt = millis();
             LOG_DBG("WS", "Zero-byte upload complete: %s", filePath.c_str());
             clearBookCachePreservingUserState(filePath.c_str());
+            library::markShelfStaleIfBook(filePath.c_str());
             wsServer->sendTXT(num, "DONE");
             wsLastProgressSent = 0;
             break;
@@ -1893,6 +1894,7 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
         if (!filePath.endsWith("/")) filePath += "/";
         filePath += wsUploadFileName;
         clearBookCachePreservingUserState(filePath.c_str());
+        library::markShelfStaleIfBook(filePath.c_str());
 
         wsServer->sendTXT(num, "DONE");
         wsLastProgressSent = 0;
