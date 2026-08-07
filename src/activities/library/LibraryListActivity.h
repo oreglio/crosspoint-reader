@@ -75,6 +75,12 @@ class LibraryListActivity final : public Activity {
   // The favorites identity of one visible row: {fnv1a32(basename), fileSize},
   // the same pair the index rebuild reconciles by.
   bool rowKeyFor(int entry, library::FavoriteKey& key);
+  // Put the cursor back on a remembered book, wherever the current view and
+  // order have moved it. An identity search, so it survives everything.
+  void restoreSelection(const library::FavoriteKey& sel);
+  // The selection captured by openSelectedBook before it closes the index, so
+  // onExit can still record which book the reader just left for.
+  library::FavoriteKey exitSelection{};
   void drawSortTabs(int top);
   int tabsTop = 0;
   // Left/Right turn pages, so the strip cannot own that axis outright. It takes

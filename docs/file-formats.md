@@ -668,3 +668,28 @@ fail the same check), keeps at most 512 entries, and sorts and deduplicates
 whatever order the file held. Writes go through `favorites.new` and a rename,
 the same install step the index uses, so a power cut leaves either the old set
 or the new one.
+
+## `/.crosspoint/library.state`
+
+### Version 1
+
+The Library shelf's remembered posture. Preferences rather than primary data:
+the device deep-sleeps between sessions and wakes through a full boot, so RAM
+state alone forgets the shelf several times a day. A lost or corrupt file
+costs nothing but defaults. Code in `lib/LibraryIndex/LibraryState.{h,cpp}`.
+
+Little-endian, exactly 12 bytes:
+
+```
+[u8]  version     currently 1
+[u8]  flags       bit0 favorites view active, bit1 titles descending
+[u8]  shelfSort   SortOrder of the tab strip (0-3)
+[u8]  favSort     SortOrder of the favorites view (0-3)
+[u32] selNameHash \ identity of the selected book — the same
+[u32] selFileSize / {fnv1a32(basename), size} pair favorites key by; 0,0 = none
+```
+
+The selection anchor is an identity rather than a row number, so it survives a
+sort change, a filter and an index rebuild. Written once per shelf exit through
+`library.state.new` and a rename; read at entry, rejecting any wrong version,
+wrong length or out-of-range sort value.

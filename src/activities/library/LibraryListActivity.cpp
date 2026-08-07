@@ -3,6 +3,7 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <LibraryBuilder.h>
+#include <LibraryState.h>
 #include <LibraryText.h>
 #include <Logging.h>
 
@@ -72,14 +73,39 @@ void LibraryListActivity::onEnter() {
   // Corrupt or unreadable favorites degrade to an empty set, logged inside;
   // the shelf itself must never be held up by its smallest file.
   favorites.load();
-  // The view and sort survive as statics, but `filtered` belongs to THIS
-  // instance: without a rebuild here, a restored ★ view opened on an empty
-  // list until the reader wiggled the tabs — which it did, on the device.
+  // The shelf's posture comes back from disk, not from the statics alone:
+  // this reader deep-sleeps between sessions and wakes through a full boot,
+  // so RAM state forgets the shelf several times a day — which read as "the
+  // filters do not save" on the device.
+  library::LibraryShelfState state;
+  library::loadLibraryState(state);
+  sFavoritesView = state.favoritesView;
+  sTitleDescending = state.titleDescending;
+  sSortOrder = state.shelfSort;
+  sFavSortOrder = state.favSort;
+  // `filtered` belongs to THIS instance: without a rebuild here, a restored ★
+  // view opened on an empty list until the reader wiggled the tabs.
   applyFilter();
+  restoreSelection(state.selected);
   requestUpdate(true);
 }
 
 void LibraryListActivity::onExit() {
+  // One write per leave — cursor moves never touch the card. Captured before
+  // the index closes, because the selection anchor needs it; when the index is
+  // already gone (a book was just opened), the anchor openSelectedBook staged
+  // is the right answer anyway: the shelf should reopen on that book.
+  library::LibraryShelfState state;
+  state.favoritesView = sFavoritesView;
+  state.titleDescending = sTitleDescending;
+  state.shelfSort = sSortOrder;
+  state.favSort = sFavSortOrder;
+  if (indexReady) {
+    rowKeyFor(selectedIndex, state.selected);
+  } else {
+    state.selected = exitSelection;
+  }
+  library::saveLibraryState(state);
   index.close();
   Activity::onExit();
 }
@@ -129,11 +155,29 @@ void LibraryListActivity::openSelectedBook() {
     LOG_ERR("LIB", "cannot resolve path for row %d", selectedIndex);
     return;
   }
+  // Staged for onExit: once the index closes, the selection can no longer be
+  // resolved, and the book being opened is exactly the one to come back to.
+  rowKeyFor(selectedIndex, exitSelection);
   // Release the index handle first: on hardware SdFat allows one open reader per
   // path at a time, and the reader is about to open files of its own.
   index.close();
   indexReady = false;
   activityManager.goToReader(std::move(path));
+}
+
+void LibraryListActivity::restoreSelection(const library::FavoriteKey& sel) {
+  if (sel.nameHash == 0 && sel.fileSize == 0) return;
+  const int count = rowCount();
+  for (int entry = 0; entry < count; entry++) {
+    library::FavoriteKey key;
+    if (rowKeyFor(entry, key) && key == sel) {
+      selectedIndex = entry;
+      topIndex = entry;
+      return;
+    }
+  }
+  // Gone, filtered out, or renamed: the cursor stays at the top rather than
+  // landing somewhere that merely shares a row number with the past.
 }
 
 bool LibraryListActivity::rowKeyFor(const int entry, library::FavoriteKey& key) {
