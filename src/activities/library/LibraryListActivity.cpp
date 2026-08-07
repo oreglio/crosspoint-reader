@@ -43,6 +43,10 @@ library::SortOrder sFavSortOrder = library::SortOrder::DateDesc;
 // Every row lookup goes through the order of the ACTIVE view.
 library::SortOrder currentOrder() { return sFavoritesView ? sFavSortOrder : sSortOrder; }
 
+// One threshold for every hold on this screen, so the gesture feels the same
+// wherever the reader tries it.
+constexpr unsigned long kHoldMs = 800;
+
 }  // namespace
 
 LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -839,7 +843,7 @@ void LibraryListActivity::loop() {
     // Dispatched on release, by held time, so one press means exactly one
     // thing. A hold is the secondary action of the FOCUSED context — the rule
     // the whole gesture map follows.
-    if (mappedInput.getHeldTime() >= 800) {
+    if (mappedInput.getHeldTime() >= kHoldMs) {
       // The hold is the secondary action of what is focused. On the strip's
       // Titles tab it flips the direction — the triangle and the header both
       // change, so the flip explains itself. On a book row it opens the row's
@@ -892,6 +896,10 @@ void LibraryListActivity::loop() {
   // is 34 presses to the middle and paging is 5.
   // The strip stays navigable at zero rows — an empty ★ view is exactly when
   // the reader needs to move to another tab rather than being trapped.
+  // Holding Left goes all the way back instead of one page: the top of the list
+  // is an exact place. Its end deliberately has no such shortcut — a page's size
+  // is only known once drawn, so a jump there would land near the last book
+  // rather than on it, which is not what "last page" promises.
   if (mappedInput.wasReleased(MappedInputManager::Button::Right) && (tabsFocused || count > 0)) {
     if (tabsFocused) {
       cycleSortOrder(/*forward=*/true);
@@ -903,6 +911,13 @@ void LibraryListActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Left) && (tabsFocused || count > 0)) {
     if (tabsFocused) {
       cycleSortOrder(/*forward=*/false);
+    } else if (mappedInput.getHeldTime() >= kHoldMs) {
+      // The visited-page history is a path; jumping off it makes those
+      // boundaries meaningless, exactly as the letter jump does.
+      selectedIndex = 0;
+      topIndex = 0;
+      pageStarts.clear();
+      requestUpdate();
     } else {
       previousPage();
     }
