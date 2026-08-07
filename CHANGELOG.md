@@ -24,6 +24,7 @@
 ### Fixed
 
 - Books uploaded through the fast (WebSocket) upload path now appear in the Library without a manual index rebuild.
+- Filenames that list the same author twice — the shape export tools leave behind, as in `Henry S_ Warren, Henry S_ Warren Jr` — no longer have that name rearranged into nonsense on the shelf. Authors written surname-first still read the right way round, so `Austen, Jane` shows as `Jane Austen`.
 
 ## [v1.5.0] - 2026-08-04
 

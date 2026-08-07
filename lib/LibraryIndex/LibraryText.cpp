@@ -335,7 +335,17 @@ std::string cleanPersonName(const std::string_view author) {
     std::string_view first(collapsed.data() + comma + 1, collapsed.size() - comma - 1);
     while (!first.empty() && first.front() == ' ') first.remove_prefix(1);
     while (!last.empty() && last.back() == ' ') last.remove_suffix(1);
-    if (!first.empty() && !last.empty()) {
+    // A given name is one or two words plus the odd initial, never four. Past
+    // that bound the comma is not an inversion but an exporter artifact —
+    // "Henry S_ Warren, Henry S_ Warren Jr" is one author listed twice, and
+    // turning it round yields "Henry S Warren Jr Henry S Warren". Refusing to
+    // invert shows the name exactly as the filename spells it, which is wrong in
+    // no way the reader can see.
+    size_t givenWords = first.empty() ? 0 : 1;
+    for (const char c : first) {
+      if (c == ' ') givenWords++;
+    }
+    if (!first.empty() && !last.empty() && givenWords <= 3) {
       std::string swapped;
       swapped.reserve(collapsed.size());
       swapped.append(first);

@@ -317,6 +317,20 @@ TEST(CleanPersonName, MultipleCommasAreLeftAlone) {
 
 TEST(CleanPersonName, DanglingCommaIsNotAnInversion) { EXPECT_EQ(library::cleanPersonName("Austen,"), "Austen"); }
 
+// Export tools list one author twice ("Henry S_ Warren, Henry S_ Warren Jr").
+// That is a single comma, so the inversion rule used to fire and scramble a name
+// the filename spelled correctly. A given name of four words is not a given name.
+TEST(CleanPersonName, DuplicatedAuthorArtifactIsNotInverted) {
+  EXPECT_EQ(library::cleanPersonName("Henry S_ Warren, Henry S_ Warren Jr"), "Henry S Warren, Henry S Warren Jr");
+}
+
+// The bound must not cost the cases the inversion exists for: a given name with
+// initials still turns round.
+TEST(CleanPersonName, GivenNamesWithInitialsStillInvert) {
+  EXPECT_EQ(library::cleanPersonName("Wells, Herbert G."), "Herbert G Wells");
+  EXPECT_EQ(library::cleanPersonName("Tolkien, John Ronald Reuel"), "John Ronald Reuel Tolkien");
+}
+
 // --- surnameKey --------------------------------------------------------------
 
 TEST(SurnameKey, SurnameLeadsThenGivenNames) {
