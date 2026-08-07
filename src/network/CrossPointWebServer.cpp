@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <BoardConfig.h>
+#include <LibraryFavoritesFile.h>
 #include <LibraryState.h>
 #ifdef SIMULATOR
 #include <ArduinoJsonStringCompat.h>
@@ -322,6 +323,9 @@ void CrossPointWebServer::begin() {
 
   // Delete file/folder endpoint
   server->on("/delete", HTTP_POST, [this] { handleDelete(); });
+
+  // Swap a book for its optimized staging copy (Optimize on device)
+  server->on("/replace", HTTP_POST, [this] { handleReplace(); });
 
   // Settings endpoints
   server->on("/settings", HTTP_GET, [this] { handleSettingsPage(); });
@@ -1257,6 +1261,105 @@ void CrossPointWebServer::handleDelete() const {
   } else {
     server->send(500, "text/plain", "Failed to delete some items: " + failedItems);
   }
+}
+
+void CrossPointWebServer::handleReplace() const {
+  if (!server->hasArg("path") || !server->hasArg("staging")) {
+    server->send(400, "text/plain", "Missing path or staging");
+    return;
+  }
+
+  const String targetPath = normalizeWebPath(server->arg("path"));
+  const String stagingPath = normalizeWebPath(server->arg("staging"));
+  if (targetPath.isEmpty() || targetPath == "/" || stagingPath.isEmpty() || stagingPath == "/") {
+    server->send(400, "text/plain", "Invalid path");
+    return;
+  }
+  if (isProtectedPath(targetPath) || isProtectedPath(stagingPath)) {
+    server->send(403, "text/plain", "Protected path");
+    return;
+  }
+  if (!stagingPath.endsWith(".optimizing")) {
+    server->send(400, "text/plain", "Staging must end with .optimizing");
+    return;
+  }
+  const String targetParent = targetPath.substring(0, targetPath.lastIndexOf('/'));
+  const String stagingParent = stagingPath.substring(0, stagingPath.lastIndexOf('/'));
+  if (targetParent != stagingParent) {
+    server->send(400, "text/plain", "Staging must sit beside the target");
+    return;
+  }
+
+  uint32_t oldSize = 0;
+  {
+    HalFile target = Storage.open(targetPath.c_str());
+    if (!target) {
+      server->send(404, "text/plain", "Target not found");
+      return;
+    }
+    if (target.isDirectory()) {
+      target.close();
+      server->send(400, "text/plain", "Target is a directory");
+      return;
+    }
+    oldSize = static_cast<uint32_t>(target.fileSize());
+    target.close();
+  }
+
+  uint32_t newSize = 0;
+  {
+    HalFile staging = Storage.open(stagingPath.c_str());
+    if (!staging) {
+      server->send(404, "text/plain", "Staging not found");
+      return;
+    }
+    if (staging.isDirectory()) {
+      staging.close();
+      server->send(400, "text/plain", "Staging is a directory");
+      return;
+    }
+    newSize = static_cast<uint32_t>(staging.fileSize());
+    staging.close();
+    if (newSize == 0) {
+      server->send(400, "text/plain", "Staging is empty");
+      return;
+    }
+  }
+
+  // Derived cache dropped, reading position and stats kept — same path, same
+  // cache dir, so the preserved files greet the optimized copy.
+  clearBookCachePreservingUserState(targetPath.c_str());
+
+  // The only moment without two complete copies: delete + rename, entirely
+  // inside the firmware, Wi-Fi-independent.
+  if (!Storage.remove(targetPath.c_str())) {
+    LOG_ERR("WEB", "Replace: cannot remove %s", targetPath.c_str());
+    server->send(500, "text/plain", "Cannot remove original");
+    return;
+  }
+  {
+    HalFile staging = Storage.open(stagingPath.c_str());
+    const bool renamed = staging && staging.rename(targetPath.c_str());
+    if (staging) staging.close();
+    if (!renamed) {
+      // The book still exists — in the staging file. Say so instead of guessing.
+      LOG_ERR("WEB", "Replace: original removed but rename failed; book lives at %s", stagingPath.c_str());
+      server->send(500, "text/plain", "Rename failed - book preserved in staging file");
+      return;
+    }
+  }
+
+  // Same name, new size: the star and the remembered cursor follow.
+  const String base = targetPath.substring(targetPath.lastIndexOf('/') + 1);
+  const library::FavoriteKey from{library::favoriteNameHash(base.c_str(), base.length()), oldSize};
+  const library::FavoriteKey to{from.nameHash, newSize};
+  library::LibraryFavoritesFile favorites;
+  if (favorites.load()) favorites.reanchor(from, to);
+  library::reanchorLibraryStateSelection(from, to);
+
+  library::markShelfStaleIfBook(targetPath.c_str());
+  LOG_DBG("WEB", "Replaced %s (%u -> %u bytes)", targetPath.c_str(), oldSize, newSize);
+  server->send(200, "application/json", "{\"ok\":true}");
 }
 
 void CrossPointWebServer::handleSettingsPage() const {
