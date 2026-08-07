@@ -114,6 +114,12 @@ h2 {
 .modal.image-preview-mode {
       max-width: 640px;
     }
+.optimize-mode .drop-zone,
+    .optimize-mode .convert-options,
+    .optimize-mode #uploadBtn,
+    .optimize-mode #startConversionBtn {
+      display: none !important;
+    }
 .image-preview-stage {
       display: flex;
       justify-content: center;
@@ -1058,7 +1064,8 @@ h2 {
     .delete-btn,
     .rename-btn,
     .move-btn,
-    .dl-btn {
+    .dl-btn,
+    .optimize-btn {
       background: none;
       border: none;
       cursor: pointer;
@@ -1093,6 +1100,13 @@ h2 {
 .dl-btn:hover {
       background-color: var(--accent-soft);
       color: var(--accent-hover-color);
+    }
+.optimize-btn {
+      color: #7c3aed;
+    }
+.optimize-btn:hover {
+      background-color: rgba(124, 58, 237, 0.1);
+      color: #6d28d9;
     }
 @media (max-width: 600px) {
       .dl-btn {

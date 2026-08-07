@@ -212,6 +212,9 @@ async function hydrate() {
         fileTableContent += `<td class="c-size">${formatFileSize(file.size)}</td>`;
         fileTableContent += `<td class="actions-col"><div class="action-icon-group">`;
         fileTableContent += `<button class="dl-btn file-action-btn" data-action="download" data-name="${escapeHtml(file.name)}" data-path="${encodeURIComponent(filePath)}" title="Download">⬇</button>`;
+        if (file.isEpub) {
+          fileTableContent += `<button class="optimize-btn file-action-btn" data-action="optimize" data-name="${escapeHtml(file.name)}" data-path="${encodeURIComponent(filePath)}" title="Optimize on device">⚡</button>`;
+        }
         fileTableContent += `<button class="move-btn file-action-btn" data-action="move" data-name="${escapeHtml(file.name)}" data-path="${encodeURIComponent(filePath)}" title="Move file">📂</button>`;
         fileTableContent += `<button class="rename-btn file-action-btn" data-action="rename" data-name="${escapeHtml(file.name)}" data-path="${encodeURIComponent(filePath)}" title="Rename file">✏️</button>`;
         fileTableContent += `<button class="delete-btn file-action-btn" data-action="delete" data-name="${escapeHtml(file.name)}" data-path="${encodeURIComponent(filePath)}" data-is-folder="false" title="Delete file">🗑️</button>`;
@@ -276,6 +279,8 @@ function handleFileActionClick(event) {
     openRenameModal(name, path);
   } else if (button.dataset.action === "delete") {
     openDeleteModal(name, path, button.dataset.isFolder === "true");
+  } else if (button.dataset.action === "optimize") {
+    runOptimizeQueue([{ path, name }]);
   }
 }
 
@@ -340,7 +345,7 @@ function closeUploadModal() {
   if (isUploadInProgress) {
     return;
   }
-  document.getElementById("uploadModal").classList.remove("open");
+  document.getElementById("uploadModal").classList.remove("open", "optimize-mode");
   const fileInput = document.getElementById("fileInput");
   fileInput.value = "";
   fileInput.classList.remove("has-files");
@@ -2139,6 +2144,112 @@ function parseSyncIdentityId(text) {
   return m ? m[1] : null;
 }
 // --- end sync-identity ---
+
+const OPTIMIZING_SUFFIX = ".optimizing";
+
+async function deleteDevicePath(path) {
+  try {
+    await fetch("/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "path=" + encodeURIComponent(path),
+    });
+  } catch (e) {
+    console.warn("cleanup delete failed:", path, e);
+  }
+}
+
+/**
+ * Optimize one on-card book in place. Phases via onPhase(label, pct 0-100).
+ * Returns {skipped:true} for already-optimized books. Throws on failure —
+ * the original is untouched; staging is cleaned up here on a failed replace.
+ */
+async function optimizeBookOnDevice(filePath, fileName, onPhase) {
+  onPhase("Downloading", 2);
+  const resp = await fetch(downloadUrl(filePath));
+  if (!resp.ok) throw new Error("Download failed: " + resp.status);
+  const blob = await resp.blob();
+
+  onPhase("Checking", 20);
+  const zip = await JSZip.loadAsync(blob);
+  const lower = Object.keys(zip.files).map((p) => p.toLowerCase());
+  if (lower.includes(SYNC_IDENTITY_PATH.toLowerCase()) || lower.includes(X_LOCATION_MANIFEST_PATH.toLowerCase())) {
+    return { skipped: true };
+  }
+
+  const original = new File([blob], fileName, { type: "application/epub+zip" });
+  const converted = await convertEpubFile(original, (p) => onPhase("Optimizing", 20 + p * 0.45), {
+    forceSyncIdentity: true,
+  });
+
+  const stagingPath = filePath + OPTIMIZING_SUFFIX;
+  const stagingName = fileName + OPTIMIZING_SUFFIX;
+  const bookDir = filePath.slice(0, filePath.lastIndexOf("/")) || "/";
+  await deleteDevicePath(stagingPath); // orphan from a previous failed run
+
+  onPhase("Uploading", 68);
+  const stagingFile = new File([converted], stagingName, { type: "application/octet-stream" });
+  await uploadFileWebSocket(
+    stagingFile,
+    (loaded, total) => onPhase("Uploading", 68 + Math.round((loaded / total) * 27)),
+    null,
+    null,
+    bookDir,
+  );
+
+  onPhase("Replacing", 96);
+  const form = new FormData();
+  form.append("path", filePath);
+  form.append("staging", stagingPath);
+  const rep = await fetch("/replace", { method: "POST", body: form });
+  if (!rep.ok) {
+    await deleteDevicePath(stagingPath);
+    throw new Error("Replace failed: " + (await rep.text()));
+  }
+  onPhase("Done", 100);
+  return { replaced: true, oldSize: blob.size, newSize: converted.size };
+}
+
+/** Sequential queue over [{path, name}]; drives the upload modal in optimize mode. */
+async function runOptimizeQueue(items) {
+  if (!items.length) return;
+  if (items.length > 1 && !confirm(`Optimize ${items.length} books? Each original is replaced in place (reading progress and favorites are kept).`)) {
+    return;
+  }
+  const progressFill = document.getElementById("progress-fill");
+  const progressText = document.getElementById("progress-text");
+  document.getElementById("uploadModal").classList.add("open", "optimize-mode");
+  document.getElementById("progress-container").style.display = "block";
+  clearLog();
+  showLog();
+
+  let done = 0, skipped = 0, failed = 0;
+  for (let i = 0; i < items.length; i++) {
+    const { path, name } = items[i];
+    const label = `(${i + 1}/${items.length}) ${name}`;
+    try {
+      const result = await optimizeBookOnDevice(path, name, (phase, pct) => {
+        progressFill.style.width = pct + "%";
+        progressText.textContent = `${phase} ${label}`;
+      });
+      if (result.skipped) {
+        skipped++;
+        log(`Already optimized — skipped: ${name}`, "", "INFO");
+      } else {
+        done++;
+        log(`Optimized: ${name} (${formatBytes(result.oldSize)} → ${formatBytes(result.newSize)})`, "success", "DONE");
+      }
+    } catch (err) {
+      failed++;
+      console.error("Optimize failed:", name, err);
+      logError(`Failed (original untouched): ${name} — ${err.message}`);
+    }
+  }
+  progressFill.style.width = "100%";
+  progressText.textContent = `Optimize complete: ${done} optimized · ${skipped} already optimized · ${failed} failed`;
+  log(`Summary: ${done} optimized · ${skipped} already optimized · ${failed} failed`, "", "DONE");
+  await hydrate(); // refresh the listing without a full reload
+}
 
 /** First defined namespaceURI walking node -> ancestors, else the fallback. */
 function inheritedNs(nodes, fallback) {
@@ -4047,7 +4158,7 @@ function imageMimeType(filename) {
 }
 
 // Convert EPUB file - returns converted blob
-async function convertEpubFile(file, progressCallback) {
+async function convertEpubFile(file, progressCallback, opts = {}) {
   const startTime = Date.now();
   const originalSize = file.size;
 
@@ -4068,7 +4179,7 @@ async function convertEpubFile(file, progressCallback) {
   // is still the original's identity. If the source already carries one
   // (re-optimizing an optimized book), preserve it — recomputing here would
   // capture the optimized bytes, not the true original's.
-  const preserveSyncIdentity = !!document.getElementById("preserveSyncIdentityToggle")?.checked;
+  const preserveSyncIdentity = opts.forceSyncIdentity === true || !!document.getElementById("preserveSyncIdentityToggle")?.checked;
   let syncIdentityJson = null;
   if (preserveSyncIdentity) {
     try {
@@ -4519,7 +4630,7 @@ function getWsUrl() {
 }
 
 // Upload file via WebSocket (faster, binary protocol)
-function uploadFileWebSocket(file, onProgress, onComplete, onError) {
+function uploadFileWebSocket(file, onProgress, onComplete, onError, destPath = currentPath) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(getWsUrl());
     currentUploadWs = ws;
@@ -4532,7 +4643,7 @@ function uploadFileWebSocket(file, onProgress, onComplete, onError) {
     ws.onopen = function () {
       console.log("[WS] Connected, starting upload:", file.name);
       // Send start message: START:<filename>:<size>:<path>
-      ws.send(`START:${file.name}:${file.size}:${currentPath}`);
+      ws.send(`START:${file.name}:${file.size}:${destPath}`);
     };
 
     ws.onmessage = async function (event) {
