@@ -78,7 +78,8 @@ beta. That is the accepted price of having no persistent setting.
 | Stable | `/releases/latest` | GitHub excludes prereleases from this route natively, so the stable channel is protected without any code |
 | Beta | `/releases?per_page=1` | Returns the newest release of any kind, prereleases included |
 
-`checkForUpdate()` gains a `Channel` argument. Nothing else in the request changes.
+`setChannel()` is called before `checkForUpdate()`, which reads it. Nothing else in
+the request changes.
 
 Because `/releases` is ordered by creation date, a stable published after a beta is the
 one a beta device sees — a beta channel is "everything, newest first", not "betas only".
@@ -88,11 +89,11 @@ That is the behaviour we want: a tester is never stranded behind the stable line
 
 `ReleaseJsonParser` gains `setExpectArray(bool)`. When set:
 
-- the first top-level `[` sets `arrayEntered_` and does **not** increment `depth`, so the
+- the first top-level `[` sets `arrayEntered` and does **not** increment `depth`, so the
   release object inside it still lands at `depth == 1` and every existing rule applies
   unchanged;
 - the matching `]` clears it;
-- once a top-level release object has closed with a tag found, `completed_` is set and
+- once a top-level release object has closed with a tag found, `completed` is set and
   later keys are ignored, so a body with more than one element still yields the first.
 
 Everything else about the parser is untouched. `test/release_json_parser/` already exists
