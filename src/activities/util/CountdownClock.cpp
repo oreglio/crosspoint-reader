@@ -41,9 +41,14 @@ void formatCountdownRemaining(const int seconds, char* buf, const size_t len) {
   const int total = std::max(0, seconds);
   if (total >= kSecondsPerHour) {
     snprintf(buf, len, "%dh%02d", total / kSecondsPerHour, (total % kSecondsPerHour) / 60);
-  } else {
-    snprintf(buf, len, "%d:%02d", total / 60, total % 60);
+    return;
   }
+  // Snapped to the same ten-second grid the repaint uses. The repaint fires one
+  // second past each boundary, so the unsnapped value would always read 59, 49,
+  // 39 — technically right and visibly wrong. Deriving both from one division
+  // means the shown figure and the moment it changes cannot drift apart.
+  const int snapped = total / kFineTickSeconds * kFineTickSeconds;
+  snprintf(buf, len, "%d:%02d", snapped / 60, snapped % 60);
 }
 
 int countdownDisplayTick(const int seconds) {

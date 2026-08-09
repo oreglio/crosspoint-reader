@@ -55,19 +55,32 @@ TEST(CountdownClockFormat, ShowsSecondsBelowAnHourAndHoursAbove) {
   char buf[16];
   formatCountdownRemaining(0, buf, sizeof(buf));
   EXPECT_STREQ(buf, "0:00");
-  formatCountdownRemaining(9, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "0:09");
   formatCountdownRemaining(70, buf, sizeof(buf));
   EXPECT_STREQ(buf, "1:10");
   formatCountdownRemaining(25 * 60, buf, sizeof(buf));
   EXPECT_STREQ(buf, "25:00");
-  formatCountdownRemaining(59 * 60 + 59, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "59:59");
   // At an hour and beyond the seconds stop earning their place.
   formatCountdownRemaining(3600, buf, sizeof(buf));
   EXPECT_STREQ(buf, "1h00");
   formatCountdownRemaining(3600 + 5 * 60 + 40, buf, sizeof(buf));
   EXPECT_STREQ(buf, "1h05");
+}
+
+TEST(CountdownClockFormat, SecondsLandOnTensNeverOnStragglers) {
+  // The repaint fires one second past each ten-second boundary, so the raw value
+  // there ends in 9. Snapping the shown value to the same grid the tick uses is
+  // what puts it on 50, 40, 30 instead of 59, 49, 39.
+  char buf[16];
+  formatCountdownRemaining(25 * 60 - 1, buf, sizeof(buf));
+  EXPECT_STREQ(buf, "24:50");
+  formatCountdownRemaining(25 * 60 - 11, buf, sizeof(buf));
+  EXPECT_STREQ(buf, "24:40");
+  formatCountdownRemaining(9, buf, sizeof(buf));
+  EXPECT_STREQ(buf, "0:00");
+  formatCountdownRemaining(19, buf, sizeof(buf));
+  EXPECT_STREQ(buf, "0:10");
+  formatCountdownRemaining(59 * 60 + 59, buf, sizeof(buf));
+  EXPECT_STREQ(buf, "59:50");
 }
 
 TEST(CountdownClockFormat, TheRepaintTickFollowsTheFormat) {
