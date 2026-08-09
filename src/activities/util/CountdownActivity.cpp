@@ -130,18 +130,18 @@ void CountdownActivity::startCountdown() {
     // The RTC answered in onEnter(); if it stops answering now, the stated time
     // is the best reference left rather than a failed countdown.
     reference = now >= 0 ? now : nowHour * 60 + nowMinute;
-    clock.startWallClock(reference, CountdownClock::spanTo(target, reference));
+    clock.start(millis(), CountdownClock::spanTo(target, reference));
   } else {
     reference = nowHour * 60 + nowMinute;
     // millis() is a safe time base here: the activity blocks deep sleep while
     // counting, so the counter cannot be reset under us, and esp_timer is
     // compensated across the CPU frequency drop to LOW_POWER_FREQ.
-    clock.startMonotonic(millis(), CountdownClock::spanTo(target, reference));
+    clock.start(millis(), CountdownClock::spanTo(target, reference));
   }
 
-  lastShownMinute = -1;
+  lastDisplayTick = -1;
   wasOvertime = false;
-  lastFullRefreshMinute = 0;
+  repaintsSinceFullRefresh = 0;
   // The picker's hint lines sit almost exactly where the running screen puts
   // "Elapsed", so a fast refresh here superimposes the two.
   pendingFullRefresh = true;
@@ -152,16 +152,13 @@ void CountdownActivity::startCountdown() {
 }
 
 void CountdownActivity::refreshElapsed() {
-  if (useWallClock) {
-    const int now = localMinuteOfDay();
-    if (now < 0) return;
-    clock.updateWallClock(now);
-  } else {
-    clock.updateMonotonic(millis());
-  }
+  clock.update(millis());
 
-  if (clock.elapsedMinutes() != lastShownMinute) {
-    lastShownMinute = clock.elapsedMinutes();
+  // Repaint exactly when the rendered string would change: every 10s while the
+  // display carries seconds, every minute once it only shows hours.
+  const int tick = countdownDisplayTick(clock.finished() ? clock.overshootSeconds() : clock.remainingSeconds());
+  if (tick != lastDisplayTick) {
+    lastDisplayTick = tick;
     requestUpdate();
   }
 }
@@ -266,10 +263,10 @@ void CountdownActivity::renderRunning() {
   char bigValue[16];
   if (overtime) {
     char span[12];
-    formatCountdownSpan(clock.overshootMinutes(), span, sizeof(span));
+    formatCountdownRemaining(clock.overshootSeconds(), span, sizeof(span));
     snprintf(bigValue, sizeof(bigValue), "+%s", span);
   } else {
-    formatCountdownSpan(clock.remainingMinutes(), bigValue, sizeof(bigValue));
+    formatCountdownRemaining(clock.remainingSeconds(), bigValue, sizeof(bigValue));
   }
 
   const int valueHeight = renderer.getLineHeight(UI_12_FONT_ID);
@@ -284,7 +281,7 @@ void CountdownActivity::renderRunning() {
   renderer.drawCenteredText(SMALL_FONT_ID, blockTop + valueHeight + 4, label.c_str(), true);
 
   char elapsedText[12];
-  formatCountdownSpan(std::min(clock.elapsedMinutes(), clock.spanMinutes()), elapsedText, sizeof(elapsedText));
+  formatCountdownRemaining(std::min(clock.elapsedSeconds(), clock.spanSeconds()), elapsedText, sizeof(elapsedText));
   char line[80];
   snprintf(line, sizeof(line), "%s %02d:%02d \xC2\xB7 %s %s", tr(STR_COUNTDOWN_TARGET), targetHour, targetMinute,
            tr(STR_COUNTDOWN_ELAPSED), elapsedText);
@@ -312,8 +309,10 @@ void CountdownActivity::render(RenderLock&&) {
       wasOvertime = overtime;
       pendingFullRefresh = true;
     }
-    if (clock.elapsedMinutes() - lastFullRefreshMinute >= kFullRefreshEveryMinutes) {
-      lastFullRefreshMinute = clock.elapsedMinutes();
+    // Counted in repaints, not minutes: at one every ten seconds the residue
+    // from fast refreshes builds six times faster than it used to.
+    if (++repaintsSinceFullRefresh >= kRepaintsPerFullRefresh) {
+      repaintsSinceFullRefresh = 0;
       pendingFullRefresh = true;
     }
     renderRunning();

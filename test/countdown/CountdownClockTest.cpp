@@ -8,88 +8,75 @@ TEST(CountdownClockSpan, TargetEarlierTodayMeansTomorrow) { EXPECT_EQ(CountdownC
 
 TEST(CountdownClockSpan, TargetEqualToNowMeansAFullDay) { EXPECT_EQ(CountdownClock::spanTo(600, 600), 1440); }
 
-TEST(CountdownClockWallClock, ElapsedTracksTheReading) {
+TEST(CountdownClock, CountsDownToTheSecond) {
   CountdownClock clock;
-  clock.startWallClock(/*startMinuteOfDay=*/600, /*spanMinutes=*/30);
-  clock.updateWallClock(612);
-  EXPECT_EQ(clock.elapsedMinutes(), 12);
-  EXPECT_EQ(clock.remainingMinutes(), 18);
+  clock.start(/*startMs=*/1000, /*spanMinutes=*/25);
+  EXPECT_EQ(clock.remainingSeconds(), 25 * 60);
   EXPECT_FALSE(clock.finished());
-  EXPECT_EQ(clock.overshootMinutes(), 0);
-  EXPECT_TRUE(clock.usesWallClock());
-}
 
-TEST(CountdownClockWallClock, CrossesMidnightWithoutRestarting) {
-  CountdownClock clock;
-  clock.startWallClock(/*startMinuteOfDay=*/1400, /*spanMinutes=*/100);
-  clock.updateWallClock(1430);
-  EXPECT_EQ(clock.elapsedMinutes(), 30);
-  clock.updateWallClock(10);  // 00:10, past midnight
-  EXPECT_EQ(clock.elapsedMinutes(), 50);
-  EXPECT_FALSE(clock.finished());  // 50 of a 100-minute span
-  EXPECT_EQ(clock.overshootMinutes(), 0);
-  clock.updateWallClock(1399);
-  EXPECT_EQ(clock.elapsedMinutes(), 1439);
-  clock.updateWallClock(1400);  // exactly 24h after the start
-  EXPECT_EQ(clock.elapsedMinutes(), 1440);
-  clock.updateWallClock(1410);
-  EXPECT_EQ(clock.elapsedMinutes(), 1450);
-  // and a second midnight, to prove the rollover accumulates rather than toggles
-  clock.updateWallClock(1399);
-  EXPECT_EQ(clock.elapsedMinutes(), 2879);
-  clock.updateWallClock(1400);
-  EXPECT_EQ(clock.elapsedMinutes(), 2880);
-}
-
-TEST(CountdownClockWallClock, OvershootCountsPastTheSpan) {
-  CountdownClock clock;
-  clock.startWallClock(600, 30);
-  clock.updateWallClock(645);
-  EXPECT_TRUE(clock.finished());
-  EXPECT_EQ(clock.remainingMinutes(), 0);
-  EXPECT_EQ(clock.overshootMinutes(), 15);
-}
-
-TEST(CountdownClockMonotonic, ElapsedIsWholeMinutes) {
-  CountdownClock clock;
-  clock.startMonotonic(/*startMs=*/1000, /*spanMinutes=*/25);
-  clock.updateMonotonic(1000 + 59'999);
+  clock.update(1000 + 20'000);
+  EXPECT_EQ(clock.elapsedSeconds(), 20);
+  EXPECT_EQ(clock.remainingSeconds(), 25 * 60 - 20);
   EXPECT_EQ(clock.elapsedMinutes(), 0);
-  clock.updateMonotonic(1000 + 60'000);
+
+  clock.update(1000 + 90'000);
+  EXPECT_EQ(clock.elapsedSeconds(), 90);
   EXPECT_EQ(clock.elapsedMinutes(), 1);
-  EXPECT_FALSE(clock.usesWallClock());
 }
 
-TEST(CountdownClockMonotonic, SurvivesTheMillisWrap) {
+TEST(CountdownClock, OvershootCountsUpPastTheTarget) {
+  CountdownClock clock;
+  clock.start(0, 2);
+  clock.update(150'000);  // 2m30 into a 2m span
+  EXPECT_TRUE(clock.finished());
+  EXPECT_EQ(clock.remainingSeconds(), 0);
+  EXPECT_EQ(clock.overshootSeconds(), 30);
+}
+
+TEST(CountdownClock, SurvivesTheMillisWrap) {
   CountdownClock clock;
   const unsigned long nearMax = 0xFFFFFF00UL;
-  clock.startMonotonic(nearMax, 25);
-  clock.updateMonotonic(nearMax + 120'000UL);  // wraps through zero
-  EXPECT_EQ(clock.elapsedMinutes(), 2);
+  clock.start(nearMax, 25);
+  clock.update(nearMax + 120'000UL);  // wraps through zero
+  EXPECT_EQ(clock.elapsedSeconds(), 120);
 }
 
 TEST(CountdownClockFraction, GoesFromOneToZeroAndStopsThere) {
   CountdownClock clock;
-  clock.startWallClock(600, 20);
+  clock.start(0, 20);
   EXPECT_FLOAT_EQ(clock.fractionRemaining(), 1.0f);
-  clock.updateWallClock(610);
+  clock.update(10 * 60'000);
   EXPECT_FLOAT_EQ(clock.fractionRemaining(), 0.5f);
-  clock.updateWallClock(630);
+  clock.update(30 * 60'000);
   EXPECT_FLOAT_EQ(clock.fractionRemaining(), 0.0f);
 }
 
-TEST(CountdownClockFormat, ReadsAsHoursOnlyPastTheHour) {
+TEST(CountdownClockFormat, ShowsSecondsBelowAnHourAndHoursAbove) {
   char buf[16];
-  formatCountdownSpan(0, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "0m");
-  formatCountdownSpan(42, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "42m");
-  formatCountdownSpan(59, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "59m");
-  formatCountdownSpan(60, buf, sizeof(buf));
+  formatCountdownRemaining(0, buf, sizeof(buf));
+  EXPECT_STREQ(buf, "0:00");
+  formatCountdownRemaining(9, buf, sizeof(buf));
+  EXPECT_STREQ(buf, "0:09");
+  formatCountdownRemaining(70, buf, sizeof(buf));
+  EXPECT_STREQ(buf, "1:10");
+  formatCountdownRemaining(25 * 60, buf, sizeof(buf));
+  EXPECT_STREQ(buf, "25:00");
+  formatCountdownRemaining(59 * 60 + 59, buf, sizeof(buf));
+  EXPECT_STREQ(buf, "59:59");
+  // At an hour and beyond the seconds stop earning their place.
+  formatCountdownRemaining(3600, buf, sizeof(buf));
   EXPECT_STREQ(buf, "1h00");
-  formatCountdownSpan(65, buf, sizeof(buf));
+  formatCountdownRemaining(3600 + 5 * 60 + 40, buf, sizeof(buf));
   EXPECT_STREQ(buf, "1h05");
-  formatCountdownSpan(1440, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "24h00");
+}
+
+TEST(CountdownClockFormat, TheRepaintTickFollowsTheFormat) {
+  // Below an hour the display carries seconds, so it must tick every 10s;
+  // above it only the hour and minute show, so once a minute is enough.
+  // 1500..1509 all floor into the same ten-second bucket; 1499 does not.
+  EXPECT_EQ(countdownDisplayTick(1500), countdownDisplayTick(1509));
+  EXPECT_NE(countdownDisplayTick(1500), countdownDisplayTick(1499));
+  // Past the hour the bucket is a whole minute.
+  EXPECT_EQ(countdownDisplayTick(7200), countdownDisplayTick(7259));
+  EXPECT_NE(countdownDisplayTick(7200), countdownDisplayTick(7199));
 }

@@ -142,9 +142,9 @@ void PomodoroActivity::prepareStep(const int index, const Gate initialGate) {
   stepIndex = index;
   gate = initialGate;
   const PomodoroStep step = PomodoroSchedule::stepAt(durations, stepIndex);
-  clock.startMonotonic(millis(), step.minutes);
-  lastShownMinute = -1;
-  lastFullRefreshMinute = 0;
+  clock.start(millis(), step.minutes);
+  lastDisplayTick = -1;
+  repaintsSinceFullRefresh = 0;
   pendingFullRefresh = true;
   LOG_INF("PMD", "step %d: %s %d min (%s)", stepIndex, step.phase == PomodoroPhase::Work ? "work" : "break",
           step.minutes, initialGate == Gate::Ready ? "ready" : "running");
@@ -155,9 +155,9 @@ void PomodoroActivity::beginRunning() {
   gate = Gate::Running;
   // Restart the clock here, not when the step was prepared: the countdown must
   // measure from the press, however long the screen sat waiting for it.
-  clock.startMonotonic(millis(), PomodoroSchedule::stepAt(durations, stepIndex).minutes);
-  lastShownMinute = -1;
-  lastFullRefreshMinute = 0;
+  clock.start(millis(), PomodoroSchedule::stepAt(durations, stepIndex).minutes);
+  lastDisplayTick = -1;
+  repaintsSinceFullRefresh = 0;
   pendingFullRefresh = true;
   requestUpdate();
 }
@@ -193,7 +193,7 @@ void PomodoroActivity::loop() {
 
   if (gate != Gate::Running) return;  // nothing ticks while a gate is held
 
-  clock.updateMonotonic(millis());
+  clock.update(millis());
 
   if (clock.finished()) {
     gate = Gate::Finished;
@@ -202,8 +202,9 @@ void PomodoroActivity::loop() {
     return;
   }
 
-  if (clock.elapsedMinutes() != lastShownMinute) {
-    lastShownMinute = clock.elapsedMinutes();
+  const int tick = countdownDisplayTick(clock.finished() ? clock.overshootSeconds() : clock.remainingSeconds());
+  if (tick != lastDisplayTick) {
+    lastDisplayTick = tick;
     requestUpdate();
   }
 }
@@ -224,13 +225,13 @@ void PomodoroActivity::render(RenderLock&&) {
   char bigValue[16];
   if (gate == Gate::Ready) {
     // Show the whole step ahead of it, not a countdown that has not begun.
-    formatCountdownSpan(PomodoroSchedule::stepAt(durations, stepIndex).minutes, bigValue, sizeof(bigValue));
+    formatCountdownRemaining(PomodoroSchedule::stepAt(durations, stepIndex).minutes * 60, bigValue, sizeof(bigValue));
   } else if (clock.finished()) {
     char span[12];
-    formatCountdownSpan(clock.overshootMinutes(), span, sizeof(span));
+    formatCountdownRemaining(clock.overshootSeconds(), span, sizeof(span));
     snprintf(bigValue, sizeof(bigValue), "+%s", span);
   } else {
-    formatCountdownSpan(clock.remainingMinutes(), bigValue, sizeof(bigValue));
+    formatCountdownRemaining(clock.remainingSeconds(), bigValue, sizeof(bigValue));
   }
 
   const int valueHeight = renderer.getLineHeight(UI_12_FONT_ID);
@@ -258,8 +259,8 @@ void PomodoroActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), gate == Gate::Running ? "" : tr(STR_SELECT), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  if (clock.elapsedMinutes() - lastFullRefreshMinute >= kFullRefreshEveryMinutes) {
-    lastFullRefreshMinute = clock.elapsedMinutes();
+  if (++repaintsSinceFullRefresh >= kRepaintsPerFullRefresh) {
+    repaintsSinceFullRefresh = 0;
     pendingFullRefresh = true;
   }
   renderer.displayBuffer(pendingFullRefresh ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH);

@@ -66,16 +66,16 @@ class CountdownActivity final : public Activity {
   int targetMinute = 0;
 
   CountdownClock clock;      // owns the time base and the elapsed arithmetic
-  int lastShownMinute = -1;  // suppresses redundant e-ink refreshes
+  int lastDisplayTick = -1;  // repaint only when the rendered string would change
   // clearScreen() wipes the framebuffer, not the panel: a fast refresh leaves
   // the previous screen's ink behind wherever the new one draws nothing. Every
   // change of layout therefore has to ask for a full waveform.
   bool pendingFullRefresh = true;
   bool wasOvertime = false;
-  int lastFullRefreshMinute = 0;
-  // A countdown is stared at for hours at one repaint a minute, so fast-refresh
-  // residue would pile up. Clear the panel properly twice an hour.
-  static constexpr int kFullRefreshEveryMinutes = 30;
+  int repaintsSinceFullRefresh = 0;
+  // A countdown is stared at for hours, so fast-refresh residue piles up. One
+  // full waveform every 120 repaints is twenty minutes at the fine cadence.
+  static constexpr int kRepaintsPerFullRefresh = 120;
 
   ButtonNavigator buttonNavigator;
 

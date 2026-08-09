@@ -31,9 +31,9 @@ class PomodoroActivity final : public Activity {
   bool allowPowerSavingWhileAwake() const override { return true; }
 
  private:
-  // A screen repainting once a minute for hours accumulates fast-refresh
-  // residue; clear the panel properly twice an hour.
-  static constexpr int kFullRefreshEveryMinutes = 30;
+  // Counted in repaints rather than minutes: at one every ten seconds the
+  // residue builds six times faster than it did at one a minute.
+  static constexpr int kRepaintsPerFullRefresh = 120;
 
   // Three distinct situations, not two flags: a step can be waiting to be
   // started, running, or finished and waiting to be acknowledged.
@@ -45,8 +45,8 @@ class PomodoroActivity final : public Activity {
   int stepIndex = 0;
   Gate gate = Gate::Ready;
   CountdownClock clock;
-  int lastShownMinute = -1;
-  int lastFullRefreshMinute = 0;
+  int lastDisplayTick = -1;
+  int repaintsSinceFullRefresh = 0;
   bool pendingFullRefresh = true;
 
   void askPreset();
