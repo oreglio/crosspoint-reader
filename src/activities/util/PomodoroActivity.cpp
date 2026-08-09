@@ -36,6 +36,12 @@ bool sameDurations(const PomodoroDurations& a, const PomodoroDurations& b) {
 }
 }  // namespace
 
+// No suppressNextConfirmRelease() here. ActivityManager calls the current
+// activity's loop() before it processes pending actions, so an activity pushed
+// from a result handler first runs a frame later, by which time the release is
+// gone. Arming the flag would have nothing to swallow and would eat the user's
+// next genuine press instead — which is exactly what made Select look dead on
+// the chained pickers.
 void PomodoroActivity::askPreset() {
   const PomodoroDurations presets[3] = {PomodoroSchedule::kClassic, PomodoroSchedule::kShort, PomodoroSchedule::kLong};
   const StrId names[3] = {StrId::STR_POMODORO_PRESET_CLASSIC, StrId::STR_POMODORO_PRESET_SHORT,
@@ -68,7 +74,6 @@ void PomodoroActivity::askPreset() {
       std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "PomodoroPreset",
                                                 StrId::STR_POMODORO_PRESET_TITLE, std::move(rows), selected),
       [this, presets](const ActivityResult& result) {
-        mappedInput.suppressNextConfirmRelease();
         const auto* choice = std::get_if<OptionSelectionResult>(&result.data);
         if (result.isCancelled || !choice) {
           finish();
@@ -99,7 +104,6 @@ void PomodoroActivity::askCustom(const CustomField field) {
                              PomodoroSchedule::kMaxMinutes,
                              /*smallStep=*/1, /*largeStep=*/5, StrId::STR_SLEEP_TIMER_VALUE_FORMAT),
                          [this, field](const ActivityResult& result) {
-                           mappedInput.suppressNextConfirmRelease();
                            const auto* picked = std::get_if<IntervalResult>(&result.data);
                            if (result.isCancelled || !picked) {
                              // Back out one field at a time, and off the screen from the first.

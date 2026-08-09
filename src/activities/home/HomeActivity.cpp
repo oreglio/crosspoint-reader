@@ -2158,7 +2158,9 @@ void HomeActivity::onCountdownOpen() {
       std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "CountdownMode", StrId::STR_COUNTDOWN_MODE_TITLE,
                                                 std::move(modes), 0),
       [this](const ActivityResult& modeResult) {
-        mappedInput.suppressNextConfirmRelease();
+        // Pushing another activity, so no release suppression: see askPreset()
+        // in PomodoroActivity. The inner handler below does return to this list
+        // and keeps it.
         const auto* choice = std::get_if<OptionSelectionResult>(&modeResult.data);
         if (modeResult.isCancelled || !choice) {
           requestUpdate();

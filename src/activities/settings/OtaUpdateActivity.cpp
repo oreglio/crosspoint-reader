@@ -97,12 +97,17 @@ void OtaUpdateActivity::onEnter() {
   askChannel();
 }
 
+// No suppressNextConfirmRelease() here. ActivityManager calls the current
+// activity's loop() before it processes pending actions, so an activity pushed
+// from a result handler first runs a frame later, by which time the release is
+// gone. Arming the flag would have nothing to swallow and would eat the user's
+// next genuine press instead — which is exactly what made Select look dead on
+// the chained pickers.
 void OtaUpdateActivity::askChannel() {
   std::vector<std::string> channels{tr(STR_OTA_CHANNEL_STABLE), tr(STR_OTA_CHANNEL_BETA)};
   startActivityForResult(std::make_unique<OptionSelectionActivity>(
                              renderer, mappedInput, "OtaChannel", StrId::STR_OTA_CHANNEL_TITLE, std::move(channels), 0),
                          [this](const ActivityResult& result) {
-                           mappedInput.suppressNextConfirmRelease();
                            const auto* choice = std::get_if<OptionSelectionResult>(&result.data);
                            if (result.isCancelled || !choice) {
                              finish();
