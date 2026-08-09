@@ -9,6 +9,7 @@
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "activities/util/OptionSelectionActivity.h"
 #include "components/TouchHeaderBackButton.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -71,7 +72,7 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
     return;
   }
 
-  if (!updater.isUpdateNewer()) {
+  if (!updater.isUpdateNewer() && !updater.isDifferentVersion()) {
     {
       RenderLock lock(*this);
       state = NO_UPDATE;
@@ -82,6 +83,8 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
 
   {
     RenderLock lock(*this);
+    // Same screen either way; only the heading and the install intent differ.
+    installingOlder = !updater.isUpdateNewer();
     state = WAITING_CONFIRMATION;
   }
   requestUpdate(true);
@@ -90,7 +93,32 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
 void OtaUpdateActivity::onEnter() {
   Activity::onEnter();
   sdFontSystem.releaseLoadedFont(renderer);
+  // Ask before touching the radio: changing your mind should cost nothing.
+  askChannel();
+}
 
+void OtaUpdateActivity::askChannel() {
+  std::vector<std::string> channels{tr(STR_OTA_CHANNEL_STABLE), tr(STR_OTA_CHANNEL_BETA)};
+  startActivityForResult(std::make_unique<OptionSelectionActivity>(
+                             renderer, mappedInput, "OtaChannel", StrId::STR_OTA_CHANNEL_TITLE, std::move(channels), 0),
+                         [this](const ActivityResult& result) {
+                           mappedInput.suppressNextConfirmRelease();
+                           const auto* choice = std::get_if<OptionSelectionResult>(&result.data);
+                           if (result.isCancelled || !choice) {
+                             finish();
+                             return;
+                           }
+                           channel = choice->index == 1 ? OtaChannel::Beta : OtaChannel::Stable;
+                           updater.setChannel(channel);
+                           {
+                             RenderLock lock(*this);
+                             state = WIFI_SELECTION;
+                           }
+                           startWifiFlow();
+                         });
+}
+
+void OtaUpdateActivity::startWifiFlow() {
   if (hasActiveWifiConnection()) {
     onWifiSelectionComplete(true);
     return;
@@ -148,11 +176,21 @@ void OtaUpdateActivity::render(RenderLock&&) {
   if (state == CHECKING_FOR_UPDATE) {
     renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_CHECKING_UPDATE));
   } else if (state == WAITING_CONFIRMATION) {
-    renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_NEW_UPDATE), true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_10_FONT_ID, top, installingOlder ? tr(STR_OTA_OLDER_AVAILABLE) : tr(STR_NEW_UPDATE),
+                              true, EpdFontFamily::BOLD);
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, top + height + metrics.verticalSpacing,
                       (std::string(tr(STR_CURRENT_VERSION)) + CROSSINK_VERSION).c_str());
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, top + height * 2 + metrics.verticalSpacing * 2,
                       (std::string(tr(STR_NEW_VERSION)) + updater.getLatestVersion()).c_str());
+
+    if (installingOlder) {
+      // The two version lines above already state the facts, but nothing in them
+      // says which way round it is. Name the direction and ask.
+      char question[160];
+      snprintf(question, sizeof(question), I18N.get(StrId::STR_OTA_OLDER_CONFIRM), updater.getLatestVersion().c_str());
+      renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, top + height * 3 + metrics.verticalSpacing * 3,
+                        question);
+    }
 
     if (mappedInput.hasTouch()) {
       const auto actionRects = getOtaActionRects(renderer);
@@ -213,6 +251,7 @@ void OtaUpdateActivity::runUpdateInstall() {
     requestUpdate(true);
     return;
   }
+  updater.setAllowOlder(installingOlder);
   const auto res = updater.installUpdate(
       [](void* ctx) {
         // immediate=true notifies the render task directly. The default deferred path only
