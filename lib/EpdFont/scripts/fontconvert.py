@@ -14,6 +14,42 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 # Originally from https://github.com/vroland/epdiy
 
+
+def parse_aa_thresholds(text):
+    """Parse 'W,L,B' into a strictly increasing 3-tuple of 4-bit cutoffs.
+
+    Values are compared against a 4-bit coverage value (alpha >> 4), so they must
+    be 0..15. Requiring a strictly increasing ladder is not pedantry: an
+    out-of-order tuple makes one level unreachable, which would silently drop a
+    grey from every glyph in the font.
+    """
+    parts = text.split(",")
+    if len(parts) != 3:
+        raise argparse.ArgumentTypeError("expected W,L,B — got %r" % text)
+    try:
+        values = tuple(int(p) for p in parts)
+    except ValueError:
+        raise argparse.ArgumentTypeError("non-integer threshold in %r" % text)
+    if not all(0 <= v <= 15 for v in values):
+        raise argparse.ArgumentTypeError("thresholds must be 0..15 — got %r" % (values,))
+    if not values[0] < values[1] < values[2]:
+        raise argparse.ArgumentTypeError("thresholds must increase — got %r" % (values,))
+    return values
+
+
+def _self_test():
+    assert parse_aa_thresholds("4,8,12") == (4, 8, 12)
+    assert parse_aa_thresholds("5,6,10") == (5, 6, 10)
+    assert parse_aa_thresholds("0,1,15") == (0, 1, 15)
+    for bad in ("1,2", "1,2,3,4", "a,b,c", "0,8,16", "8,4,12", "4,4,12", ""):
+        try:
+            parse_aa_thresholds(bad)
+        except argparse.ArgumentTypeError:
+            continue
+        raise AssertionError("expected rejection for %r" % bad)
+    print("fontconvert self-test OK")
+
+
 parser = argparse.ArgumentParser(description="Generate a header file from a font to be used with epdiy.")
 parser.add_argument("name", action="store", help="name of the font.")
 parser.add_argument("size", type=int, help="font size to use.")
@@ -24,8 +60,14 @@ parser.add_argument("--font-include-intervals", dest="font_include_intervals", a
 parser.add_argument("--compress", dest="compress", action="store_true", help="Compress glyph bitmaps using DEFLATE with group-based compression.")
 parser.add_argument("--force-autohint", dest="force_autohint", action="store_true", help="Force FreeType auto-hinter instead of native font hinting. Improves stem width consistency for fonts with weak or no native TrueType hints.")
 parser.add_argument("--pnum", dest="pnum", action="store_true", help="Use proportional numerals (pnum OpenType feature) instead of default tabular figures. Reduces visual gaps between digits in running prose.")
-parser.add_argument("--darken-aa", dest="darken_aa", action="store_true", help="Use darker 2-bit anti-aliasing thresholds for reader fonts.")
+parser.add_argument("--darken-aa", dest="darken_aa", action="store_true", help="Alias for --aa-thresholds 3,6,10.")
+parser.add_argument("--aa-thresholds", dest="aa_thresholds", type=parse_aa_thresholds, default=None, help="2-bit anti-aliasing cutoffs as W,L,B against 4-bit coverage, strictly increasing. Default 4,8,12. Overrides --darken-aa.")
+parser.add_argument("--self-test", dest="self_test", action="store_true", help="Run internal checks and exit.")
 args = parser.parse_args()
+
+if args.self_test:
+    _self_test()
+    sys.exit(0)
 
 import freetype
 from fontTools.ttLib import TTFont
@@ -36,7 +78,12 @@ font_stack = [freetype.Face(f) for f in args.fontstack]
 is2Bit = args.is2Bit
 size = args.size
 font_name = args.name
-aa_thresholds = (3, 6, 10) if args.darken_aa else (4, 8, 12)
+if args.aa_thresholds is not None:
+    aa_thresholds = args.aa_thresholds
+elif args.darken_aa:
+    aa_thresholds = (3, 6, 10)
+else:
+    aa_thresholds = (4, 8, 12)
 load_flags = freetype.FT_LOAD_RENDER | freetype.FT_LOAD_NO_BITMAP
 if args.force_autohint:
     load_flags |= freetype.FT_LOAD_FORCE_AUTOHINT

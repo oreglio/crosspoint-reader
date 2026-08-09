@@ -608,18 +608,63 @@ def parse_fallback_range_spec(spec):
     return ranges
 
 
+def parse_aa_thresholds(text):
+    """Parse 'W,L,B' into a strictly increasing 3-tuple of 4-bit cutoffs.
+
+    Values are compared against a 4-bit coverage value (alpha >> 4), so they must
+    be 0..15. Requiring a strictly increasing ladder is not pedantry: an
+    out-of-order tuple makes one level unreachable, which would silently drop a
+    grey from every glyph in the font.
+    """
+    parts = text.split(",")
+    if len(parts) != 3:
+        raise argparse.ArgumentTypeError("expected W,L,B — got %r" % text)
+    try:
+        values = tuple(int(p) for p in parts)
+    except ValueError:
+        raise argparse.ArgumentTypeError("non-integer threshold in %r" % text)
+    if not all(0 <= v <= 15 for v in values):
+        raise argparse.ArgumentTypeError("thresholds must be 0..15 — got %r" % (values,))
+    if not values[0] < values[1] < values[2]:
+        raise argparse.ArgumentTypeError("thresholds must increase — got %r" % (values,))
+    return values
+
+
+def resolve_aa_thresholds(explicit, darken_aa):
+    """Precedence: explicit --aa-thresholds, then --darken-aa, then the default."""
+    if explicit is not None:
+        return explicit
+    return (3, 6, 10) if darken_aa else (4, 8, 12)
+
+
+def _self_test():
+    assert parse_aa_thresholds("4,8,12") == (4, 8, 12)
+    assert parse_aa_thresholds("5,6,10") == (5, 6, 10)
+    assert parse_aa_thresholds("0,1,15") == (0, 1, 15)
+    for bad in ("1,2", "1,2,3,4", "a,b,c", "0,8,16", "8,4,12", "4,4,12", ""):
+        try:
+            parse_aa_thresholds(bad)
+        except argparse.ArgumentTypeError:
+            continue
+        raise AssertionError("expected rejection for %r" % bad)
+    assert resolve_aa_thresholds(None, False) == (4, 8, 12)
+    assert resolve_aa_thresholds(None, True) == (3, 6, 10)
+    assert resolve_aa_thresholds((5, 6, 10), True) == (5, 6, 10)
+    print("fontconvert_sdcard self-test OK")
+
+
 def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=False,
                          fallback_fontfiles=None, fallback_include_intervals=None,
-                         fallback_fontfile=None, darken_aa=False):
+                         fallback_fontfile=None, aa_thresholds=(4, 8, 12)):
     """Rasterize all glyphs for one font style. Returns StyleRasterData."""
     import freetype
 
     style_names = {0: "regular", 1: "bold", 2: "italic", 3: "bolditalic"}
     style_label = style_names.get(style_id, str(style_id))
 
-    # Matches the built-in reader fonts in fontconvert.py so SD-card fonts land
-    # on the same 4-level shades for a given coverage value.
-    aa_thresholds = (3, 6, 10) if darken_aa else (4, 8, 12)
+    # Supplied by the caller so SD-card fonts land on the same 4-level shades as
+    # the built-in reader fonts for a given coverage value. Per-family by design:
+    # see docs/superpowers/specs/2026-08-08-text-aa-contrast-design.md.
 
     face = freetype.Face(fontfile)
     # Set font size at 150 DPI (matching fontconvert.py) BEFORE any glyph load.
@@ -904,7 +949,7 @@ def style_sections_total_size(sections):
 
 def generate_cpfont_multistyle(style_fonts, size, intervals, output_path,
                                force_autohint=False, fallback_style_fonts=None,
-                               fallback_style_intervals=None, darken_aa=False):
+                               fallback_style_intervals=None, aa_thresholds=(4, 8, 12)):
     """Generate a multi-style v4 .cpfont file.
 
     style_fonts: dict of {style_id: fontfile_path} e.g. {0: "Regular.ttf", 2: "Italic.ttf"}
@@ -931,7 +976,7 @@ def generate_cpfont_multistyle(style_fonts, size, intervals, output_path,
             force_autohint=force_autohint,
             fallback_fontfiles=fallback_fontfiles,
             fallback_include_intervals=fallback_include_intervals,
-            darken_aa=darken_aa)
+            aa_thresholds=aa_thresholds)
 
     # Pack binary sections for each style
     packed_sections = {}  # style_id -> tuple of section bytearrays
@@ -1027,7 +1072,11 @@ def main():
     parser.add_argument("--force-autohint", dest="force_autohint", action="store_true",
                         help="Force FreeType auto-hinter instead of native font hinting.")
     parser.add_argument("--darken-aa", dest="darken_aa", action="store_true",
-                        help="Use darker 2-bit anti-aliasing thresholds, matching the built-in reader fonts.")
+                        help="Alias for --aa-thresholds 3,6,10.")
+    parser.add_argument("--aa-thresholds", dest="aa_thresholds", type=parse_aa_thresholds, default=None,
+                        help="2-bit anti-aliasing cutoffs as W,L,B against 4-bit coverage, strictly increasing. Default 4,8,12. Overrides --darken-aa.")
+    parser.add_argument("--self-test", dest="self_test", action="store_true",
+                        help="Run internal checks and exit.")
     parser.add_argument("-o", "--output", dest="output",
                         help="Output file path (for single-size mode).")
     parser.add_argument("--output-dir", dest="output_dir",
@@ -1062,6 +1111,10 @@ def main():
                         help="Allowed ranges for each bold-italic fallback, as 0xSTART-0xEND;... .")
 
     args = parser.parse_args()
+
+    if args.self_test:
+        _self_test()
+        sys.exit(0)
 
     if args.list_presets:
         print("Available interval presets:")
@@ -1177,7 +1230,7 @@ def main():
             force_autohint=args.force_autohint,
             fallback_style_fonts=fallback_style_fonts,
             fallback_style_intervals=fallback_style_intervals,
-            darken_aa=args.darken_aa)
+            aa_thresholds=resolve_aa_thresholds(args.aa_thresholds, args.darken_aa))
     print(f"\nTotal: {len(sizes)} files, {total_size / 1024 / 1024:.2f} MB", file=sys.stderr)
 
 
