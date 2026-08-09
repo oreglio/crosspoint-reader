@@ -35,13 +35,18 @@ class PomodoroActivity final : public Activity {
   // residue; clear the panel properly twice an hour.
   static constexpr int kFullRefreshEveryMinutes = 30;
 
+  // Three distinct situations, not two flags: a step can be waiting to be
+  // started, running, or finished and waiting to be acknowledged.
+  enum class Gate : uint8_t { Ready, Running, Finished };
+
   int stepIndex = 0;
-  bool waitingForNext = false;
+  Gate gate = Gate::Ready;
   CountdownClock clock;
   int lastShownMinute = -1;
   int lastFullRefreshMinute = 0;
   bool pendingFullRefresh = true;
 
-  void startStep(int index);
+  void prepareStep(int index, Gate initialGate);
+  void beginRunning();
   const char* phaseLabel() const;
 };

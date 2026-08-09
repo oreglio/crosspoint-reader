@@ -16,18 +16,32 @@
 
 void PomodoroActivity::onEnter() {
   Activity::onEnter();
-  startStep(0);
+  // The first step waits to be started. Later ones begin on the press that
+  // acknowledges the previous one, so a cycle still costs one press per change.
+  prepareStep(0, Gate::Ready);
 }
 
-void PomodoroActivity::startStep(const int index) {
+void PomodoroActivity::prepareStep(const int index, const Gate initialGate) {
   stepIndex = index;
-  waitingForNext = false;
+  gate = initialGate;
   const PomodoroStep step = PomodoroSchedule::stepAt(stepIndex);
   clock.startMonotonic(millis(), step.minutes);
   lastShownMinute = -1;
   lastFullRefreshMinute = 0;
   pendingFullRefresh = true;
-  LOG_INF("PMD", "step %d: %s %d min", stepIndex, step.phase == PomodoroPhase::Work ? "work" : "break", step.minutes);
+  LOG_INF("PMD", "step %d: %s %d min (%s)", stepIndex, step.phase == PomodoroPhase::Work ? "work" : "break",
+          step.minutes, initialGate == Gate::Ready ? "ready" : "running");
+  requestUpdate();
+}
+
+void PomodoroActivity::beginRunning() {
+  gate = Gate::Running;
+  // Restart the clock here, not when the step was prepared: the countdown must
+  // measure from the press, however long the screen sat waiting for it.
+  clock.startMonotonic(millis(), PomodoroSchedule::stepAt(stepIndex).minutes);
+  lastShownMinute = -1;
+  lastFullRefreshMinute = 0;
+  pendingFullRefresh = true;
   requestUpdate();
 }
 
@@ -49,15 +63,23 @@ void PomodoroActivity::loop() {
     return;
   }
 
-  if (waitingForNext && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    startStep(stepIndex + 1);
-    return;
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    if (gate == Gate::Ready) {
+      beginRunning();
+      return;
+    }
+    if (gate == Gate::Finished) {
+      prepareStep(stepIndex + 1, Gate::Running);
+      return;
+    }
   }
+
+  if (gate != Gate::Running) return;  // nothing ticks while a gate is held
 
   clock.updateMonotonic(millis());
 
-  if (clock.finished() && !waitingForNext) {
-    waitingForNext = true;
+  if (clock.finished()) {
+    gate = Gate::Finished;
     pendingFullRefresh = true;  // the layout gains the "OK for next" hint
     requestUpdate();
     return;
@@ -79,10 +101,14 @@ void PomodoroActivity::render(RenderLock&&) {
   GUI.drawHeader(renderer, header, tr(STR_POMODORO));
 
   const CountdownLayout layout = computeCountdownLayout(renderer, mappedInput);
-  drawCountdownRing(renderer, layout.cx, layout.cy, layout.outerRadius, layout.stroke, clock.fractionRemaining());
+  drawCountdownRing(renderer, layout.cx, layout.cy, layout.outerRadius, layout.stroke,
+                    gate == Gate::Ready ? 1.0f : clock.fractionRemaining());
 
   char bigValue[16];
-  if (clock.finished()) {
+  if (gate == Gate::Ready) {
+    // Show the whole step ahead of it, not a countdown that has not begun.
+    formatCountdownSpan(PomodoroSchedule::stepAt(stepIndex).minutes, bigValue, sizeof(bigValue));
+  } else if (clock.finished()) {
     char span[12];
     formatCountdownSpan(clock.overshootMinutes(), span, sizeof(span));
     snprintf(bigValue, sizeof(bigValue), "+%s", span);
@@ -101,7 +127,9 @@ void PomodoroActivity::render(RenderLock&&) {
   renderer.drawCenteredText(SMALL_FONT_ID, blockTop + valueHeight + 4, label.c_str(), true);
 
   char line[80];
-  if (waitingForNext) {
+  if (gate == Gate::Ready) {
+    snprintf(line, sizeof(line), "%s", tr(STR_POMODORO_START_HINT));
+  } else if (gate == Gate::Finished) {
     snprintf(line, sizeof(line), "%s", tr(STR_POMODORO_NEXT_HINT));
   } else {
     snprintf(line, sizeof(line), I18N.get(StrId::STR_POMODORO_COUNT_FORMAT),
@@ -110,7 +138,7 @@ void PomodoroActivity::render(RenderLock&&) {
   const std::string context = renderer.truncatedText(SMALL_FONT_ID, line, layout.contextMaxWidth);
   renderer.drawCenteredText(SMALL_FONT_ID, layout.contextY, context.c_str(), true);
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), waitingForNext ? tr(STR_SELECT) : "", "", "");
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), gate == Gate::Running ? "" : tr(STR_SELECT), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   if (clock.elapsedMinutes() - lastFullRefreshMinute >= kFullRefreshEveryMinutes) {
