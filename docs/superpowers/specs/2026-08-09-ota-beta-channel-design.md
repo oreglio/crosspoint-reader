@@ -42,10 +42,14 @@ a device off a bad build in four button presses.
 - **`OtaUpdateActivity` is a small state machine** — `WIFI_SELECTION`,
   `CHECKING_FOR_UPDATE`, `WAITING_CONFIRMATION`, `UPDATE_IN_PROGRESS`, `NO_UPDATE`,
   `FAILED`, `FINISHED`, `SHUTTING_DOWN` (`OtaUpdateActivity.h:8-17`).
-- **`OtaUpdater.cpp:1-8` is a `#ifdef SIMULATOR` stub block** carrying parallel
-  signatures for `isUpdateNewer`, `getLatestVersion`, `checkForUpdate` and
-  `installUpdate`. Any signature change must be mirrored there or `pio run -e simulator`
-  breaks.
+- **`OtaUpdater`'s signatures cannot change from this repository.**
+  `platformio.ini:166` excludes `network/OtaUpdater.cpp` from the simulator build
+  entirely — the `#ifdef SIMULATOR` block at its top is dead code — and the adjacent
+  `crossink-simulator` repository defines `checkForUpdate` and `installUpdate`
+  out-of-line in `simulator_ota.cpp`. Changing either signature breaks
+  `pio run -e simulator`, and `AGENTS.md` puts simulator patches in that other repo.
+  The channel and the downgrade intent are therefore carried as updater state set
+  through **inline** setters, which also need no symbol to link.
 - **`OptionSelectionActivity`** takes a title `StrId` and a `std::vector<std::string>`,
   and returns `OptionSelectionResult{index}` — the same component the countdown mode
   chooser uses.
@@ -102,12 +106,13 @@ exactly as it is.
 it. Two additions instead:
 
 ```cpp
-bool isDifferentVersion() const;  // an asset was found and its tag differs from ours
-OtaUpdaterError installUpdate(ProgressCallback, void*, std::atomic<bool>*,
-                              bool allowOlder = false);
+void setChannel(OtaChannel value);   // inline; read by the next checkForUpdate()
+void setAllowOlder(bool value);      // inline; read by the next installUpdate()
+bool isDifferentVersion() const;     // inline; asset found and tag differs from ours
 ```
 
-`installUpdate` keeps its guard, now written `if (!allowOlder && !isUpdateNewer())`.
+`installUpdate` keeps its guard, now written `if (!allowOlder && !isUpdateNewer())`,
+reading the member rather than a parameter.
 
 `OtaUpdateActivity.cpp:74` currently reads `if (!updater.isUpdateNewer()) state = NO_UPDATE;`
 — an older release is reported as "no update" and there is no way past it. That single
@@ -143,9 +148,9 @@ Settings → Update → Stable → "v1.5.25 is older than yours — install?" �
 - **The downgrade is real.** Anti-rollback is off, so nothing behind the on-screen
   confirmation prevents installing an older image. That is the point, and it is also the
   reason the prompt must name the direction explicitly.
-- **The simulator stubs.** Changing `installUpdate` or `checkForUpdate` signatures
-  silently breaks `-e simulator` unless `OtaUpdater.cpp:1-8` is updated in the same
-  commit. Both environments must be built.
+- **The adjacent simulator repository.** It defines two of these methods out-of-line,
+  so their signatures are frozen from here. Both environments must be built on every
+  change to `OtaUpdater`.
 - **Rate limits are unchanged** — 60 anonymous requests per hour per IP, same as the
   current route.
 - **A beta build can still brick the UI.** This design shortens the recovery, it does not

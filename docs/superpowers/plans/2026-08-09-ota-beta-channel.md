@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Build **both** environments: `pio run -e default` (X3/X4) and `pio run -e simulator`. `src/network/OtaUpdater.cpp:1-8` is a `#ifdef SIMULATOR` stub block with parallel signatures — any signature change must be mirrored there or the simulator build breaks.
+- Build **both** environments: `pio run -e default` (X3/X4) and `pio run -e simulator`. `platformio.ini:166` excludes `network/OtaUpdater.cpp` from the simulator, and the adjacent `crossink-simulator` repository defines `checkForUpdate` and `installUpdate` out-of-line — **their signatures cannot change from this repository.** Carry new intent as state with inline setters instead.
 - All user-facing strings via `tr(STR_*)`. New keys go in `lib/I18n/translations/english.yaml` and `french.yaml`, then `python3 scripts/gen_i18n.py`.
 - `clang-format -i` on every touched C++ file before committing.
 - The OTA asset name contract is unchanged: `firmware-x3-x4.bin` (`OtaUpdater.cpp:37`).
