@@ -1,5 +1,13 @@
 #pragma once
 
+#include "fontIds.h"
+
+// The largest font the firmware actually registers. main.cpp inserts Lexend Deca
+// and Bitter at 10/12/14/16 plus the UI faces at 10/12, and nothing above that —
+// the 18 and 20 identifiers exist but their data is not built in. UI_12 left the
+// figure lost inside the ring.
+#define COUNTDOWN_VALUE_FONT_ID LEXENDDECA_16_FONT_ID
+
 class GfxRenderer;
 class MappedInputManager;
 

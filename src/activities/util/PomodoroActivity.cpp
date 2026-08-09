@@ -185,7 +185,8 @@ void PomodoroActivity::loop() {
       beginRunning();
       return;
     }
-    if (gate == Gate::Finished) {
+    if (gate == Gate::Finished || gate == Gate::Running) {
+      // Running too: a step you no longer need should not have to be waited out.
       prepareStep(stepIndex + 1, Gate::Running);
       return;
     }
@@ -234,12 +235,13 @@ void PomodoroActivity::render(RenderLock&&) {
     formatCountdownRemaining(clock.remainingSeconds(), bigValue, sizeof(bigValue));
   }
 
-  const int valueHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const int valueHeight = renderer.getLineHeight(COUNTDOWN_VALUE_FONT_ID);
   const int labelHeight = renderer.getLineHeight(SMALL_FONT_ID);
   const int blockTop = layout.cy - (valueHeight + 4 + labelHeight) / 2;
 
-  const std::string value = renderer.truncatedText(UI_12_FONT_ID, bigValue, layout.centerMaxWidth, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(UI_12_FONT_ID, blockTop, value.c_str(), true, EpdFontFamily::BOLD);
+  const std::string value =
+      renderer.truncatedText(COUNTDOWN_VALUE_FONT_ID, bigValue, layout.centerMaxWidth, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(COUNTDOWN_VALUE_FONT_ID, blockTop, value.c_str(), true, EpdFontFamily::BOLD);
 
   const std::string label = renderer.truncatedText(SMALL_FONT_ID, phaseLabel(), layout.centerMaxWidth);
   renderer.drawCenteredText(SMALL_FONT_ID, blockTop + valueHeight + 4, label.c_str(), true);
@@ -256,7 +258,9 @@ void PomodoroActivity::render(RenderLock&&) {
   const std::string context = renderer.truncatedText(SMALL_FONT_ID, line, layout.contextMaxWidth);
   renderer.drawCenteredText(SMALL_FONT_ID, layout.contextY, context.c_str(), true);
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), gate == Gate::Running ? "" : tr(STR_SELECT), "", "");
+  const char* confirmLabel = tr(STR_SELECT);
+  if (gate == Gate::Running) confirmLabel = tr(STR_POMODORO_SKIP);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   if (++repaintsSinceFullRefresh >= kRepaintsPerFullRefresh) {

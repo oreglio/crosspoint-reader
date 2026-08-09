@@ -269,12 +269,13 @@ void CountdownActivity::renderRunning() {
     formatCountdownRemaining(clock.remainingSeconds(), bigValue, sizeof(bigValue));
   }
 
-  const int valueHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const int valueHeight = renderer.getLineHeight(COUNTDOWN_VALUE_FONT_ID);
   const int labelHeight = renderer.getLineHeight(SMALL_FONT_ID);
   const int blockTop = layout.cy - (valueHeight + 4 + labelHeight) / 2;
 
-  const std::string value = renderer.truncatedText(UI_12_FONT_ID, bigValue, layout.centerMaxWidth, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(UI_12_FONT_ID, blockTop, value.c_str(), true, EpdFontFamily::BOLD);
+  const std::string value =
+      renderer.truncatedText(COUNTDOWN_VALUE_FONT_ID, bigValue, layout.centerMaxWidth, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(COUNTDOWN_VALUE_FONT_ID, blockTop, value.c_str(), true, EpdFontFamily::BOLD);
 
   const char* labelText = overtime ? tr(STR_COUNTDOWN_OVERTIME) : tr(STR_COUNTDOWN_REMAINING);
   const std::string label = renderer.truncatedText(SMALL_FONT_ID, labelText, layout.centerMaxWidth);

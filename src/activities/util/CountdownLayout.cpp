@@ -23,7 +23,11 @@ CountdownLayout computeCountdownLayout(const GfxRenderer& renderer, const Mapped
   const int ringHeight = std::max(0, ringBottom - ringTop);
 
   CountdownLayout layout{};
-  layout.outerRadius = std::max(0, std::min(safe.width / 2 - kSideMargin, ringHeight / 2));
+  // Capped well below the space available. Filling the screen made the ring the
+  // subject and the figure inside it an afterthought — the opposite of what the
+  // screen is for.
+  const int radiusCap = std::min(safe.width, safe.height) * 3 / 10;
+  layout.outerRadius = std::max(0, std::min({safe.width / 2 - kSideMargin, ringHeight / 2, radiusCap}));
   layout.stroke = std::max(4, layout.outerRadius / 7);
   layout.cx = safe.x + safe.width / 2;
   layout.cy = ringTop + ringHeight / 2;
