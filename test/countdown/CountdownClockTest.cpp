@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cstring>
+
 #include "CountdownClock.h"
 
 TEST(CountdownClockSpan, TargetLaterTodayIsTheDifference) { EXPECT_EQ(CountdownClock::spanTo(700, 600), 100); }
@@ -51,45 +53,75 @@ TEST(CountdownClockFraction, GoesFromOneToZeroAndStopsThere) {
   EXPECT_FLOAT_EQ(clock.fractionRemaining(), 0.0f);
 }
 
-TEST(CountdownClockFormat, ShowsSecondsBelowAnHourAndHoursAbove) {
+TEST(CountdownClockFormat, ARemainingValueHoldsUntilAWholeStepHasPassed) {
+  // The bug this replaces: a 10-minute countdown read 9:55 one second in,
+  // because the shown value was floored. Counting down, the figure must hold
+  // until a whole step has actually elapsed — that is the ceiling, not the floor.
   char buf[16];
-  formatCountdownRemaining(0, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "0:00");
-  formatCountdownRemaining(70, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "1:10");
-  formatCountdownRemaining(25 * 60, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "25:00");
-  // At an hour and beyond the seconds stop earning their place.
-  formatCountdownRemaining(3600, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "1h00");
-  formatCountdownRemaining(3600 + 5 * 60 + 40, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "1h05");
+  formatCountdownSeconds(countdownShownRemaining(600), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "10:00");
+  formatCountdownSeconds(countdownShownRemaining(599), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "10:00");
+  formatCountdownSeconds(countdownShownRemaining(596), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "10:00");
+  formatCountdownSeconds(countdownShownRemaining(595), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "9:55");
+  formatCountdownSeconds(countdownShownRemaining(591), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "9:55");
+  formatCountdownSeconds(countdownShownRemaining(590), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "9:50");
 }
 
-TEST(CountdownClockFormat, SecondsLandOnTensNeverOnStragglers) {
-  // The repaint fires one second past each ten-second boundary, so the raw value
-  // there ends in 9. Snapping the shown value to the same grid the tick uses is
-  // what puts it on 50, 40, 30 instead of 59, 49, 39.
+TEST(CountdownClockFormat, AnElapsedValueRoundsTheOtherWay) {
+  // Counting up, the last step actually reached is the floor: an overshoot of
+  // one second is not yet five seconds of overtime.
   char buf[16];
-  formatCountdownRemaining(25 * 60 - 1, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "24:50");
-  formatCountdownRemaining(25 * 60 - 11, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "24:40");
-  formatCountdownRemaining(9, buf, sizeof(buf));
+  formatCountdownSeconds(countdownShownElapsed(0), buf, sizeof(buf));
   EXPECT_STREQ(buf, "0:00");
-  formatCountdownRemaining(19, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "0:10");
-  formatCountdownRemaining(59 * 60 + 59, buf, sizeof(buf));
-  EXPECT_STREQ(buf, "59:50");
+  formatCountdownSeconds(countdownShownElapsed(4), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "0:00");
+  formatCountdownSeconds(countdownShownElapsed(5), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "0:05");
+  formatCountdownSeconds(countdownShownElapsed(9), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "0:05");
+}
+
+TEST(CountdownClockFormat, EverythingLandsOnFivesAndZeroes) {
+  char buf[16];
+  for (int s = 0; s <= 600; ++s) {
+    formatCountdownSeconds(countdownShownRemaining(s), buf, sizeof(buf));
+    const int lastDigit = buf[strlen(buf) - 1] - '0';
+    EXPECT_TRUE(lastDigit == 0 || lastDigit == 5) << "remaining " << s << " showed " << buf;
+  }
+}
+
+TEST(CountdownClockFormat, ShowsSecondsBelowAnHourAndHoursAbove) {
+  char buf[16];
+  formatCountdownSeconds(countdownShownRemaining(0), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "0:00");
+  formatCountdownSeconds(countdownShownRemaining(70), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "1:10");
+  formatCountdownSeconds(countdownShownRemaining(25 * 60), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "25:00");
+  // At an hour and beyond the seconds stop earning their place.
+  formatCountdownSeconds(countdownShownRemaining(3600), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "1h00");
+  formatCountdownSeconds(countdownShownRemaining(3600 + 5 * 60 + 40), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "1h05");
+  // Just under the hour the ceiling reaches it, and must read as an hour rather
+  // than as sixty minutes.
+  formatCountdownSeconds(countdownShownRemaining(3599), buf, sizeof(buf));
+  EXPECT_STREQ(buf, "1h00");
 }
 
 TEST(CountdownClockFormat, TheRepaintTickFollowsTheFormat) {
   // Below an hour the display carries seconds, so it must tick every 10s;
   // above it only the hour and minute show, so once a minute is enough.
-  // 1500..1509 all floor into the same ten-second bucket; 1499 does not.
-  EXPECT_EQ(countdownDisplayTick(1500), countdownDisplayTick(1509));
-  EXPECT_NE(countdownDisplayTick(1500), countdownDisplayTick(1499));
-  // Past the hour the bucket is a whole minute.
-  EXPECT_EQ(countdownDisplayTick(7200), countdownDisplayTick(7259));
-  EXPECT_NE(countdownDisplayTick(7200), countdownDisplayTick(7199));
+  // The tick is taken from the already-snapped value, so it changes exactly when
+  // the string does and never once more.
+  EXPECT_EQ(countdownDisplayTick(countdownShownRemaining(600)), countdownDisplayTick(countdownShownRemaining(596)));
+  EXPECT_NE(countdownDisplayTick(countdownShownRemaining(600)), countdownDisplayTick(countdownShownRemaining(595)));
+  // Crossing the hour must not repaint twice for the same string.
+  EXPECT_EQ(countdownDisplayTick(countdownShownRemaining(3600)), countdownDisplayTick(countdownShownRemaining(3599)));
+  EXPECT_NE(countdownDisplayTick(countdownShownRemaining(3600)), countdownDisplayTick(countdownShownRemaining(3590)));
 }

@@ -156,7 +156,8 @@ void CountdownActivity::refreshElapsed() {
 
   // Repaint exactly when the rendered string would change: every 10s while the
   // display carries seconds, every minute once it only shows hours.
-  const int tick = countdownDisplayTick(clock.finished() ? clock.overshootSeconds() : clock.remainingSeconds());
+  const int tick = countdownDisplayTick(clock.finished() ? countdownShownElapsed(clock.overshootSeconds())
+                                                         : countdownShownRemaining(clock.remainingSeconds()));
   if (tick != lastDisplayTick) {
     lastDisplayTick = tick;
     requestUpdate();
@@ -263,10 +264,10 @@ void CountdownActivity::renderRunning() {
   char bigValue[16];
   if (overtime) {
     char span[12];
-    formatCountdownRemaining(clock.overshootSeconds(), span, sizeof(span));
+    formatCountdownSeconds(countdownShownElapsed(clock.overshootSeconds()), span, sizeof(span));
     snprintf(bigValue, sizeof(bigValue), "+%s", span);
   } else {
-    formatCountdownRemaining(clock.remainingSeconds(), bigValue, sizeof(bigValue));
+    formatCountdownSeconds(countdownShownRemaining(clock.remainingSeconds()), bigValue, sizeof(bigValue));
   }
 
   const int valueHeight = renderer.getLineHeight(COUNTDOWN_VALUE_FONT_ID);
@@ -282,7 +283,8 @@ void CountdownActivity::renderRunning() {
   renderer.drawCenteredText(SMALL_FONT_ID, blockTop + valueHeight + 4, label.c_str(), true);
 
   char elapsedText[12];
-  formatCountdownRemaining(std::min(clock.elapsedSeconds(), clock.spanSeconds()), elapsedText, sizeof(elapsedText));
+  formatCountdownSeconds(countdownShownElapsed(std::min(clock.elapsedSeconds(), clock.spanSeconds())), elapsedText,
+                         sizeof(elapsedText));
   char line[80];
   snprintf(line, sizeof(line), "%s %02d:%02d \xC2\xB7 %s %s", tr(STR_COUNTDOWN_TARGET), targetHour, targetMinute,
            tr(STR_COUNTDOWN_ELAPSED), elapsedText);

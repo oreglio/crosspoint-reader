@@ -41,11 +41,22 @@ class CountdownClock {
   unsigned long startMs_ = 0;
 };
 
-// The remaining time as it is shown: "25:00" below an hour, where the seconds
-// are worth watching, and "1h05" at an hour and beyond, where they are noise.
-void formatCountdownRemaining(int seconds, char* buf, size_t len);
+// A countdown must show the last grid point it has actually reached. Counting
+// down that is the ceiling — 10:00 holds until a whole step has elapsed — and
+// counting up it is the floor, since one second of overtime is not yet five.
+// Rounding both the same way is what made a fresh 10-minute countdown read 9:55
+// a second after it started.
+//
+// Above an hour the value passes through untouched: only hours and minutes are
+// shown there, so there is nothing to snap.
+int countdownShownRemaining(int seconds);
+int countdownShownElapsed(int seconds);
 
-// Changes exactly when the rendered string would change, so the caller repaints
-// on it and never more often: every 10 seconds below an hour, every minute above.
-// One rule, so the panel cadence can never drift from the format.
-int countdownDisplayTick(int seconds);
+// Formats an already-snapped value: "9:55" below an hour, "1h05" at an hour and
+// above, where seconds would be noise.
+void formatCountdownSeconds(int shownSeconds, char* buf, size_t len);
+
+// Changes exactly when the formatted string would change, and never once more —
+// both are taken from the same snapped value, so the panel cadence cannot drift
+// from what is written on it.
+int countdownDisplayTick(int shownSeconds);

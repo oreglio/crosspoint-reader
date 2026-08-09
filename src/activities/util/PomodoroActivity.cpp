@@ -203,7 +203,8 @@ void PomodoroActivity::loop() {
     return;
   }
 
-  const int tick = countdownDisplayTick(clock.finished() ? clock.overshootSeconds() : clock.remainingSeconds());
+  const int tick = countdownDisplayTick(clock.finished() ? countdownShownElapsed(clock.overshootSeconds())
+                                                         : countdownShownRemaining(clock.remainingSeconds()));
   if (tick != lastDisplayTick) {
     lastDisplayTick = tick;
     requestUpdate();
@@ -226,13 +227,13 @@ void PomodoroActivity::render(RenderLock&&) {
   char bigValue[16];
   if (gate == Gate::Ready) {
     // Show the whole step ahead of it, not a countdown that has not begun.
-    formatCountdownRemaining(PomodoroSchedule::stepAt(durations, stepIndex).minutes * 60, bigValue, sizeof(bigValue));
+    formatCountdownSeconds(PomodoroSchedule::stepAt(durations, stepIndex).minutes * 60, bigValue, sizeof(bigValue));
   } else if (clock.finished()) {
     char span[12];
-    formatCountdownRemaining(clock.overshootSeconds(), span, sizeof(span));
+    formatCountdownSeconds(countdownShownElapsed(clock.overshootSeconds()), span, sizeof(span));
     snprintf(bigValue, sizeof(bigValue), "+%s", span);
   } else {
-    formatCountdownRemaining(clock.remainingSeconds(), bigValue, sizeof(bigValue));
+    formatCountdownSeconds(countdownShownRemaining(clock.remainingSeconds()), bigValue, sizeof(bigValue));
   }
 
   const int valueHeight = renderer.getLineHeight(COUNTDOWN_VALUE_FONT_ID);
