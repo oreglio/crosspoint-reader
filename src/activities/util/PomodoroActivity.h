@@ -38,7 +38,10 @@ class PomodoroActivity final : public Activity {
   // Three distinct situations, not two flags: a step can be waiting to be
   // started, running, or finished and waiting to be acknowledged.
   enum class Gate : uint8_t { Ready, Running, Finished };
+  // Which of the three lengths the custom flow is currently asking for.
+  enum class CustomField : uint8_t { Work, ShortBreak, LongBreak };
 
+  PomodoroDurations durations = PomodoroSchedule::kClassic;
   int stepIndex = 0;
   Gate gate = Gate::Ready;
   CountdownClock clock;
@@ -46,6 +49,9 @@ class PomodoroActivity final : public Activity {
   int lastFullRefreshMinute = 0;
   bool pendingFullRefresh = true;
 
+  void askPreset();
+  void askCustom(CustomField field);
+  void applyAndStart();
   void prepareStep(int index, Gate initialGate);
   void beginRunning();
   const char* phaseLabel() const;

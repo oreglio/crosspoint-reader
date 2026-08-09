@@ -25,6 +25,12 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   uint8_t recentSleepPos = 0;                           // next write slot
   uint8_t recentSleepFill = 0;                          // valid entries (0..SLEEP_RECENT_COUNT)
   uint8_t readerActivityLoadCount = 0;
+  // Last pomodoro lengths chosen, in minutes. Kept here rather than in the
+  // settings list: they are a remembered choice, not a knob to go browsing for,
+  // and three extra Settings rows would not earn their place.
+  uint8_t pomodoroWorkMinutes = 25;
+  uint8_t pomodoroShortBreakMinutes = 5;
+  uint8_t pomodoroLongBreakMinutes = 15;
   bool lastSleepFromReader = false;
   bool showBootScreen = true;
 

@@ -7,15 +7,128 @@
 #include <algorithm>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "CountdownLayout.h"
 #include "CountdownRing.h"
+#include "CrossPointState.h"
+#include "IntervalSelectionActivity.h"
+#include "OptionSelectionActivity.h"
 #include "components/TouchHeaderBackButton.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 void PomodoroActivity::onEnter() {
   Activity::onEnter();
+  durations = {APP_STATE.pomodoroWorkMinutes, APP_STATE.pomodoroShortBreakMinutes, APP_STATE.pomodoroLongBreakMinutes};
+  askPreset();
+}
+
+namespace {
+// "25 / 5 / 15" — the three lengths of a preset, in the order they are lived.
+void formatPreset(const PomodoroDurations& d, char* buf, const size_t len) {
+  snprintf(buf, len, "%u / %u / %u", static_cast<unsigned>(d.work), static_cast<unsigned>(d.shortBreak),
+           static_cast<unsigned>(d.longBreak));
+}
+
+bool sameDurations(const PomodoroDurations& a, const PomodoroDurations& b) {
+  return a.work == b.work && a.shortBreak == b.shortBreak && a.longBreak == b.longBreak;
+}
+}  // namespace
+
+void PomodoroActivity::askPreset() {
+  const PomodoroDurations presets[3] = {PomodoroSchedule::kClassic, PomodoroSchedule::kShort, PomodoroSchedule::kLong};
+  const StrId names[3] = {StrId::STR_POMODORO_PRESET_CLASSIC, StrId::STR_POMODORO_PRESET_SHORT,
+                          StrId::STR_POMODORO_PRESET_LONG};
+
+  std::vector<std::string> rows;
+  rows.reserve(4);
+  char line[48];
+  char lengths[24];
+  for (int i = 0; i < 3; ++i) {
+    formatPreset(presets[i], lengths, sizeof(lengths));
+    snprintf(line, sizeof(line), "%s  %s", I18N.get(names[i]), lengths);
+    rows.emplace_back(line);
+  }
+  formatPreset(durations, lengths, sizeof(lengths));
+  snprintf(line, sizeof(line), "%s  %s", tr(STR_POMODORO_PRESET_CUSTOM), lengths);
+  rows.emplace_back(line);
+
+  // Start on whichever row matches what was last used, so the common case is a
+  // single press and the custom row shows the lengths it would reuse.
+  uint8_t selected = 3;
+  for (int i = 0; i < 3; ++i) {
+    if (sameDurations(durations, presets[i])) {
+      selected = static_cast<uint8_t>(i);
+      break;
+    }
+  }
+
+  startActivityForResult(
+      std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "PomodoroPreset",
+                                                StrId::STR_POMODORO_PRESET_TITLE, std::move(rows), selected),
+      [this, presets](const ActivityResult& result) {
+        mappedInput.suppressNextConfirmRelease();
+        const auto* choice = std::get_if<OptionSelectionResult>(&result.data);
+        if (result.isCancelled || !choice) {
+          finish();
+          return;
+        }
+        if (choice->index < 3) {
+          durations = presets[choice->index];
+          applyAndStart();
+          return;
+        }
+        askCustom(CustomField::Work);
+      });
+}
+
+void PomodoroActivity::askCustom(const CustomField field) {
+  StrId title = StrId::STR_POMODORO_CUSTOM_WORK;
+  int initial = durations.work;
+  if (field == CustomField::ShortBreak) {
+    title = StrId::STR_POMODORO_CUSTOM_SHORT;
+    initial = durations.shortBreak;
+  } else if (field == CustomField::LongBreak) {
+    title = StrId::STR_POMODORO_CUSTOM_LONG;
+    initial = durations.longBreak;
+  }
+
+  startActivityForResult(std::make_unique<IntervalSelectionActivity>(
+                             renderer, mappedInput, "PomodoroCustom", title, initial, PomodoroSchedule::kMinMinutes,
+                             PomodoroSchedule::kMaxMinutes,
+                             /*smallStep=*/1, /*largeStep=*/5, StrId::STR_SLEEP_TIMER_VALUE_FORMAT),
+                         [this, field](const ActivityResult& result) {
+                           mappedInput.suppressNextConfirmRelease();
+                           const auto* picked = std::get_if<IntervalResult>(&result.data);
+                           if (result.isCancelled || !picked) {
+                             // Back out one field at a time, and off the screen from the first.
+                             if (field == CustomField::Work) {
+                               finish();
+                             } else {
+                               askCustom(field == CustomField::LongBreak ? CustomField::ShortBreak : CustomField::Work);
+                             }
+                             return;
+                           }
+                           const auto minutes = static_cast<uint8_t>(picked->value);
+                           if (field == CustomField::Work) {
+                             durations.work = minutes;
+                             askCustom(CustomField::ShortBreak);
+                           } else if (field == CustomField::ShortBreak) {
+                             durations.shortBreak = minutes;
+                             askCustom(CustomField::LongBreak);
+                           } else {
+                             durations.longBreak = minutes;
+                             applyAndStart();
+                           }
+                         });
+}
+
+void PomodoroActivity::applyAndStart() {
+  APP_STATE.pomodoroWorkMinutes = durations.work;
+  APP_STATE.pomodoroShortBreakMinutes = durations.shortBreak;
+  APP_STATE.pomodoroLongBreakMinutes = durations.longBreak;
+  APP_STATE.saveToFile();
   // The first step waits to be started. Later ones begin on the press that
   // acknowledges the previous one, so a cycle still costs one press per change.
   prepareStep(0, Gate::Ready);
@@ -24,7 +137,7 @@ void PomodoroActivity::onEnter() {
 void PomodoroActivity::prepareStep(const int index, const Gate initialGate) {
   stepIndex = index;
   gate = initialGate;
-  const PomodoroStep step = PomodoroSchedule::stepAt(stepIndex);
+  const PomodoroStep step = PomodoroSchedule::stepAt(durations, stepIndex);
   clock.startMonotonic(millis(), step.minutes);
   lastShownMinute = -1;
   lastFullRefreshMinute = 0;
@@ -38,7 +151,7 @@ void PomodoroActivity::beginRunning() {
   gate = Gate::Running;
   // Restart the clock here, not when the step was prepared: the countdown must
   // measure from the press, however long the screen sat waiting for it.
-  clock.startMonotonic(millis(), PomodoroSchedule::stepAt(stepIndex).minutes);
+  clock.startMonotonic(millis(), PomodoroSchedule::stepAt(durations, stepIndex).minutes);
   lastShownMinute = -1;
   lastFullRefreshMinute = 0;
   pendingFullRefresh = true;
@@ -46,7 +159,7 @@ void PomodoroActivity::beginRunning() {
 }
 
 const char* PomodoroActivity::phaseLabel() const {
-  switch (PomodoroSchedule::stepAt(stepIndex).phase) {
+  switch (PomodoroSchedule::stepAt(durations, stepIndex).phase) {
     case PomodoroPhase::Work:
       return tr(STR_POMODORO_WORK);
     case PomodoroPhase::LongBreak:
@@ -107,7 +220,7 @@ void PomodoroActivity::render(RenderLock&&) {
   char bigValue[16];
   if (gate == Gate::Ready) {
     // Show the whole step ahead of it, not a countdown that has not begun.
-    formatCountdownSpan(PomodoroSchedule::stepAt(stepIndex).minutes, bigValue, sizeof(bigValue));
+    formatCountdownSpan(PomodoroSchedule::stepAt(durations, stepIndex).minutes, bigValue, sizeof(bigValue));
   } else if (clock.finished()) {
     char span[12];
     formatCountdownSpan(clock.overshootMinutes(), span, sizeof(span));
