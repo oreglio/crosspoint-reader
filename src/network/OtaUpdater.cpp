@@ -32,6 +32,14 @@ namespace {
 
 constexpr char latestReleaseUrl[] = CROSSINK_OTA_RELEASE_URL;
 
+#ifndef CROSSINK_OTA_RELEASES_URL
+// The list route, unlike /releases/latest, includes prereleases. per_page=1 keeps
+// the body to a single release so the parser never has to choose between them.
+#define CROSSINK_OTA_RELEASES_URL "https://api.github.com/repos/oreglio/CrossInkLibrary/releases?per_page=1"
+#endif
+
+constexpr char betaReleasesUrl[] = CROSSINK_OTA_RELEASES_URL;
+
 #ifdef CROSSINK_FIRMWARE_DEVICE_TYPE
 constexpr char firmwareAssetStem[] = "firmware-" CROSSINK_FIRMWARE_DEVICE_TYPE;
 constexpr char firmwareAssetName[] = "firmware-" CROSSINK_FIRMWARE_DEVICE_TYPE ".bin";
@@ -231,10 +239,12 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   totalSize = 0;
 
   esp_err_t esp_err;
+  const bool beta = channel == OtaChannel::Beta;
   ReleaseJsonParser releaseParser(isMatchingFirmwareAssetName);
+  releaseParser.setExpectArray(beta);
 
   esp_http_client_config_t client_config = {
-      .url = latestReleaseUrl,
+      .url = beta ? betaReleasesUrl : latestReleaseUrl,
       .event_handler = release_manifest_event_handler,
       // 4096 holds the API response headers; the 32KB body streams through the
       // parser in chunks so RX needn't be larger. TX only carries our GET.
@@ -247,7 +257,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   };
 
   totalBytesReceived = 0;
-  LOG_DBG("OTA", "Checking for update (current: %s)", CROSSINK_VERSION);
+  LOG_DBG("OTA", "Checking for update (current: %s, channel: %s)", CROSSINK_VERSION, beta ? "beta" : "stable");
 
   esp_http_client_handle_t client_handle = esp_http_client_init(&client_config);
   if (!client_handle) {
@@ -322,7 +332,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     return cancelRequested != nullptr && cancelRequested->load(std::memory_order_relaxed);
   };
 
-  if (!isUpdateNewer()) {
+  if (!allowOlder && !isUpdateNewer()) {
     return UPDATE_OLDER_ERROR;
   }
 
