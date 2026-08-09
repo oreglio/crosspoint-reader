@@ -22,6 +22,9 @@
 #include "../reader/BookReadingStats.h"
 #include "../reader/BookStatsActivity.h"
 #include "../reader/EpubReaderUtils.h"
+#include "../util/CountdownActivity.h"
+#include "../util/OptionSelectionActivity.h"
+#include "../util/PomodoroActivity.h"
 #include "BookmarkStore.h"
 #include "ClippingStore.h"
 #include "CrossPointSettings.h"
@@ -41,7 +44,7 @@ namespace {
 constexpr uint32_t CAROUSEL_CACHE_MAGIC = 0x43434152;  // "CCAR"
 // Cached frames include all Home visuals, including the menu icons. Bump this
 // whenever their rendering changes so stale snapshots are rebuilt after OTA.
-constexpr uint16_t CAROUSEL_CACHE_VERSION = 5;
+constexpr uint16_t CAROUSEL_CACHE_VERSION = 6;
 constexpr char CAROUSEL_CACHE_PATH[] = "/.crosspoint/home_carousel_cache.bin";
 constexpr char CAROUSEL_CACHE_TMP_PATH[] = "/.crosspoint/home_carousel_cache.tmp";
 constexpr uint32_t CAROUSEL_FRAME_MIN_FREE_AFTER_ALLOC = 64U * 1024U;
@@ -58,6 +61,7 @@ enum class HomeMenuAction {
   ReadingStats,
   Bookmarks,
   FileTransfer,
+  Countdown,
   Settings,
 };
 
@@ -69,10 +73,10 @@ struct HomeMenuEntry {
 
 struct HomeMenuEntries {
   // Continue Reading, Browse Files, Library, Recent Books, OPDS, Reading Stats,
-  // Bookmarks, File Transfer, Settings — nine when every optional entry is
-  // present, plus one spare. Overflow silently drops the LAST item pushed, which
-  // is Settings, so this has to lead the list rather than trail it.
-  static constexpr int kCapacity = 10;
+  // Bookmarks, File Transfer, Countdown, Settings — ten when every optional entry
+  // is present, plus one spare. Overflow silently drops the LAST item pushed,
+  // which is Settings, so this has to lead the list rather than trail it.
+  static constexpr int kCapacity = 11;
   std::array<HomeMenuEntry, kCapacity> entries{};
   int count = 0;
 
@@ -274,6 +278,7 @@ void appendHomeMenuItems(HomeMenuEntries& items, bool hasOpdsServers, bool hasRe
   }
 
   items.push({tr(STR_FILE_TRANSFER), Transfer, HomeMenuAction::FileTransfer});
+  items.push({tr(STR_COUNTDOWN_TITLE), Recent, HomeMenuAction::Countdown});
   items.push({tr(STR_SETTINGS_TITLE), Settings, HomeMenuAction::Settings});
 }
 
@@ -595,23 +600,18 @@ static_assert(HomeActivity::kMaxCachedBooks >= LyraCarouselMetrics::values.homeR
 
 int HomeActivity::getMenuItemCount() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  // Kept in step with appendHomeMenuItems() by hand: this counts the fixed
-  // rows, that function pushes them. They disagreeing is invisible in the
-  // drawn menu and shows up only as a row you can see but never select.
-  int count = 5;  // File Browser, Library, Recents, File transfer, Settings
+  // Derived from the very builder the menu renders, so a row can never be drawn
+  // without also being selectable. This was a hand-maintained tally of the fixed
+  // rows and drifted the first time an entry was added: navigation stopped one
+  // row short, leaving Settings visible but unreachable.
+  const bool continueReadingInMenu = metrics.homeContinueReadingInMenu && !recentBooks.empty();
+  int count =
+      buildSelectableHomeMenuItems(hasOpdsServers, hasReadingStats, hasBookmarks, hasClippings, continueReadingInMenu)
+          .size();
+  // Recent books are selectable rows of their own above the menu unless the
+  // theme folds them into a single "Continue Reading" entry, already counted.
   if (!metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
     count += getVisibleRecentBookCount();
-  } else if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
-    count++;  // Continue Reading menu item
-  }
-  if (hasOpdsServers) {
-    count++;
-  }
-  if (hasReadingStats) {
-    count++;
-  }
-  if (hasBookmarks || hasClippings) {
-    count++;
   }
   return count;
 }
@@ -1472,6 +1472,9 @@ void HomeActivity::loop() {
           case HomeMenuAction::FileTransfer:
             onFileTransferOpen();
             break;
+          case HomeMenuAction::Countdown:
+            onCountdownOpen();
+            break;
           case HomeMenuAction::ContinueReading:
           case HomeMenuAction::Settings:
             break;
@@ -1684,6 +1687,9 @@ void HomeActivity::loop() {
         break;
       case HomeMenuAction::FileTransfer:
         onFileTransferOpen();
+        break;
+      case HomeMenuAction::Countdown:
+        onCountdownOpen();
         break;
       case HomeMenuAction::Settings:
         onSettingsOpen();
@@ -2142,6 +2148,33 @@ void HomeActivity::onSettingsOpen() { activityManager.goToSettings(); }
 void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
+
+void HomeActivity::onCountdownOpen() {
+  // Chaining startActivityForResult from inside a result handler is supported:
+  // ActivityManager moves the handler into a local before invoking it, precisely
+  // so a handler can push the next screen (see ActivityManager.cpp).
+  std::vector<std::string> modes{tr(STR_COUNTDOWN_MODE_TARGET), tr(STR_POMODORO)};
+  startActivityForResult(
+      std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "CountdownMode", StrId::STR_COUNTDOWN_MODE_TITLE,
+                                                std::move(modes), 0),
+      [this](const ActivityResult& modeResult) {
+        mappedInput.suppressNextConfirmRelease();
+        const auto* choice = std::get_if<OptionSelectionResult>(&modeResult.data);
+        if (modeResult.isCancelled || !choice) {
+          requestUpdate();
+          return;
+        }
+        auto done = [this](const ActivityResult&) {
+          mappedInput.suppressNextConfirmRelease();
+          requestUpdate();
+        };
+        if (choice->index == 0) {
+          startActivityForResult(std::make_unique<CountdownActivity>(renderer, mappedInput), done);
+        } else {
+          startActivityForResult(std::make_unique<PomodoroActivity>(renderer, mappedInput), done);
+        }
+      });
+}
 
 void HomeActivity::onReadingStatsOpen() {
   const int highlightedBookIdx = getHighlightedBookIndex();
