@@ -246,6 +246,22 @@ void CountdownActivity::renderPicker() {
   }
   renderer.drawCenteredText(SMALL_FONT_ID, underlineY + 28, I18N.get(promptId), true);
 
+  // While a target is being set, show what it actually amounts to. The screen
+  // asks for a time of day, but the thing being decided is a duration, and doing
+  // that subtraction in your head against a clock you may not be looking at is
+  // exactly the friction this removes.
+  if (!editingNow()) {
+    const int now = useWallClock ? localMinuteOfDay() : -1;
+    const int reference = now >= 0 ? now : nowHour * 60 + nowMinute;
+    const int span = CountdownClock::spanTo(targetHour * 60 + targetMinute, reference);
+    char spanText[16];
+    formatCountdownSeconds(span * 60, spanText, sizeof(spanText));
+    char line[64];
+    snprintf(line, sizeof(line), I18N.get(StrId::STR_COUNTDOWN_IN), spanText);
+    const std::string shown = renderer.truncatedText(SMALL_FONT_ID, line, std::max(16, screenWidth - 40));
+    renderer.drawCenteredText(SMALL_FONT_ID, underlineY + 50, shown.c_str(), true, EpdFontFamily::BOLD);
+  }
+
   // Two-line step hint, same shape as IntervalSelectionActivity: front buttons do
   // the small step, side buttons the coarse one. Built from separate label and
   // value strings so the layout doesn't depend on a translated separator.
@@ -255,9 +271,9 @@ void CountdownActivity::renderPicker() {
   const int largeStep = onHour ? kHourLargeStep : kMinuteStep * kMinuteLargeSlots;
   char hint[64];
   snprintf(hint, sizeof(hint), "%s %d%c", tr(STR_STEP_HINT_FRONT), smallStep, unit);
-  renderer.drawCenteredText(SMALL_FONT_ID, underlineY + 56, hint, true);
-  snprintf(hint, sizeof(hint), "%s %d%c", tr(STR_STEP_HINT_SIDE), largeStep, unit);
   renderer.drawCenteredText(SMALL_FONT_ID, underlineY + 78, hint, true);
+  snprintf(hint, sizeof(hint), "%s %d%c", tr(STR_STEP_HINT_SIDE), largeStep, unit);
+  renderer.drawCenteredText(SMALL_FONT_ID, underlineY + 100, hint, true);
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "-", "+");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
