@@ -2,6 +2,9 @@
 
 ### Added
 
+- The pomodoro lengths list gains a `Chaining` row. `Automatic`, the default, starts the next step on the press that acknowledges the previous one. `Manual` makes that next step wait for its own press, so you can finish the work, notice it, and start the break when you are actually ready. The choice is remembered between sessions.
+- The figure blinks once when a step begins. It used to drop a step within a second of starting, which read as "it is running"; now that it correctly holds, the blink says so deliberately.
+
 - An update channel choice on the update screen, asked each time you check rather than stored in Settings. `Stable` behaves exactly as before; `Beta` also sees pre-release builds, so a single device can try one before everybody gets it. The screen will now also offer a release that is *older* than the one installed — it says so plainly and asks first — which is how a device gets itself off a bad build without a computer.
 
 - A `Pomodoro` mode in the Countdown screen, chosen from a small menu alongside the existing `Target time`. It runs the classic 25-minute work and 5-minute break cycle, with a 15-minute break after every fourth, and waits for a button press between each step rather than moving on by itself — a step that has finished keeps counting `+mm`, so you can see how long it has been sitting done. Both modes now show a ring that drains rather than a bar that fills, with the time remaining written inside it.
