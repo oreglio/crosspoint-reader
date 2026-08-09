@@ -30,69 +30,102 @@
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `test/release_json_parser/ReleaseJsonParserTest.cpp`:
+`ReleaseJsonParserTest.cpp` does **not** use GoogleTest despite the CMake linking it:
+it is a hand-rolled harness of `void testXxx()` functions with `ASSERT_TRUE`/`ASSERT_EQ`/
+`ASSERT_STREQ` macros, `PASS()`, and its own `main()` listing every test. Write in that
+style and register the new functions in `main()`, or they never run.
+
+Consequence for verification: `ctest -R ReleaseJsonParser` reports **0 tests** and passes
+vacuously. Always run the binary directly.
+
+Append before `main()`:
 
 ```cpp
-namespace {
-constexpr char kOneReleaseArray[] =
-    "[{\"tag_name\":\"v1.5.26-rc1\",\"prerelease\":true,\"assets\":["
-    "{\"name\":\"firmware-x3-x4.bin\",\"size\":1234,"
-    "\"browser_download_url\":\"https://example.test/fw.bin\","
-    "\"digest\":\"sha256:"
-    "aaaabbbbccccddddeeeeffff00001111222233334444555566667777888899990\"}]}]";
+void testWrappingArraySingleRelease() {
+  printf("testWrappingArraySingleRelease...\n");
 
-constexpr char kTwoReleaseArray[] =
-    "[{\"tag_name\":\"v1.5.27\",\"assets\":["
-    "{\"name\":\"firmware-x3-x4.bin\",\"size\":10,"
-    "\"browser_download_url\":\"https://example.test/new.bin\"}]},"
-    "{\"tag_name\":\"v1.5.26\",\"assets\":["
-    "{\"name\":\"firmware-x3-x4.bin\",\"size\":20,"
-    "\"browser_download_url\":\"https://example.test/old.bin\"}]}]";
+  const char* json = R"([{
+      "tag_name": "v1.5.26-rc1",
+      "prerelease": true,
+      "assets": [{"name": "firmware.bin", "browser_download_url": "https://fw-rc", "size": 1234}]
+    }])";
 
-bool matchesX3X4(const char* name) { return name != nullptr && strcmp(name, "firmware-x3-x4.bin") == 0; }
-}  // namespace
+  ReleaseJsonParser p;
+  p.setExpectArray(true);
+  p.feed(json, strlen(json));
 
-TEST(ReleaseJsonParserArray, ReadsAReleaseWrappedInAnArray) {
-  ReleaseJsonParser parser(matchesX3X4);
-  parser.setExpectArray(true);
-  parser.feed(kOneReleaseArray, strlen(kOneReleaseArray));
+  ASSERT_TRUE(p.foundTag());
+  ASSERT_STREQ(p.getTagName(), "v1.5.26-rc1");
+  ASSERT_TRUE(p.foundFirmware());
+  ASSERT_STREQ(p.getFirmwareUrl(), "https://fw-rc");
+  ASSERT_EQ(p.getFirmwareSize(), 1234u);
 
-  ASSERT_TRUE(parser.foundTag());
-  EXPECT_STREQ(parser.getTagName(), "v1.5.26-rc1");
-  ASSERT_TRUE(parser.foundFirmware());
-  EXPECT_STREQ(parser.getFirmwareUrl(), "https://example.test/fw.bin");
-  EXPECT_EQ(parser.getFirmwareSize(), 1234u);
+  printf("  passed\n");
+  PASS();
 }
 
-TEST(ReleaseJsonParserArray, TakesTheFirstReleaseOfSeveral) {
-  ReleaseJsonParser parser(matchesX3X4);
-  parser.setExpectArray(true);
-  parser.feed(kTwoReleaseArray, strlen(kTwoReleaseArray));
+void testWrappingArrayTakesFirstRelease() {
+  printf("testWrappingArrayTakesFirstRelease...\n");
 
-  ASSERT_TRUE(parser.foundTag());
-  EXPECT_STREQ(parser.getTagName(), "v1.5.27");
-  EXPECT_STREQ(parser.getFirmwareUrl(), "https://example.test/new.bin");
-  EXPECT_EQ(parser.getFirmwareSize(), 10u);
+  const char* json = R"([
+      {"tag_name": "v1.5.27", "assets": [{"name": "firmware.bin", "browser_download_url": "https://new", "size": 10}]},
+      {"tag_name": "v1.5.26", "assets": [{"name": "firmware.bin", "browser_download_url": "https://old", "size": 20}]}
+    ])";
+
+  ReleaseJsonParser p;
+  p.setExpectArray(true);
+  p.feed(json, strlen(json));
+
+  ASSERT_TRUE(p.foundTag());
+  ASSERT_STREQ(p.getTagName(), "v1.5.27");
+  ASSERT_STREQ(p.getFirmwareUrl(), "https://new");
+  ASSERT_EQ(p.getFirmwareSize(), 10u);
+
+  printf("  passed\n");
+  PASS();
 }
 
-TEST(ReleaseJsonParserArray, AnEmptyArrayFindsNothing) {
-  ReleaseJsonParser parser(matchesX3X4);
-  parser.setExpectArray(true);
-  const char empty[] = "[]";
-  parser.feed(empty, strlen(empty));
+void testWrappingArrayEmpty() {
+  printf("testWrappingArrayEmpty...\n");
 
-  EXPECT_FALSE(parser.foundTag());
-  EXPECT_FALSE(parser.foundFirmware());
+  ReleaseJsonParser p;
+  p.setExpectArray(true);
+  const char* json = "[]";
+  p.feed(json, strlen(json));
+
+  ASSERT_TRUE(!p.foundTag());
+  ASSERT_TRUE(!p.foundFirmware());
+
+  printf("  passed\n");
+  PASS();
 }
 
-TEST(ReleaseJsonParserArray, ArrayBodyIsNotReadWhenTheFlagIsOff) {
-  ReleaseJsonParser parser(matchesX3X4);
-  parser.feed(kOneReleaseArray, strlen(kOneReleaseArray));
-  EXPECT_FALSE(parser.foundTag());
+void testWrappingArrayIgnoredWhenFlagOff() {
+  printf("testWrappingArrayIgnoredWhenFlagOff...\n");
+
+  const char* json = R"([{
+      "tag_name": "v1.5.26-rc1",
+      "assets": [{"name": "firmware.bin", "browser_download_url": "https://fw-rc", "size": 1234}]
+    }])";
+
+  ReleaseJsonParser p;  // flag left off: behaviour must be exactly as before
+  p.feed(json, strlen(json));
+
+  ASSERT_TRUE(!p.foundTag());
+
+  printf("  passed\n");
+  PASS();
 }
 ```
 
-If the file has no `#include <cstring>`, add it for `strcmp`/`strlen`.
+and add the four calls to `main()`, next to `testArraysAtTopLevel();`:
+
+```cpp
+  testWrappingArraySingleRelease();
+  testWrappingArrayTakesFirstRelease();
+  testWrappingArrayEmpty();
+  testWrappingArrayIgnoredWhenFlagOff();
+```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -181,10 +214,11 @@ body of `sOnKey`, `sOnString` and `sOnNumber`, after the `self` cast:
 - [ ] **Step 5: Run tests to verify they pass**
 
 ```bash
-cmake --build test/build --target ReleaseJsonParserTest && ctest --test-dir test/build -R ReleaseJsonParser --output-on-failure
+cmake --build test/build --target ReleaseJsonParserTest && ./test/build/release_json_parser/ReleaseJsonParserTest
 ```
 
-Expected: every test in the suite PASSES, the pre-existing ones included.
+Expected: `=== Results: N passed, 0 failed ===`, N being four more than before. Run the
+binary, not `ctest` — this suite is invisible to it.
 
 - [ ] **Step 6: Commit**
 
@@ -537,7 +571,7 @@ to:
 clang-format -i src/activities/settings/OtaUpdateActivity.cpp src/activities/settings/OtaUpdateActivity.h
 pio run -e default
 pio run -e simulator
-ctest --test-dir test/build -R ReleaseJsonParser --output-on-failure
+./test/build/release_json_parser/ReleaseJsonParserTest
 ```
 
 Expected: all three SUCCESS.
@@ -587,7 +621,7 @@ git commit -m "feat: choose an update channel per check, and allow a confirmed d
 
 | What | How |
 |---|---|
-| Array parsing | `ctest --test-dir test/build -R ReleaseJsonParser` |
+| Array parsing | `./test/build/release_json_parser/ReleaseJsonParserTest` (ctest sees 0 tests here) |
 | C3 firmware builds | `pio run -e default` |
 | Stubs stayed in sync | `pio run -e simulator` |
 | Channel chooser, both promptings | Flash and look, on **both** X3 and X4 |
