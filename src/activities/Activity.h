@@ -50,6 +50,11 @@ class Activity {
 
   virtual bool skipLoopDelay() { return false; }
   virtual bool preventAutoSleep() { return false; }
+  // Only meaningful alongside preventAutoSleep(). Some screens hold the device
+  // awake merely to keep the panel showing (a countdown), not because they have
+  // work in flight; those can let the CPU drop to its low-power clock between
+  // frames. Screens mid-transfer or mid-render must keep full speed.
+  virtual bool allowPowerSavingWhileAwake() const { return false; }
   virtual bool isReaderActivity() const { return false; }
   virtual bool isHomeActivity() const { return false; }
   // The open book uses its vertical swipe actions across the entire page;

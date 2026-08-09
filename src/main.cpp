@@ -1105,11 +1105,17 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
+  const bool keepAwake = activityManager.preventAutoSleep();
+  // An activity that holds the device awake only to keep its screen up (the
+  // countdown) still counts as idle for the clock-speed decision, so the CPU can
+  // drop to LOW_POWER_FREQ between its once-a-minute frames. Auto-sleep itself is
+  // blocked separately, at the timeout check below.
+  const bool holdFullSpeed = keepAwake && !activityManager.allowPowerSavingWhileAwake();
   if (gpio.wasAnyPressed() || gpio.wasAnyReleased()
 #if CROSSINK_APP_CAP_TOUCH
       || gpio.wasTouchActivity()
 #endif
-      || halTiltSensor.hadActivity() || activityManager.preventAutoSleep()) {
+      || halTiltSensor.hadActivity() || holdFullSpeed) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
   }
@@ -1155,7 +1161,9 @@ void loop() {
   }
 
   const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
-  if (sleepTimeoutMs > 0 && millis() - lastActivityTime >= sleepTimeoutMs) {
+  // keepAwake is checked explicitly here: activities that allow power saving no
+  // longer refresh lastActivityTime, so the timer alone would sleep on them.
+  if (sleepTimeoutMs > 0 && !keepAwake && millis() - lastActivityTime >= sleepTimeoutMs) {
     LOG_DBG("SLP", "Auto-sleep triggered after %lu ms of inactivity", sleepTimeoutMs);
     enterDeepSleep(true);
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
