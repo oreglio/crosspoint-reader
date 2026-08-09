@@ -45,9 +45,17 @@ void ReleaseJsonParser::reset() {
   currentAssetUrl[0] = '\0';
   currentAssetSha256[0] = '\0';
   currentAssetSize = 0;
+  arrayEntered = false;
+  completed = false;
 }
 
 void ReleaseJsonParser::setAssetMatcher(AssetMatcher matcher) { assetMatcher = matcher; }
+
+void ReleaseJsonParser::setExpectArray(const bool expect) {
+  expectArray = expect;
+  arrayEntered = false;
+  completed = false;
+}
 
 void ReleaseJsonParser::feed(const char* data, size_t len) { parser.feed(data, len); }
 
@@ -77,6 +85,7 @@ void ReleaseJsonParser::commitAsset() {
 
 void ReleaseJsonParser::sOnKey(void* ctx, const char* key, size_t len) {
   auto* self = static_cast<ReleaseJsonParser*>(ctx);
+  if (self->completed) return;
 
   switch (self->position) {
     case Position::TOP_LEVEL:
@@ -112,6 +121,7 @@ void ReleaseJsonParser::sOnKey(void* ctx, const char* key, size_t len) {
 
 void ReleaseJsonParser::sOnString(void* ctx, const char* value, size_t len) {
   auto* self = static_cast<ReleaseJsonParser*>(ctx);
+  if (self->completed) return;
 
   switch (self->lastKey) {
     case LastKey::TAG_NAME:
@@ -144,6 +154,7 @@ void ReleaseJsonParser::sOnString(void* ctx, const char* value, size_t len) {
 
 void ReleaseJsonParser::sOnNumber(void* ctx, const char* value, size_t /*len*/) {
   auto* self = static_cast<ReleaseJsonParser*>(ctx);
+  if (self->completed) return;
 
   if (self->lastKey == LastKey::ASSET_SIZE && self->position == Position::IN_ASSET_OBJECT && self->assetDepth == 1) {
     self->currentAssetSize = static_cast<size_t>(strtoul(value, nullptr, 10));
@@ -187,6 +198,9 @@ void ReleaseJsonParser::sOnObjectEnd(void* ctx) {
   switch (self->position) {
     case Position::TOP_LEVEL:
       if (self->depth > 0) self->depth--;
+      // A list may carry more releases after this one; GitHub orders them newest
+      // first, so stop taking values once the first has closed.
+      if (self->arrayEntered && self->depth == 0 && self->tagFound) self->completed = true;
       break;
     case Position::IN_ASSET_OBJECT:
       self->assetDepth--;
@@ -206,7 +220,11 @@ void ReleaseJsonParser::sOnArrayStart(void* ctx) {
 
   switch (self->position) {
     case Position::TOP_LEVEL:
-      if (self->lastKey == LastKey::ASSETS && self->depth == 1) {
+      if (self->expectArray && !self->arrayEntered && self->depth == 0) {
+        // Step over the wrapping array without counting it, so the release
+        // object inside still lands at depth 1 and every rule below applies.
+        self->arrayEntered = true;
+      } else if (self->lastKey == LastKey::ASSETS && self->depth == 1) {
         self->position = Position::IN_ASSETS_ARRAY;
       } else {
         self->depth++;

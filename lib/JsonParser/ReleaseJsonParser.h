@@ -16,6 +16,11 @@ class ReleaseJsonParser {
 
   void reset();
   void setAssetMatcher(AssetMatcher assetMatcher);
+  // /releases returns a list where /releases/latest returns one object. With this
+  // set, the first top-level '[' is stepped over without changing depth, so the
+  // release inside it still sits at depth 1 and every existing rule applies.
+  // Only the first release of the list is read; GitHub orders them newest first.
+  void setExpectArray(bool expectArray);
   void feed(const char* data, size_t len);
 
   bool foundTag() const;
@@ -69,6 +74,9 @@ class ReleaseJsonParser {
   size_t firmwareSize;
   bool tagFound;
   bool firmwareFound;
+  bool expectArray = false;
+  bool arrayEntered = false;
+  bool completed = false;
 
   char currentAssetName[96];
   char currentAssetUrl[512];
