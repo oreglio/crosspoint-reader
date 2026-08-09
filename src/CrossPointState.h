@@ -31,6 +31,9 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   uint8_t pomodoroWorkMinutes = 25;
   uint8_t pomodoroShortBreakMinutes = 5;
   uint8_t pomodoroLongBreakMinutes = 15;
+  // False chains straight into the next step on the press that acknowledges the
+  // previous one; true makes that next step wait for its own start press.
+  bool pomodoroManualStart = false;
   bool lastSleepFromReader = false;
   bool showBootScreen = true;
 

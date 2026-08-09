@@ -142,6 +142,7 @@ void CountdownActivity::startCountdown() {
   lastDisplayTick = -1;
   wasOvertime = false;
   repaintsSinceFullRefresh = 0;
+  blinkUntilMs = millis() + kStartBlinkMs;
   // The picker's hint lines sit almost exactly where the running screen puts
   // "Elapsed", so a fast refresh here superimposes the two.
   pendingFullRefresh = true;
@@ -153,6 +154,13 @@ void CountdownActivity::startCountdown() {
 
 void CountdownActivity::refreshElapsed() {
   clock.update(millis());
+
+  // One repaint to end the start cue, then the normal cadence takes over.
+  if (blinkUntilMs != 0 && millis() >= blinkUntilMs) {
+    blinkUntilMs = 0;
+    requestUpdate();
+    return;
+  }
 
   // Repaint exactly when the rendered string would change: every 10s while the
   // display carries seconds, every minute once it only shows hours.
@@ -270,17 +278,8 @@ void CountdownActivity::renderRunning() {
     formatCountdownSeconds(countdownShownRemaining(clock.remainingSeconds()), bigValue, sizeof(bigValue));
   }
 
-  const int valueHeight = renderer.getLineHeight(COUNTDOWN_VALUE_FONT_ID);
-  const int labelHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  const int blockTop = layout.cy - (valueHeight + 4 + labelHeight) / 2;
-
-  const std::string value =
-      renderer.truncatedText(COUNTDOWN_VALUE_FONT_ID, bigValue, layout.centerMaxWidth, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(COUNTDOWN_VALUE_FONT_ID, blockTop, value.c_str(), true, EpdFontFamily::BOLD);
-
-  const char* labelText = overtime ? tr(STR_COUNTDOWN_OVERTIME) : tr(STR_COUNTDOWN_REMAINING);
-  const std::string label = renderer.truncatedText(SMALL_FONT_ID, labelText, layout.centerMaxWidth);
-  renderer.drawCenteredText(SMALL_FONT_ID, blockTop + valueHeight + 4, label.c_str(), true);
+  drawCountdownCentre(renderer, layout, bigValue, overtime ? tr(STR_COUNTDOWN_OVERTIME) : tr(STR_COUNTDOWN_REMAINING),
+                      millis() < blinkUntilMs);
 
   char elapsedText[12];
   formatCountdownSeconds(countdownShownElapsed(std::min(clock.elapsedSeconds(), clock.spanSeconds())), elapsedText,

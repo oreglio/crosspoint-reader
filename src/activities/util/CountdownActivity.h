@@ -73,6 +73,11 @@ class CountdownActivity final : public Activity {
   bool pendingFullRefresh = true;
   bool wasOvertime = false;
   int repaintsSinceFullRefresh = 0;
+  // Non-zero while the figure is shown inverted, as the cue that a countdown has
+  // just begun. Driven from loop(), never from render(): animating inside the
+  // render call would hold the render task for the whole blink.
+  unsigned long blinkUntilMs = 0;
+  static constexpr unsigned long kStartBlinkMs = 300;
   // A countdown is stared at for hours, so fast-refresh residue piles up. One
   // full waveform every 120 repaints is twenty minutes at the fine cadence.
   static constexpr int kRepaintsPerFullRefresh = 120;

@@ -42,11 +42,18 @@ class PomodoroActivity final : public Activity {
   enum class CustomField : uint8_t { Work, ShortBreak, LongBreak };
 
   PomodoroDurations durations = PomodoroSchedule::kClassic;
+  // False chains into the next step on the press that acknowledges the previous
+  // one; true makes that next step wait for its own start press.
+  bool manualStart = false;
   int stepIndex = 0;
   Gate gate = Gate::Ready;
   CountdownClock clock;
   int lastDisplayTick = -1;
   int repaintsSinceFullRefresh = 0;
+  // Non-zero while the figure is shown inverted, as the cue that a step has just
+  // begun. Driven from loop(), never from render().
+  unsigned long blinkUntilMs = 0;
+  static constexpr unsigned long kStartBlinkMs = 300;
   bool pendingFullRefresh = true;
 
   void askPreset();

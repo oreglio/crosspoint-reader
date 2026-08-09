@@ -21,6 +21,7 @@
 void PomodoroActivity::onEnter() {
   Activity::onEnter();
   durations = {APP_STATE.pomodoroWorkMinutes, APP_STATE.pomodoroShortBreakMinutes, APP_STATE.pomodoroLongBreakMinutes};
+  manualStart = APP_STATE.pomodoroManualStart;
   askPreset();
 }
 
@@ -60,6 +61,12 @@ void PomodoroActivity::askPreset() {
   snprintf(line, sizeof(line), "%s  %s", tr(STR_POMODORO_PRESET_CUSTOM), lengths);
   rows.emplace_back(line);
 
+  // The chaining mode carries its own state on the row. A screen of its own would
+  // cost every launch a press, including for anyone who never changes it.
+  snprintf(line, sizeof(line), "%s  %s", tr(STR_POMODORO_CHAINING),
+           manualStart ? tr(STR_POMODORO_CHAINING_MANUAL) : tr(STR_POMODORO_CHAINING_AUTO));
+  rows.emplace_back(line);
+
   // Start on whichever row matches what was last used, so the common case is a
   // single press and the custom row shows the lengths it would reuse.
   uint8_t selected = 3;
@@ -82,6 +89,15 @@ void PomodoroActivity::askPreset() {
         if (choice->index < 3) {
           durations = presets[choice->index];
           applyAndStart();
+          return;
+        }
+        if (choice->index == 4) {
+          // Flip and come straight back, so the new state is visible before a
+          // length is chosen to start with.
+          manualStart = !manualStart;
+          APP_STATE.pomodoroManualStart = manualStart;
+          APP_STATE.saveToFile();
+          askPreset();
           return;
         }
         askCustom(CustomField::Work);
@@ -132,6 +148,7 @@ void PomodoroActivity::applyAndStart() {
   APP_STATE.pomodoroWorkMinutes = durations.work;
   APP_STATE.pomodoroShortBreakMinutes = durations.shortBreak;
   APP_STATE.pomodoroLongBreakMinutes = durations.longBreak;
+  APP_STATE.pomodoroManualStart = manualStart;
   APP_STATE.saveToFile();
   // The first step waits to be started. Later ones begin on the press that
   // acknowledges the previous one, so a cycle still costs one press per change.
@@ -153,6 +170,7 @@ void PomodoroActivity::prepareStep(const int index, const Gate initialGate) {
 
 void PomodoroActivity::beginRunning() {
   gate = Gate::Running;
+  blinkUntilMs = millis() + kStartBlinkMs;
   // Restart the clock here, not when the step was prepared: the countdown must
   // measure from the press, however long the screen sat waiting for it.
   clock.start(millis(), PomodoroSchedule::stepAt(durations, stepIndex).minutes);
@@ -187,7 +205,9 @@ void PomodoroActivity::loop() {
     }
     if (gate == Gate::Finished || gate == Gate::Running) {
       // Running too: a step you no longer need should not have to be waited out.
-      prepareStep(stepIndex + 1, Gate::Running);
+      // In manual chaining the next step waits for its own press rather than
+      // starting on the one that acknowledged this one.
+      prepareStep(stepIndex + 1, manualStart ? Gate::Ready : Gate::Running);
       return;
     }
   }
@@ -195,6 +215,13 @@ void PomodoroActivity::loop() {
   if (gate != Gate::Running) return;  // nothing ticks while a gate is held
 
   clock.update(millis());
+
+  // One repaint to end the start cue, then the normal cadence takes over.
+  if (blinkUntilMs != 0 && millis() >= blinkUntilMs) {
+    blinkUntilMs = 0;
+    requestUpdate();
+    return;
+  }
 
   if (clock.finished()) {
     gate = Gate::Finished;
@@ -236,16 +263,7 @@ void PomodoroActivity::render(RenderLock&&) {
     formatCountdownSeconds(countdownShownRemaining(clock.remainingSeconds()), bigValue, sizeof(bigValue));
   }
 
-  const int valueHeight = renderer.getLineHeight(COUNTDOWN_VALUE_FONT_ID);
-  const int labelHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  const int blockTop = layout.cy - (valueHeight + 4 + labelHeight) / 2;
-
-  const std::string value =
-      renderer.truncatedText(COUNTDOWN_VALUE_FONT_ID, bigValue, layout.centerMaxWidth, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(COUNTDOWN_VALUE_FONT_ID, blockTop, value.c_str(), true, EpdFontFamily::BOLD);
-
-  const std::string label = renderer.truncatedText(SMALL_FONT_ID, phaseLabel(), layout.centerMaxWidth);
-  renderer.drawCenteredText(SMALL_FONT_ID, blockTop + valueHeight + 4, label.c_str(), true);
+  drawCountdownCentre(renderer, layout, bigValue, phaseLabel(), millis() < blinkUntilMs);
 
   char line[80];
   if (gate == Gate::Ready) {

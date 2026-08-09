@@ -84,6 +84,7 @@ void CrossPointState::toJson(JsonDocument& doc) const {
   doc["pomodoroWorkMinutes"] = pomodoroWorkMinutes;
   doc["pomodoroShortBreakMinutes"] = pomodoroShortBreakMinutes;
   doc["pomodoroLongBreakMinutes"] = pomodoroLongBreakMinutes;
+  doc["pomodoroManualStart"] = pomodoroManualStart;
   doc["lastSleepFromReader"] = lastSleepFromReader;
   doc["pendingBookmarkSpine"] = pendingBookmarkSpine;
   doc["pendingBookmarkProgress"] = pendingBookmarkProgress;
@@ -117,6 +118,7 @@ bool CrossPointState::fromJson(JsonVariantConst doc) {
   pomodoroWorkMinutes = doc["pomodoroWorkMinutes"] | static_cast<uint8_t>(25);
   pomodoroShortBreakMinutes = doc["pomodoroShortBreakMinutes"] | static_cast<uint8_t>(5);
   pomodoroLongBreakMinutes = doc["pomodoroLongBreakMinutes"] | static_cast<uint8_t>(15);
+  pomodoroManualStart = doc["pomodoroManualStart"] | false;
   lastSleepFromReader = doc["lastSleepFromReader"] | false;
   pendingBookmarkSpine = doc["pendingBookmarkSpine"] | static_cast<uint16_t>(UINT16_MAX);
   pendingBookmarkProgress = doc["pendingBookmarkProgress"] | static_cast<float>(-1.0f);

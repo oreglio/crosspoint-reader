@@ -26,3 +26,9 @@ struct CountdownLayout {
 };
 
 CountdownLayout computeCountdownLayout(const GfxRenderer& renderer, const MappedInputManager& mappedInput);
+
+// The figure and its label, centred in the ring and truncated to fit inside it.
+// Shared so the countdown and the pomodoro cannot drift apart, and so the start
+// cue has one place to invert rather than two copies to keep in step.
+void drawCountdownCentre(const GfxRenderer& renderer, const CountdownLayout& layout, const char* value,
+                         const char* label, bool inverted);
