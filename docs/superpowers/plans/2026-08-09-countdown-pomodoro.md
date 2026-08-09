@@ -305,10 +305,10 @@ The `.cpp` needs `#include <cstdio>` for `snprintf`.
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cmake --build test/build --target CountdownTest && ctest --test-dir test/build -R Countdown --output-on-failure
+cmake --build test/build --target CountdownTest && ctest --test-dir test/build -R "Countdown|Pomodoro" --output-on-failure
 ```
 
-Expected: all 11 tests PASS.
+Expected: all 10 tests PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -449,10 +449,10 @@ struct PomodoroSchedule {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cmake --build test/build --target CountdownTest && ctest --test-dir test/build -R Countdown --output-on-failure
+cmake --build test/build --target CountdownTest && ctest --test-dir test/build -R "Countdown|Pomodoro" --output-on-failure
 ```
 
-Expected: all 16 tests PASS (11 from Task 1 plus 5 here).
+Expected: all 15 tests PASS (10 from Task 1 plus 5 here).
 
 - [ ] **Step 5: Commit**
 
@@ -736,7 +736,7 @@ Note `\xC2\xB7` is a UTF-8 middle dot. Add `#include "CountdownLayout.h"`, `#inc
 clang-format -i src/activities/util/CountdownActivity.cpp src/activities/util/CountdownActivity.h \
                 src/activities/util/CountdownLayout.cpp src/activities/util/CountdownLayout.h
 pio run -e default
-ctest --test-dir test/build -R Countdown --output-on-failure
+ctest --test-dir test/build -R "Countdown|Pomodoro" --output-on-failure
 ```
 
 Expected: both SUCCESS.
@@ -1031,7 +1031,7 @@ void HomeActivity::onCountdownOpen() {
 clang-format -i src/activities/util/PomodoroActivity.cpp src/activities/util/PomodoroActivity.h \
                 src/activities/home/HomeActivity.cpp
 pio run -e default
-ctest --test-dir test/build -R Countdown --output-on-failure
+ctest --test-dir test/build -R "Countdown|Pomodoro" --output-on-failure
 ```
 
 Expected: both SUCCESS.
@@ -1087,7 +1087,7 @@ git commit -m "feat: add a pomodoro mode behind a countdown mode chooser"
 
 | What | How |
 |---|---|
-| Timing arithmetic | `ctest --test-dir test/build -R Countdown` — 16 tests |
+| Timing arithmetic | `ctest --test-dir test/build -R "Countdown|Pomodoro"` — 15 tests (the filter must cover both suite name prefixes) |
 | Builds for C3 | `pio run -e default` |
 | Ring, layout, overflow | Flash and look, on **both** X3 and X4 |
 | Flash budget | Task 5 Step 6, against 6,553,600 bytes |

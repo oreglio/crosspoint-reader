@@ -1,5 +1,6 @@
 add_executable(CountdownTest
   CountdownClockTest.cpp
+  PomodoroScheduleTest.cpp
   ${REPO_ROOT}/src/activities/util/CountdownClock.cpp
 )
 
