@@ -83,7 +83,15 @@ class ReaderQuickTogglesActivity final : public Activity {
   FontStepFn fontStep_ = nullptr;
   SaveSettingsFn saveSettings_ = nullptr;
   int selected_ = 0;
-  bool repaintPagePending_ = true;
+  // False on open. The drawer is pushed from the reader's own loop, and
+  // ActivityManager clears nothing on the way in, so the page the reader last
+  // drew is still in the framebuffer -- the same fact that lets a toggle
+  // repaint the panel alone. Opening with it true reloaded and re-rendered the
+  // page every single time (a Page allocation of tens of KB, on the heap the
+  // header above promises not to touch), and left a white screen behind the
+  // panel whenever that reload failed. It is set true only by a toggle that
+  // actually invalidates the page pixels.
+  bool repaintPagePending_ = false;
   bool dirty_ = false;
   // The drawer opens on a HOLD of one of the two button pairs, and every one of
   // those four buttons does something here on release.
