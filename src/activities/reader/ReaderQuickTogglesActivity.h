@@ -32,9 +32,19 @@ class ReaderQuickTogglesActivity final : public Activity {
   // borrows the same path rather than reflowing the whole book.
   using FontStepFn = void (*)(void* context, bool larger);
 
-  ReaderQuickTogglesActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                             void* backgroundContext = nullptr, BackgroundRenderFn backgroundRender = nullptr,
-                             FontStepFn fontStep = nullptr);
+  // Writes the toggles to disk. Persisting is the reader's job, not the
+  // drawer's: a bare SETTINGS.saveToFile() here saves whatever the CURRENT
+  // BOOK's overrides left in SETTINGS as the global defaults, so opening a
+  // book with a per-book font or dark-mode override and flipping one toggle
+  // rewrote the defaults for every other book. The reader hands over
+  // saveGlobalSettingsPreservingBookOverrides(), which puts the pre-book
+  // globals back around the write. Same shape as the font-step hook.
+  using SaveSettingsFn = void (*)(void* context);
+  // No defaulted arguments: every hook is required. The drawer cannot do any
+  // of these three jobs itself, and a caller that silently got nullptr for the
+  // save hook would be back to losing the user's toggles.
+  ReaderQuickTogglesActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, void* backgroundContext,
+                             BackgroundRenderFn backgroundRender, FontStepFn fontStep, SaveSettingsFn saveSettings);
 
   void onEnter() override;
   void render(RenderLock&&) override;
@@ -71,6 +81,7 @@ class ReaderQuickTogglesActivity final : public Activity {
   BackgroundRenderFn backgroundRender_ = nullptr;
   FontStepFn fontStep_ = nullptr;
   int selected_ = 0;
+  SaveSettingsFn saveSettings_ = nullptr;
   bool repaintPagePending_ = true;
   bool dirty_ = false;
 };

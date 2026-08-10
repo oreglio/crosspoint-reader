@@ -26,7 +26,6 @@
 #include "../settings/KOReaderSettingsActivity.h"
 #include "BookStatsActivity.h"
 #include "ClipSelectionActivity.h"
-#include "ReaderQuickTogglesActivity.h"
 #include "ClippingStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -45,6 +44,7 @@
 #include "NearbyBookPositionSyncActivity.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
+#include "ReaderQuickTogglesActivity.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
@@ -2732,21 +2732,21 @@ void EpubReaderActivity::loop() {
       sideButtonLongPressHandled = !(topReleased || bottomReleased);
       auto drawer = makeUniqueNoThrow<ReaderQuickTogglesActivity>(
           renderer, mappedInput, this, &EpubReaderActivity::renderDictionaryLookupBackgroundCallback,
-          &EpubReaderActivity::quickTogglesFontStepCallback);
+          &EpubReaderActivity::quickTogglesFontStepCallback, &EpubReaderActivity::saveGlobalSettingsForBookReader);
       if (!drawer) {
         LOG_ERR("RQT", "OOM allocating ReaderQuickTogglesActivity (%u bytes)",
                 static_cast<unsigned>(sizeof(ReaderQuickTogglesActivity)));
         return;
       }
       startActivityForResult(std::move(drawer), [this](const ActivityResult&) {
-          // One reflow for the whole visit, now that the reader owns the screen again.
-          if (quickTogglesFontChanged_) {
-            quickTogglesFontChanged_ = false;
-            reindexCurrentSection();
-            return;
-          }
-          requestUpdate();
-        });
+        // One reflow for the whole visit, now that the reader owns the screen again.
+        if (quickTogglesFontChanged_) {
+          quickTogglesFontChanged_ = false;
+          reindexCurrentSection();
+          return;
+        }
+        requestUpdate();
+      });
       return;
     }
     if (!sideButtonLongPressHandled && topLongPressed) {
@@ -2813,7 +2813,7 @@ void EpubReaderActivity::loop() {
         // Same drawer as the side-button gesture; direction carries no meaning.
         auto drawer = makeUniqueNoThrow<ReaderQuickTogglesActivity>(
             renderer, mappedInput, this, &EpubReaderActivity::renderDictionaryLookupBackgroundCallback,
-          &EpubReaderActivity::quickTogglesFontStepCallback);
+            &EpubReaderActivity::quickTogglesFontStepCallback, &EpubReaderActivity::saveGlobalSettingsForBookReader);
         if (!drawer) {
           LOG_ERR("RQT", "OOM allocating ReaderQuickTogglesActivity (%u bytes)",
                   static_cast<unsigned>(sizeof(ReaderQuickTogglesActivity)));

@@ -1,6 +1,7 @@
 #include "ReaderQuickTogglesActivity.h"
 
 #include <I18n.h>
+#include <Logging.h>
 
 #include <cstdio>
 
@@ -33,11 +34,12 @@ constexpr int ROW_PADDING = 8;
 
 ReaderQuickTogglesActivity::ReaderQuickTogglesActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                        void* backgroundContext, BackgroundRenderFn backgroundRender,
-                                                       FontStepFn fontStep)
+                                                       FontStepFn fontStep, SaveSettingsFn saveSettings)
     : Activity("ReaderQuickToggles", renderer, mappedInput),
       backgroundContext_(backgroundContext),
       backgroundRender_(backgroundRender),
-      fontStep_(fontStep) {}
+      fontStep_(fontStep),
+      saveSettings_(saveSettings) {}
 
 void ReaderQuickTogglesActivity::onEnter() {
   Activity::onEnter();
@@ -113,7 +115,11 @@ void ReaderQuickTogglesActivity::loop() {
     // One write for the whole visit rather than one per toggle: flipping four
     // rows should not cost four SD writes (see the debounce rule in AGENTS.md).
     if (dirty_) {
-      SETTINGS.saveToFile();
+      if (saveSettings_) {
+        saveSettings_(backgroundContext_);
+      } else {
+        LOG_ERR("RQT", "no save hook: quick toggles not persisted");
+      }
       dirty_ = false;
     }
     // The reader repaints its own page on resume; nothing to restore here.
