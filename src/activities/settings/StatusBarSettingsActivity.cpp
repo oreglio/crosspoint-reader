@@ -324,7 +324,7 @@ void StatusBarSettingsActivity::handleSelection() {
     default:
       return;
   }
-  SETTINGS.saveToFile();
+  SETTINGS.saveGlobalDefaults();
 }
 
 void StatusBarSettingsActivity::openOptionPicker() {
@@ -343,7 +343,7 @@ void StatusBarSettingsActivity::openOptionPicker() {
 
   optionPopup.show(menuNames[item], options, currentIndex, [this, item](int selectedIndex) {
     setOptionIndexForItem(item, static_cast<uint8_t>(selectedIndex));
-    SETTINGS.saveToFile();
+    SETTINGS.saveGlobalDefaults();
     requestUpdate();
   });
   requestUpdate();

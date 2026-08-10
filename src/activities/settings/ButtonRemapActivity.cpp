@@ -64,7 +64,7 @@ void ButtonRemapActivity::loop() {
       SETTINGS.frontButtonLeft = CrossPointSettings::FRONT_HW_LEFT;
       SETTINGS.frontButtonRight = CrossPointSettings::FRONT_HW_RIGHT;
     }
-    SETTINGS.saveToFile();
+    SETTINGS.saveGlobalDefaults();
     finish();
     return;
   }
@@ -98,7 +98,7 @@ void ButtonRemapActivity::loop() {
     if (currentStep >= kRoleCount) {
       // All roles assigned; save to settings and exit.
       applyTempMapping();
-      SETTINGS.saveToFile();
+      SETTINGS.saveGlobalDefaults();
       finish();
       return;
     }

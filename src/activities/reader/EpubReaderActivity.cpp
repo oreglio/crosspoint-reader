@@ -1949,14 +1949,14 @@ void EpubReaderActivity::saveDictionaryFontForBook(const char* familyName, const
 
 void EpubReaderActivity::saveGlobalSettingsPreservingBookOverrides() {
   if (!restoreGlobalReaderSettingsOnExit) {
-    SETTINGS.saveToFile();
+    SETTINGS.saveGlobalDefaults();
     return;
   }
 
   ReaderSettingsSnapshot activeReaderSettings;
   captureReaderSettings(activeReaderSettings);
   applyReaderSettings(globalReaderSettingsBeforeBook);
-  SETTINGS.saveToFile();
+  SETTINGS.saveGlobalDefaults();
   applyReaderSettings(activeReaderSettings);
 }
 

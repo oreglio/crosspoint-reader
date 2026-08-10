@@ -16,7 +16,30 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   CrossPointSettings() = default;
   friend class PersistableStore<CrossPointSettings>;
 
+  // saveToFile() is closed off deliberately. What SETTINGS holds is not always
+  // the global defaults: while a book with its own reading settings is open,
+  // EpubReaderActivity applies that book's font, size, spacing, margins,
+  // orientation and justification into this very object. A bare save from
+  // reader code therefore writes one book's preferences as everybody's
+  // defaults -- which is exactly what the quick-toggle drawer did.
+  //
+  // Callers now have to name what they mean. Outside the reader, and inside it
+  // between beginGlobalSettingsEdit() and endGlobalSettingsEdit(), SETTINGS is
+  // the defaults and saveGlobalDefaults() is the truth. Reader code holding a
+  // book's values must go through
+  // EpubReaderActivity::saveGlobalSettingsPreservingBookOverrides(), which puts
+  // the pre-book values back around the write.
+  //
+  // This class declares its own saveToFile() rather than inheriting the base
+  // one, so closing the door means moving THAT declaration out of the public
+  // section -- a using-declaration for the base member changes nothing here,
+  // and a build that still compiles proves it.
+  bool saveToFile() const;
+
  public:
+  // Persist this object as the global defaults. See the note above: only call
+  // it where SETTINGS actually holds the defaults.
+  bool saveGlobalDefaults() const { return saveToFile(); }
   // Access the settings mutex for protecting multi-field reads/writes from other cores.
   // Callers must not re-enter SETTINGS methods that lock _mutex while holding it.
   std::mutex& getMutex() const { return _mutex; }
@@ -590,7 +613,6 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // If count_only is true, returns the number of settings items that would be written.
   uint8_t writeSettings(HalFile& file, bool count_only = false) const;
 
-  bool saveToFile() const;
   bool loadFromFile();
   static const char* getFilePath() { return "/.crosspoint/crossink-settings.json"; }
   void toJson(JsonDocument& doc) const;

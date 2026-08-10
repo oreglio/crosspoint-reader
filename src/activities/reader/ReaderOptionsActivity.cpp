@@ -194,7 +194,7 @@ void ReaderOptionsActivity::persistReaderSettings() {
   if (saveSettingsCallback) {
     saveSettingsCallback(saveSettingsContext);
   } else {
-    SETTINGS.saveToFile();
+    SETTINGS.saveGlobalDefaults();
   }
 }
 
@@ -202,7 +202,7 @@ void ReaderOptionsActivity::persistGlobalSettings() {
   if (saveGlobalSettingsCallback) {
     saveGlobalSettingsCallback(saveGlobalSettingsContext);
   } else {
-    SETTINGS.saveToFile();
+    SETTINGS.saveGlobalDefaults();
   }
 }
 

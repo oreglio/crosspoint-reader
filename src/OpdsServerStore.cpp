@@ -129,7 +129,7 @@ bool OpdsServerStore::migrateFromSettings() {
     SETTINGS.opdsServerUrl[0] = '\0';
     SETTINGS.opdsUsername[0] = '\0';
     SETTINGS.opdsPassword[0] = '\0';
-    SETTINGS.saveToFile();
+    SETTINGS.saveGlobalDefaults();
     LOG_DBG("OPS", "Migrated single-server OPDS config to opds.json");
     return true;
   }

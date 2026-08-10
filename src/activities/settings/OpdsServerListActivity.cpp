@@ -154,7 +154,7 @@ void OpdsServerListActivity::handleSelection() {
       const std::string folder = normalizeDownloadFolder(keyboardResult.text);
       strncpy(SETTINGS.opdsDownloadFolder, folder.c_str(), sizeof(SETTINGS.opdsDownloadFolder) - 1);
       SETTINGS.opdsDownloadFolder[sizeof(SETTINGS.opdsDownloadFolder) - 1] = '\0';
-      if (!SETTINGS.saveToFile()) {
+      if (!SETTINGS.saveGlobalDefaults()) {
         LOG_ERR("OPDS", "Could not save download folder setting");
       }
       requestUpdate();

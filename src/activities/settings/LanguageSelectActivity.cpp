@@ -48,7 +48,7 @@ void LanguageSelectActivity::handleSelection() {
     I18N.setLanguage(static_cast<Language>(langIndex));
   }
   SETTINGS.language = langIndex;
-  SETTINGS.saveToFile();
+  SETTINGS.saveGlobalDefaults();
   onBack();
 }
 

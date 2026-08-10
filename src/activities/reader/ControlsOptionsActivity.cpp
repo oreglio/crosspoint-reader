@@ -161,7 +161,7 @@ void ControlsOptionsActivity::openEnumOptionPicker(const SettingInfo& setting) {
     if (selectedSetting.valuePtr != nullptr) {
       SETTINGS.*(selectedSetting.valuePtr) =
           enumRawValueForDisplayIndex(selectedSetting, static_cast<uint8_t>(selectedIndex));
-      SETTINGS.saveToFile();
+      SETTINGS.saveGlobalDefaults();
     }
   });
   requestUpdate();
@@ -174,7 +174,7 @@ void ControlsOptionsActivity::toggleCurrentSetting() {
   if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
     const bool cur = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = !cur;
-    SETTINGS.saveToFile();
+    SETTINGS.saveGlobalDefaults();
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     if (currentSettingUsesOptionMenu(setting)) {
       openEnumOptionPicker(setting);
@@ -186,7 +186,7 @@ void ControlsOptionsActivity::toggleCurrentSetting() {
     if (optionCount == 0) return;
     const uint8_t nextIndex = (currentIndex + 1) % static_cast<uint8_t>(optionCount);
     SETTINGS.*(setting.valuePtr) = enumRawValueForDisplayIndex(setting, nextIndex);
-    SETTINGS.saveToFile();
+    SETTINGS.saveGlobalDefaults();
   } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
     const int8_t cur = SETTINGS.*(setting.valuePtr);
     if (cur + setting.valueRange.step > setting.valueRange.max) {
@@ -194,16 +194,16 @@ void ControlsOptionsActivity::toggleCurrentSetting() {
     } else {
       SETTINGS.*(setting.valuePtr) = cur + setting.valueRange.step;
     }
-    SETTINGS.saveToFile();
+    SETTINGS.saveGlobalDefaults();
   } else if (setting.type == SettingType::ACTION) {
     if (setting.action == SettingAction::RemapFrontButtons) {
       startActivityForResult(std::make_unique<ButtonRemapActivity>(renderer, mappedInput, false, true),
-                             [](const ActivityResult&) { SETTINGS.saveToFile(); });
+                             [](const ActivityResult&) { SETTINGS.saveGlobalDefaults(); });
       return;
     }
     if (setting.action == SettingAction::RemapFrontButtonsReader) {
       startActivityForResult(std::make_unique<ButtonRemapActivity>(renderer, mappedInput, true, true),
-                             [](const ActivityResult&) { SETTINGS.saveToFile(); });
+                             [](const ActivityResult&) { SETTINGS.saveGlobalDefaults(); });
       return;
     }
   } else if (setting.type == SettingType::SUBMENU) {
@@ -220,7 +220,7 @@ void ControlsOptionsActivity::loop() {
       requestUpdate();
       return;
     }
-    SETTINGS.saveToFile();
+    SETTINGS.saveGlobalDefaults();
     finish();
     return;
   }
@@ -272,7 +272,7 @@ void ControlsOptionsActivity::loop() {
       requestUpdate();
       return;
     }
-    SETTINGS.saveToFile();
+    SETTINGS.saveGlobalDefaults();
     finish();
     return;
   }

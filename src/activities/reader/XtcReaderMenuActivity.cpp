@@ -79,7 +79,7 @@ void XtcReaderMenuActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (items[selectedIndex].action == MenuAction::DISABLE_TOUCHSCREEN) {
       SETTINGS.disableReaderTouchscreen = SETTINGS.disableReaderTouchscreen ? 0 : 1;
-      SETTINGS.saveToFile();
+      SETTINGS.saveGlobalDefaults();
       requestUpdate();
       return;
     }
@@ -93,7 +93,7 @@ void XtcReaderMenuActivity::loop() {
     selectedIndex = touchedIndex;
     if (items[selectedIndex].action == MenuAction::DISABLE_TOUCHSCREEN) {
       SETTINGS.disableReaderTouchscreen = SETTINGS.disableReaderTouchscreen ? 0 : 1;
-      SETTINGS.saveToFile();
+      SETTINGS.saveGlobalDefaults();
       requestUpdate();
       return;
     }

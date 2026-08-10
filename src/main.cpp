@@ -621,7 +621,7 @@ bool handleX4ProFrontlightDoubleClick() {
   const bool lightOn = !Frontlight.isOn();
   Frontlight.setOn(lightOn);
   SETTINGS.frontlightOn = lightOn ? 1 : 0;
-  SETTINGS.saveToFile();
+  SETTINGS.saveGlobalDefaults();
   LOG_INF("LIGHT", "Frontlight toggled %s by power-button double-click", lightOn ? "on" : "off");
   return true;
 #endif

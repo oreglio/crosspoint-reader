@@ -761,7 +761,7 @@ void FileBrowserActivity::toggleHiddenFiles() {
   const std::string currentEntry =
       (entryCount() > 0 && selectorIndex < entryCount()) ? entryNameAt(selectorIndex) : std::string();
   SETTINGS.showHiddenFiles = SETTINGS.showHiddenFiles ? 0 : 1;
-  if (!SETTINGS.saveToFile()) {
+  if (!SETTINGS.saveGlobalDefaults()) {
     LOG_ERR("FileBrowser", "Failed to save showHiddenFiles=%u", SETTINGS.showHiddenFiles);
   }
 

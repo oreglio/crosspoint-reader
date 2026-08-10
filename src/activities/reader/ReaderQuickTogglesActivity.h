@@ -33,7 +33,7 @@ class ReaderQuickTogglesActivity final : public Activity {
   // borrows the same path rather than reflowing the whole book.
   using FontStepFn = void (*)(void* context, bool larger);
   // Writes the toggles to disk. Persisting is the reader's job, not the
-  // drawer's: a bare SETTINGS.saveToFile() here saves whatever the CURRENT
+  // drawer's: a bare SETTINGS.saveGlobalDefaults() here saves whatever the CURRENT
   // BOOK's overrides left in SETTINGS as the global defaults, so opening a
   // book with a per-book font or dark-mode override and flipping one toggle
   // rewrote the defaults for every other book. The reader hands over

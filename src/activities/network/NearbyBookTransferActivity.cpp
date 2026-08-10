@@ -611,7 +611,7 @@ void NearbyBookTransferActivity::chooseDestinationFolder() {
     const std::string stored = destinationFolder_ == "/" ? "" : destinationFolder_;
     strncpy(SETTINGS.nearbyReceiveFolder, stored.c_str(), sizeof(SETTINGS.nearbyReceiveFolder) - 1);
     SETTINGS.nearbyReceiveFolder[sizeof(SETTINGS.nearbyReceiveFolder) - 1] = '\0';
-    if (!SETTINGS.saveToFile()) LOG_ERR(LOG_TAG, "Failed to save receive folder");
+    if (!SETTINGS.saveGlobalDefaults()) LOG_ERR(LOG_TAG, "Failed to save receive folder");
     requestUpdate();
   });
 }

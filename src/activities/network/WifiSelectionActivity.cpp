@@ -646,7 +646,7 @@ void WifiSelectionActivity::checkConnectionStatus() {
       if (halClock.syncFromNTP()) {
         SETTINGS.clockHasBeenSynced = 1;
         SETTINGS.clockDateHasBeenSynced = 1;
-        SETTINGS.saveToFile();
+        SETTINGS.saveGlobalDefaults();
       }
     }
 

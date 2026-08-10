@@ -257,7 +257,7 @@ void TxtReaderActivity::loop() {
     if (!sideButtonLongPressHandled && sideLongPressChangesOrientation && (topLongPressed || bottomLongPressed)) {
       sideButtonLongPressHandled = !(topReleased || bottomReleased);
       SETTINGS.orientation = ReaderUtils::rotatedOrientation(SETTINGS.orientation, /*clockwise=*/bottomLongPressed);
-      SETTINGS.saveToFile();
+      SETTINGS.saveGlobalDefaults();
       {
         RenderLock lock(*this);
         ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
@@ -292,7 +292,7 @@ void TxtReaderActivity::loop() {
       }
       if (frontLongPressChangesFont) {
         if (sdFontSystem.changeReaderFontSize(/*larger=*/nextLongPressed)) {
-          SETTINGS.saveToFile();
+          SETTINGS.saveGlobalDefaults();
           sdFontSystem.ensureLoaded(renderer);
           {
             RenderLock lock(*this);
@@ -306,7 +306,7 @@ void TxtReaderActivity::loop() {
       }
 
       SETTINGS.orientation = ReaderUtils::rotatedOrientation(SETTINGS.orientation, /*clockwise=*/prevLongPressed);
-      SETTINGS.saveToFile();
+      SETTINGS.saveGlobalDefaults();
       {
         RenderLock lock(*this);
         ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
@@ -341,7 +341,7 @@ void TxtReaderActivity::loop() {
 
 void TxtReaderActivity::toggleDarkMode() {
   SETTINGS.readerDarkMode = !SETTINGS.readerDarkMode;
-  SETTINGS.saveToFile();
+  SETTINGS.saveGlobalDefaults();
   requestUpdate();
 }
 

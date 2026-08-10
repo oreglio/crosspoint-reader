@@ -479,7 +479,7 @@ void SettingsActivity::openEnumOptionPicker(const SettingInfo& setting) {
     const bool sleepScreenChanged = selectedSetting.valuePtr == &CrossPointSettings::sleepScreen;
     const bool quickResumeTimeoutChanged = selectedSetting.valuePtr == &CrossPointSettings::quickResumeSleepScreen;
     syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-    SETTINGS.saveToFile();
+    SETTINGS.saveGlobalDefaults();
     rebuildSettingsLists();
     requestUpdate();
   });
@@ -512,7 +512,7 @@ void SettingsActivity::openScreenMarginPicker(const SettingInfo& setting) {
         const auto* selection = std::get_if<OptionSelectionResult>(&result.data);
         if (selection != nullptr && selectedSetting.valuePtr != nullptr) {
           SETTINGS.*(selectedSetting.valuePtr) = rawValueForValueDisplayIndex(selectedSetting, selection->index);
-          SETTINGS.saveToFile();
+          SETTINGS.saveGlobalDefaults();
         }
         requestUpdate();
       });
@@ -547,7 +547,7 @@ void SettingsActivity::openLanguagePicker() {
     }
 
     SETTINGS.language = langIndex;
-    SETTINGS.saveToFile();
+    SETTINGS.saveGlobalDefaults();
     requestUpdate();
   });
   requestUpdate();
@@ -596,7 +596,7 @@ void SettingsActivity::openStringEditor(const SettingInfo& setting) {
                              strncpy(ptr, value.c_str(), selectedSetting.stringMaxLen - 1);
                              ptr[selectedSetting.stringMaxLen - 1] = '\0';
                            }
-                           SETTINGS.saveToFile();
+                           SETTINGS.saveGlobalDefaults();
                            requestUpdate();
                          });
 }
@@ -709,7 +709,7 @@ void SettingsActivity::loop() {
       closeSubmenu();
       requestUpdate();
     } else {
-      SETTINGS.saveToFile();
+      SETTINGS.saveGlobalDefaults();
       onGoHome();
     }
     return;
@@ -742,7 +742,7 @@ void SettingsActivity::loop() {
       showSettingSelection = true;
       requestUpdate();
     } else {
-      SETTINGS.saveToFile();
+      SETTINGS.saveGlobalDefaults();
       onGoHome();
     }
     return;
@@ -766,7 +766,7 @@ void SettingsActivity::loop() {
   // off-screen) and button navigation pulls the view back to it.
   const auto swipe = mappedInput.wasSwipe();
   if (dismissOnUpSwipe && swipe == MappedInputManager::SwipeDir::Up) {
-    SETTINGS.saveToFile();
+    SETTINGS.saveGlobalDefaults();
     finish();
     return;
   }
@@ -859,7 +859,7 @@ void SettingsActivity::toggleCurrentSetting() {
   }
   if (setting.valuePtr == &CrossPointSettings::clockUtcOffsetQ) {
     startActivityForResult(std::make_unique<ClockOffsetActivity>(renderer, mappedInput), [this](const ActivityResult&) {
-      SETTINGS.saveToFile();
+      SETTINGS.saveGlobalDefaults();
       requestUpdate();
     });
     return;
@@ -871,7 +871,7 @@ void SettingsActivity::toggleCurrentSetting() {
   if (setting.nameId == StrId::STR_FONT_FAMILY && setting.type == SettingType::ENUM) {
     startActivityForResult(std::make_unique<FontSelectionActivity>(renderer, mappedInput, &sdFontSystem.registry()),
                            [this](const ActivityResult&) {
-                             SETTINGS.saveToFile();
+                             SETTINGS.saveGlobalDefaults();
                              rebuildSettingsLists();
                            });
     return;
@@ -898,7 +898,7 @@ void SettingsActivity::toggleCurrentSetting() {
       // Launch font selection submenu instead of cycling
       startActivityForResult(std::make_unique<FontSelectionActivity>(renderer, mappedInput, &sdFontSystem.registry()),
                              [this](const ActivityResult&) {
-                               SETTINGS.saveToFile();
+                               SETTINGS.saveGlobalDefaults();
                                rebuildSettingsLists();
                              });
       return;
@@ -916,7 +916,7 @@ void SettingsActivity::toggleCurrentSetting() {
       SETTINGS.*(setting.valuePtr) = currentValue + setting.valueRange.step;
     }
   } else if (setting.type == SettingType::ACTION) {
-    auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveToFile(); };
+    auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveGlobalDefaults(); };
 
     switch (setting.action) {
       case SettingAction::RemapFrontButtons:
@@ -1040,7 +1040,7 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-  SETTINGS.saveToFile();
+  SETTINGS.saveGlobalDefaults();
   // Apply this while `setting` still refers to the current list; rebuilding
   // below clears its backing vector and invalidates the reference.
   applyUiSettingChange(setting.valuePtr);
@@ -1083,7 +1083,7 @@ void SettingsActivity::openSleepTimeoutPicker() {
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
           SETTINGS.sleepTimeoutMinutes = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
-          SETTINGS.saveToFile();
+          SETTINGS.saveGlobalDefaults();
         }
         requestUpdate();
       });
@@ -1101,7 +1101,7 @@ void SettingsActivity::openLineHeightPicker() {
         if (!result.isCancelled) {
           SETTINGS.lineHeightPercent = CrossPointSettings::clampedLineHeightPercent(
               static_cast<uint8_t>(std::get<IntervalResult>(result.data).value));
-          SETTINGS.saveToFile();
+          SETTINGS.saveGlobalDefaults();
         }
         requestUpdate();
       });
@@ -1121,7 +1121,7 @@ void SettingsActivity::openIdleTimeThresholdPicker() {
         if (!result.isCancelled) {
           SETTINGS.readingIdleTimeThresholdUnits = CrossPointSettings::readingIdleTimeThresholdUnitsForSeconds(
               static_cast<uint16_t>(std::get<IntervalResult>(result.data).value));
-          SETTINGS.saveToFile();
+          SETTINGS.saveGlobalDefaults();
         }
         requestUpdate();
       });

@@ -400,7 +400,7 @@ bool EpubReaderMenuActivity::handleTouchInput() {
   if (mappedInput.wasTabTapped(tabIndex) && tabIndex >= 0) {
     if (mappedInput.hasTouchHardware() && tabIndex == static_cast<int>(TOUCH_LOCK_ICON_INDEX)) {
       SETTINGS.disableReaderTouchscreen = SETTINGS.disableReaderTouchscreen ? 0 : 1;
-      SETTINGS.saveToFile();
+      SETTINGS.saveGlobalDefaults();
       requestUpdate();
       return true;
     }
