@@ -519,16 +519,18 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                           {StrId::STR_NO, StrId::STR_YES}, "sideButtonOrientationAware", StrId::STR_CAT_CONTROLS));
     add(SettingInfo::Enum(StrId::STR_SIDE_BTN_LONG_PRESS, &CrossPointSettings::sideButtonLongPress,
                           {StrId::STR_IGNORE, StrId::STR_CHAPTER_SKIP_OPT, StrId::STR_CHANGE_FONT_SIZE,
-                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION, StrId::STR_QUICK_TOGGLES},
+                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION, StrId::STR_QUICK_TOGGLES,
+                           StrId::STR_LIBRARY},
                           "sideButtonLongPress", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues({CrossPointSettings::SIDE_LONG_OFF, CrossPointSettings::SIDE_LONG_CHAPTER_SKIP,
                                 CrossPointSettings::SIDE_LONG_FONT_SIZE,
                                 CrossPointSettings::SIDE_LONG_ORIENTATION_CHANGE,
-                                CrossPointSettings::SIDE_LONG_QUICK_TOGGLES}));
+                                CrossPointSettings::SIDE_LONG_QUICK_TOGGLES,
+                                CrossPointSettings::SIDE_LONG_LIBRARY}));
     // Labels and raw values above are two hand-written lists; this catches the
     // one drifting from the other, which is how a picker ends up offering an
     // action the firmware cannot perform.
-    static_assert(CrossPointSettings::SIDE_LONG_PRESS_COUNT == 5,
+    static_assert(CrossPointSettings::SIDE_LONG_PRESS_COUNT == 6,
                   "Side-button long-press labels and raw values must both follow SIDE_LONG_PRESS_COUNT");
     add(SettingInfo::Enum(StrId::STR_ORIENTATION_AWARE, &CrossPointSettings::frontButtonOrientationAware,
                           {StrId::STR_NO, StrId::STR_NAV_BUTTONS, StrId::STR_ALL_BUTTONS},
@@ -536,12 +538,12 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     add(SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CrossPointSettings::longPressButtonBehavior,
                           {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
                            StrId::STR_CHANGE_FONT_SIZE, StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION,
-                           StrId::STR_QUICK_TOGGLES},
+                           StrId::STR_QUICK_TOGGLES, StrId::STR_LIBRARY},
                           "longPressButtonBehavior", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues({CrossPointSettings::OFF, CrossPointSettings::CHAPTER_SKIP,
                                 CrossPointSettings::FONT_SIZE_CHANGE, CrossPointSettings::ORIENTATION_CHANGE,
-                                CrossPointSettings::QUICK_TOGGLES}));
-    static_assert(CrossPointSettings::LONG_PRESS_BUTTON_BEHAVIOR_COUNT == 5,
+                                CrossPointSettings::QUICK_TOGGLES, CrossPointSettings::LIBRARY}));
+    static_assert(CrossPointSettings::LONG_PRESS_BUTTON_BEHAVIOR_COUNT == 6,
                   "Front-button long-press labels and raw values must both follow "
                   "LONG_PRESS_BUTTON_BEHAVIOR_COUNT");
     add(SettingInfo::Enum(StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,

@@ -2681,7 +2681,9 @@ void EpubReaderActivity::loop() {
       SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_ORIENTATION_CHANGE;
   const bool sideLongPressOpensQuickToggles =
       SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_QUICK_TOGGLES;
-  if (sideLongPressChangesFont || sideLongPressChangesOrientation || sideLongPressOpensQuickToggles) {
+  const bool sideLongPressOpensLibrary =
+      SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_LIBRARY;
+  if (sideLongPressChangesFont || sideLongPressChangesOrientation || sideLongPressOpensQuickToggles || sideLongPressOpensLibrary) {
     const bool topReleased = mappedInput.wasReleased(MappedInputManager::Button::Up);
     const bool bottomReleased = mappedInput.wasReleased(MappedInputManager::Button::Down);
     if (sideButtonLongPressHandled && (topReleased || bottomReleased)) {
@@ -2698,6 +2700,11 @@ void EpubReaderActivity::loop() {
     // Direction carries no meaning for the drawer, so either side button opens
     // it. Checked before the top/bottom split so the two branches below keep
     // their font/orientation shape.
+    if (!sideButtonLongPressHandled && sideLongPressOpensLibrary && (topLongPressed || bottomLongPressed)) {
+      sideButtonLongPressHandled = !(topReleased || bottomReleased);
+      activityManager.goToLibrary();
+      return;
+    }
     if (!sideButtonLongPressHandled && sideLongPressOpensQuickToggles && (topLongPressed || bottomLongPressed)) {
       sideButtonLongPressHandled = !(topReleased || bottomReleased);
       auto drawer = makeUniqueNoThrow<ReaderQuickTogglesActivity>(
@@ -2758,9 +2765,10 @@ void EpubReaderActivity::loop() {
   const bool frontLongPressChangesFont = SETTINGS.longPressButtonBehavior == CrossPointSettings::FONT_SIZE_CHANGE;
   const bool frontLongPressOpensQuickToggles =
       SETTINGS.longPressButtonBehavior == CrossPointSettings::QUICK_TOGGLES;
+  const bool frontLongPressOpensLibrary = SETTINGS.longPressButtonBehavior == CrossPointSettings::LIBRARY;
   const bool frontLongPressAction = SETTINGS.longPressButtonBehavior == CrossPointSettings::CHAPTER_SKIP ||
                                     SETTINGS.longPressButtonBehavior == CrossPointSettings::ORIENTATION_CHANGE ||
-                                    frontLongPressChangesFont || frontLongPressOpensQuickToggles;
+                                    frontLongPressChangesFont || frontLongPressOpensQuickToggles || frontLongPressOpensLibrary;
   if (frontLongPressAction) {
     const bool leftReleased = mappedInput.wasReleased(MappedInputManager::Button::Left);
     const bool rightReleased = mappedInput.wasReleased(MappedInputManager::Button::Right);
@@ -2774,6 +2782,10 @@ void EpubReaderActivity::loop() {
     const bool nextLongPressed = longPressReady && mappedInput.isPressed(MappedInputManager::Button::Right);
     if (!frontButtonLongPressHandled && (prevLongPressed || nextLongPressed)) {
       frontButtonLongPressHandled = true;
+      if (frontLongPressOpensLibrary) {
+        activityManager.goToLibrary();
+        return;
+      }
       if (frontLongPressOpensQuickToggles) {
         // Same drawer as the side-button gesture; direction carries no meaning.
         auto drawer = makeUniqueNoThrow<ReaderQuickTogglesActivity>(
