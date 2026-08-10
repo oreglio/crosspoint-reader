@@ -78,13 +78,20 @@ def stamp(image_path, version):
 
     if not data or data[0] != IMAGE_MAGIC:
         print('stamp_app_desc: not an ESP image, leaving it alone', file=sys.stderr)
-        return False
+        return None
     magic, = struct.unpack('<I', data[APP_DESC_OFFSET:APP_DESC_OFFSET + 4])
     if magic != APP_DESC_MAGIC:
         print(f'stamp_app_desc: no app descriptor at {APP_DESC_OFFSET:#x}, leaving it alone', file=sys.stderr)
-        return False
+        return None
 
+    # The slot is 32 bytes and dev versions carry a build timestamp, so what
+    # lands in the image can be shorter than what was asked for. Report back
+    # what was actually written -- the verification below looks for that, not
+    # for the full string, which is how this script first failed its own check.
     encoded = version.encode('utf-8')[:VERSION_SIZE - 1]
+    stamped_version = encoded.decode('utf-8', 'ignore')
+    if stamped_version != version:
+        print(f'stamp_app_desc: version truncated to fit the descriptor: {stamped_version}')
     data[VERSION_OFFSET:VERSION_OFFSET + VERSION_SIZE] = encoded.ljust(VERSION_SIZE, b'\0')
 
     # The compile time comes from the same prebuilt object and is frozen just as
@@ -123,7 +130,7 @@ def stamp(image_path, version):
 
     with open(image_path, 'wb') as handle:
         handle.write(bytes(data))
-    return True
+    return stamped_version
 
 
 def verify_image_stamp(env, image_path, version):
@@ -159,8 +166,9 @@ def stamp_app_desc(source, target, env):
         env.Exit(1)
         return
     image_path = str(target[0])
-    if stamp(image_path, version):
-        verify_image_stamp(env, image_path, version)
+    stamped_version = stamp(image_path, version)
+    if stamped_version:
+        verify_image_stamp(env, image_path, stamped_version)
 
 
 try:
