@@ -2,6 +2,32 @@
 
 Keep this file focused on repo-specific gotchas that are worth reusing in future sessions.
 
+## Upstream Sync
+
+Run `scripts/sync-upstream.sh`; it encodes everything below. Three repos are in play:
+
+| Remote | Repo | Role |
+| --- | --- | --- |
+| `crosspoint` | `crosspoint-reader/crosspoint-reader` | Original project, upstream of CrossInk |
+| `upstream` | `uxjulia/CrossInk` | What this fork actually tracks |
+| `fork` | `oreglio/crosspoint-reader` | This fork (named after the original; it follows CrossInk) |
+
+- Merge `upstream/development`, never `upstream/main` or a release tag. `main`
+  receives one squashed commit per release, sharing no history with this fork, so
+  merging it replays code already present here as conflicts. Measured on the
+  v1.5.0 sync: **90 conflicting files from `main`, 2 from `development`**.
+- A merge moves the `freeink-sdk` submodule pointer but leaves the checked-out
+  copy behind. `pio run` then compiles the **old** SDK and still reports SUCCESS.
+  Always `git submodule update --recursive` before trusting a post-merge build.
+- Tag rule: a bare `vX.Y.Z` tag is CrossInk's. Crosspoint's own tags are the
+  legacy `0.x.y` names, plus `crosspoint/*` for anything fetched from now on
+  (`remote.crosspoint.tagOpt=--no-tags` with a namespaced refspec). Before this
+  rule was set, bare `v1.5.0` pointed at Crosspoint's release, not CrossInk's,
+  and `git fetch upstream --tags` failed with a "would clobber" rejection.
+- Fork release numbering (`v1.5.36`, …) is this fork's OTA build counter on
+  `oreglio/CrossInkLibrary` and does not track upstream's `v1.5.0`. The two are
+  not comparable; `platformio.ini` carries the upstream-facing `version`.
+
 ## FreeInk SDK
 
 Refer to https://freeink.org/llms.txt for guidance.
