@@ -12,6 +12,11 @@ const ReaderQuickTogglesActivity::Toggle ReaderQuickTogglesActivity::TOGGLES[] =
     {StrId::STR_READER_DARK_MODE, &CrossPointSettings::readerDarkMode, true},
     {StrId::STR_TEXT_AA, &CrossPointSettings::textAntiAliasing, true},
     {StrId::STR_GUIDE_READING, &CrossPointSettings::guideReadingEnabled, false},
+    // Status-bar contents. None of these touch the text, so the page under the
+    // panel stays valid and only the panel repaints.
+    {StrId::STR_PUBLISHER_PAGE_NUMBERS, &CrossPointSettings::publisherPageNumbers, true},
+    {StrId::STR_CHAPTER_PAGE_COUNT, &CrossPointSettings::statusBarChapterPageCount, true},
+    {StrId::STR_BOOK_PROGRESS_PERCENTAGE, &CrossPointSettings::statusBarBookProgressPercentage, true},
 #if CROSSINK_APP_CAP_TOUCH
     // X3 and X4 have no touchscreen, so this row would be dead weight there.
     {StrId::STR_DISABLE_TOUCHSCREEN, &CrossPointSettings::disableReaderTouchscreen, false},
