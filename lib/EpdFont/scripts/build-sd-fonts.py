@@ -278,39 +278,18 @@ def extract_static_instance(source_path: Path, axes: dict, family_name: str, sty
     # optimize=False         — skip the gvar interpolation optimisation;
     #                          fully pinning every axis drops gvar anyway,
     #                          so the work would be wasted.
-    def _instantiate_and_save(update_names: bool) -> None:
-        source_font = TTFont(str(source_path))
-        try:
-            font = instantiateVariableFont(source_font, axes, updateFontNames=update_names,
-                                           optimize=False)
-            try:
-                font.save(str(tmp_path))
-            finally:
-                font.close()
-        finally:
-            source_font.close()
-
+    source_font = TTFont(str(source_path))
     try:
+        font = instantiateVariableFont(source_font, axes, updateFontNames=True, optimize=False)
         try:
-            _instantiate_and_save(True)
-        except ValueError as exc:
-            # updateFontNames=True rewrites the name table from the font's STAT
-            # table, so it only accepts axis positions that have a *named*
-            # instance. An intermediate weight such as wght 450 is a perfectly
-            # valid point on a continuous axis but has no name, and the rewrite
-            # raises "Cannot find Axis Values".
-            #
-            # The names are cosmetic here: the .cpfont family name comes from
-            # --name, not from the instance's name table. So keep the
-            # variable-font names rather than give up a legitimate axis
-            # position. ValueError specifically, not Exception, so a genuine
-            # I/O failure still propagates instead of being retried and masked.
-            print(f"  Note: {family_name}/{style_name} ({axis_key}) has no named instance; "
-                  f"keeping variable-font names ({exc})")
-            _instantiate_and_save(False)
+            font.save(str(tmp_path))
+        finally:
+            font.close()
     except Exception:
         tmp_path.unlink(missing_ok=True)
         raise
+    finally:
+        source_font.close()
     tmp_path.replace(cached)
 
     return cached
@@ -398,21 +377,11 @@ def build_family(
     if family.get("force_autohint", False):
         cmd.append("--force-autohint")
 
-    # SD-card fonts are reader fonts, so by default they get the same darkened
-    # anti-alias thresholds as the built-in reader fonts in
-    # convert-builtin-fonts.sh (READING_FONT_RENDER_ARGS). Without this the two
-    # look noticeably different at the same size on the same panel.
-    #
-    # A family may override the ladder outright. This is per-family by
-    # measurement, not preference: Bitter's thin slab serifs drop a level under
-    # the raised white cutoff that suits Lexend Deca, which re-creates the
-    # k-narrower-than-l defect from 052f497b. See
-    # docs/superpowers/specs/2026-08-08-text-aa-contrast-design.md.
-    aa_thresholds = family.get("aa_thresholds")
-    if aa_thresholds:
-        cmd.extend(["--aa-thresholds", str(aa_thresholds)])
-    else:
-        cmd.append("--darken-aa")
+    # SD-card fonts are reader fonts, so they get the same darkened anti-alias
+    # thresholds as the built-in reader fonts in convert-builtin-fonts.sh
+    # (READING_FONT_RENDER_ARGS). Without this the two look noticeably
+    # different at the same size on the same panel.
+    cmd.append("--darken-aa")
 
     # Run fontconvert_sdcard.py
     start = time.monotonic()
