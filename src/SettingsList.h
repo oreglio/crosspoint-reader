@@ -128,25 +128,32 @@ inline uint8_t closestPointSizeIndex(const std::vector<uint8_t>& sizes, const ui
   return bestIndex;
 }
 
-inline uint8_t closestBuiltinFontSizeIndex(const uint8_t targetPointSize) {
-  uint8_t bestStored = 0;
+// Returns a POINT SIZE, not an index. getStoredReaderFontSize() answers in a
+// third space -- the position among the sizes that survived the build, which
+// skips every omitted one -- and the caller used to cast that straight back to
+// FONT_SIZE. Both are uint8_t, so the cast compiled and was silently wrong the
+// moment any size was omitted: with -DOMIT_MEDIUM_FONT (on in [env:default]),
+// LARGE stores as 2, and 2 reads back as MEDIUM, so picking a built-in family
+// while reading at 16 pt dropped the reader to 14 pt -- a face that build does
+// not even ship. Returning the point size leaves no index to mistranslate.
+inline uint8_t closestBuiltinFontPointSize(const uint8_t targetPointSize) {
   uint8_t bestPointSize = 0;
   uint8_t bestDiff = UINT8_MAX;
 
   for (uint8_t i = 0; i < CrossPointSettings::FONT_SIZE_COUNT; i++) {
     const auto size = static_cast<CrossPointSettings::FONT_SIZE>(i);
-    const uint8_t stored = CrossPointSettings::getStoredReaderFontSize(size);
-    if (stored == UINT8_MAX) continue;
+    if (CrossPointSettings::getStoredReaderFontSize(size) == UINT8_MAX) continue;
 
     const uint8_t pointSize = CrossPointSettings::getReaderFontPointSize(size);
     const uint8_t diff = pointSize > targetPointSize ? pointSize - targetPointSize : targetPointSize - pointSize;
     if (diff < bestDiff || (diff == bestDiff && pointSize < bestPointSize)) {
-      bestStored = stored;
       bestPointSize = pointSize;
       bestDiff = diff;
     }
   }
-  return bestStored;
+  // No built-in size survived the build at all: keep what the reader had rather
+  // than inventing one. getEffectiveReaderFontSize() snaps it either way.
+  return bestPointSize != 0 ? bestPointSize : targetPointSize;
 }
 
 // Build the font family setting dynamically. When registry is non-null, SD card fonts
@@ -229,8 +236,7 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
     if (v < CrossPointSettings::BUILTIN_FONT_COUNT) {
       SETTINGS.fontFamily = v;
       SETTINGS.sdFontFamilyName[0] = '\0';
-      SETTINGS.readerFontPointSize = CrossPointSettings::getReaderFontPointSize(
-          static_cast<CrossPointSettings::FONT_SIZE>(closestBuiltinFontSizeIndex(targetPointSize)));
+      SETTINGS.readerFontPointSize = closestBuiltinFontPointSize(targetPointSize);
     } else {
       int sdIdx = v - CrossPointSettings::BUILTIN_FONT_COUNT;
       if (sdIdx < static_cast<int>(sdFamilyNames.size())) {
