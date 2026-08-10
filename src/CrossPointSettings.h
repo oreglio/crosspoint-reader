@@ -151,6 +151,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     SIDE_LONG_FONT_SIZE = 1,
     SIDE_LONG_OFF = 2,
     SIDE_LONG_ORIENTATION_CHANGE = 3,
+    SIDE_LONG_QUICK_TOGGLES = 4,
     SIDE_LONG_PRESS_COUNT
   };
 

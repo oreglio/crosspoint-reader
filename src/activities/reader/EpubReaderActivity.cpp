@@ -26,6 +26,7 @@
 #include "../settings/KOReaderSettingsActivity.h"
 #include "BookStatsActivity.h"
 #include "ClipSelectionActivity.h"
+#include "ReaderQuickTogglesActivity.h"
 #include "ClippingStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -2678,7 +2679,9 @@ void EpubReaderActivity::loop() {
       SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_FONT_SIZE;
   const bool sideLongPressChangesOrientation =
       SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_ORIENTATION_CHANGE;
-  if (sideLongPressChangesFont || sideLongPressChangesOrientation) {
+  const bool sideLongPressOpensQuickToggles =
+      SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_QUICK_TOGGLES;
+  if (sideLongPressChangesFont || sideLongPressChangesOrientation || sideLongPressOpensQuickToggles) {
     const bool topReleased = mappedInput.wasReleased(MappedInputManager::Button::Up);
     const bool bottomReleased = mappedInput.wasReleased(MappedInputManager::Button::Down);
     if (sideButtonLongPressHandled && (topReleased || bottomReleased)) {
@@ -2692,6 +2695,21 @@ void EpubReaderActivity::loop() {
     const bool bottomLongPressed =
         longPressReady && (mappedInput.isPressed(MappedInputManager::Button::Down) || bottomReleased);
 
+    // Direction carries no meaning for the drawer, so either side button opens
+    // it. Checked before the top/bottom split so the two branches below keep
+    // their font/orientation shape.
+    if (!sideButtonLongPressHandled && sideLongPressOpensQuickToggles && (topLongPressed || bottomLongPressed)) {
+      sideButtonLongPressHandled = !(topReleased || bottomReleased);
+      auto drawer = makeUniqueNoThrow<ReaderQuickTogglesActivity>(
+          renderer, mappedInput, this, &EpubReaderActivity::renderDictionaryLookupBackgroundCallback);
+      if (!drawer) {
+        LOG_ERR("RQT", "OOM allocating ReaderQuickTogglesActivity (%u bytes)",
+                static_cast<unsigned>(sizeof(ReaderQuickTogglesActivity)));
+        return;
+      }
+      startActivityForResult(std::move(drawer), [this](const ActivityResult&) { requestUpdate(); });
+      return;
+    }
     if (!sideButtonLongPressHandled && topLongPressed) {
       sideButtonLongPressHandled = !topReleased;
       if (sideLongPressChangesFont) {
