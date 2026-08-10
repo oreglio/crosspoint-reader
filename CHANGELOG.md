@@ -59,6 +59,8 @@
 - Choosing a built-in font family no longer changes the reading size along with it. Picking one while reading at 16 pt dropped you to 14 pt, a size this build does not carry.
 - The font picker no longer lists a family that is not in the build.
 - Side page turns in the TXT and XTC readers answer the press again, rather than the moment you let go, whenever the long-press action set for the side buttons does not exist in that reader — which includes `Chapter skip`, the setting they ship with, in the TXT reader. Waiting for the release is what lets a hold be told apart from a press; those two readers were paying that wait for gestures they do not have (`Chapter skip` and `Change font size` in TXT, `Change font size` and `Quick toggles` in both). Where the hold does mean something, nothing changes.
+- Checking for updates no longer risks your recent books. `Check for updates` restarts the device into a lightweight network mode that does not read the recent-books file, and `Back` from that screen landed on a Home that showed `No open book` with a full shelf behind it — and, worse, saved that emptiness the moment you opened a book, leaving a single entry where the whole list had been. The KOReader sync credentials had the same trap: editing one field would have written blanks over the others.
+- Firmware images now carry their own version and build time. Every release so far shipped the build information of an unrelated image, so a binary asked which build it was answered confidently and wrongly. Nothing on the device read it, but a device dump can now be traced back to the code it came from.
 
 ## [v1.5.0] - 2026-08-08
 
