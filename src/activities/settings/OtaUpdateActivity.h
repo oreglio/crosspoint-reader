@@ -2,6 +2,7 @@
 
 #include "I18nKeys.h"
 #include "activities/Activity.h"
+#include "activities/ScreenTransitionRefresh.h"
 #include "network/OtaUpdater.h"
 
 class OtaUpdateActivity : public Activity {
@@ -25,6 +26,7 @@ class OtaUpdateActivity : public Activity {
   // True when the release found is older than the one running: the confirmation
   // names the direction, and installUpdate is told the user accepted it.
   bool installingOlder = false;
+  ScreenTransitionRefresh screenTransitionRefresh;
   unsigned int lastUpdaterPercentage = UNINITIALIZED_PERCENTAGE;
   StrId failureMessage = StrId::STR_UPDATE_FAILED;
   OtaUpdater updater;

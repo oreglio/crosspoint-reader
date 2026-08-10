@@ -30,13 +30,20 @@
 
 - The File Manager becomes cards on phone-sized screens: tap a card to select it, serif titles that wrap instead of crushing the table, and a download button on each card.
 - Opening a folder in the File Manager no longer reloads the whole page. Only the folder's listing is fetched, so browsing lands in a moment instead of downloading the page again each time; `Back` and `Forward` still walk through the folders you visited, and a link opened in a new tab still works. Pages now carry a validator, so reopening the portal costs nothing when nothing has changed.
+- Font Family choices now identify built-in and SD-card fonts by their available point-size ranges.
 
 ### Fixed
 
 - Books uploaded through the fast (WebSocket) upload path now appear in the Library without a manual index rebuild.
 - Filenames that list the same author twice — the shape export tools leave behind, as in `Henry S_ Warren, Henry S_ Warren Jr` — no longer have that name rearranged into nonsense on the shelf. Authors written surname-first still read the right way round, so `Austen, Jane` shows as `Jane Austen`.
+- Network connections no longer trigger repeated full-panel flashes.
+- Dictionary word selection now follows the physical front-button direction in counter-clockwise landscape mode.
+- End-of-book suggestions can now be opened by tapping them on touch devices.
+- Dictionary font switches now retry after releasing the reader font when memory is tight.
+- XTC table of contents now includes every available page entry, so large books can jump beyond the first 128 pages.
+- Saved clipping highlights now remain accurate when a font or font-size change reflows a word across an inserted hyphen.
 
-## [v1.5.0] - 2026-08-04
+## [v1.5.0] - 2026-08-08
 
 ### Added
 
@@ -87,73 +94,30 @@
 
 ### Fixed
 
-- KOReader Sync now resolves saved text offsets from completed EPUB caches instead of falling back to less precise page estimates.
-- Power-button wake hold timing no longer varies with SD-card initialization time.
-- EPUB reflows no longer reject a chapter before parsing when heap fragmentation leaves the general background-build threshold only slightly short; genuinely large table, font-prewarm, and image allocations remain protected by their own memory checks.
-- EPUB layout now silently retries once with a fresh heap before showing a chapter-memory error or moving through fallback rendering modes.
-- EPUB background indexing now yields to button and touch input, and changing reader settings during indexing no longer risks reading from a closed SD file.
-- EPUB clipping selection can now advance through dense one- and two-page chapter endings instead of stopping mid-page.
-- SD-card font preparation now consolidates temporary glyph, kerning, and layout-metric work into one short-lived allocation, preserving more contiguous memory when returning Home after reading or dictionary use.
-- SD-card font layout metric tables now reuse their existing storage during normal updates instead of reallocating the persistent table each time.
-- EPUB reflow and KOReader Sync now return to the same text after font, orientation, or indexing-method changes instead of relying only on page percentages.
-- Bionic Reading no longer lets letters overlap at the bold-to-regular split in EPUB words.
-- The web settings page now hides settings on devices that don't support it.
-- Changing an SD-card reader font no longer leaves preview font caches consuming the contiguous memory needed to rebuild an existing book's layout.
-- Syncing the clock on memory-constrained X3/X4 devices no longer risks a reboot while saving settings.
-- EPUB clipping cursors and selected text now use a high-contrast gray marker with black text in dark mode.
-- EPUB clipping highlights now re-match their saved text after font or layout changes, even when the page count stays the same.
-- EPUB low-memory rendering fallbacks now apply consistently when opening chapters, prefetching pages, and preparing the sleep screen.
-- When Embedded Style is off, EPUB opening now consistently skips unused stylesheet discovery; optional location metadata is deferred until the first page is ready.
-- Sleep-screen EPUB rendering now handles book allocation failure safely instead of rebooting.
-- EPUB preparation failures now show whether the book is unreadable or the device ran out of memory instead of silently returning to the library.
-- Book-specific Embedded Style choices now apply before EPUB stylesheet caches are loaded.
-- CSS-heavy EPUBs now stop stylesheet parsing safely before low-memory rule storage can reboot X3/X4 devices.
-- KOReader Sync now sends CrossPoint-specific position data only to the official CrossPoint Sync server.
-- EPUB text now preserves explicit spaces between Hangul and other CJK words.
-- Web file uploads now use the simulator's mapped WebSocket port while preserving ports 80/81 on devices.
-- EPUBs that use `<br>` between flowing paragraphs no longer add extra vertical spacing after every line break; consecutive breaks still create a scene break.
-- Lyra Home headers now keep the battery icon and percentage aligned with safer clearance below the top bezel.
-- Dictionary lookups that miss can now switch dictionaries without returning to the reader.
-- Dictionary file read failures now show an error instead of incorrectly reporting that the word was not found.
-- Reading Stats button hints now follow customized front-button assignments.
-- Short physical button presses now register reliably after the device enters low-power mode.
-- Improved reliability when re-indexing EPUB chapters after changing reader font settings.
-- The web EPUB optimizer now removes decorative empty chapter stubs and keeps their table-of-contents links pointing at the readable chapter.
-- Reader popups and KOReader Sync's WiFi connection labels now stay correctly oriented when reading upside down.
-- EPUB clipping now batches SD-card font preparation and releases temporary font caches on return, reducing memory fragmentation during repeated selections.
-- EPUB clipping selection no longer clips certain letters with long descenders.
-- Manage Fonts no longer runs out of memory while loading larger font catalogs.
-- Low-memory EPUB layout now fails cleanly when page or image elements cannot be allocated instead of risking a reboot.
-- EPUB background indexing now waits for sufficient contiguous memory instead of starting a layout pass that is likely to fail.
-- KOReader Sync now uses a smaller TLS footprint and can start safely when reader heap is fragmented.
-- Web file transfers no longer reboot when clients stall at the network timeout, and low-memory EPUB grayscale falls back without leaving a stale display baseline.
-- KOReader authentication and progress sync now reconnect through WiFi selection when the saved WiFi state has no active station address.
-- File Transfer now loads web settings with less memory and exits promptly when browser connections stall.
-- Manual screen refreshes now preserve text anti-aliasing while reading EPUB and TXT books.
-- XTC and XTCH readers now show the configured chapter or book time-left estimate in the reader status bar.
-- Long Russian EPUB paragraphs no longer reapply paragraph indents or split continuation words when memory-safe incremental layout flushes are used.
-- EPUB layouts using SD-card fonts now release unused font-menu metadata before indexing, reducing unnecessary Safe Mode fallbacks.
-- Opening an EPUB with a book-specific built-in font no longer loads the global SD-card font first.
-- Pressing the KOReader Sync shortcut again while WiFi is connecting no longer re-triggers the shortcut.
-- EPUB books with an image as the first content in a chapter heading no longer reboot while indexing.
-- CSS-heavy EPUB chapters now use less temporary memory while parsing, reducing failures when opening them.
-- EPUB chapter headings with several images now continue onto the next page instead of dropping images or clipping them behind the status bar.
-- X4 sleep entry no longer flashes through multiple full-screen transitions before showing the sleep screen.
-- Bionic Reading now keeps Hebrew and other right-to-left EPUB text in the correct reading order.
-- EPUB clipping selection no longer replaces selected text with corrupted glyphs as the selection grows.
-- EPUB clipping selection now preserves SD-card fonts and Bionic Reading layout on memory-tight pages.
-- Custom SD-card fonts now preserve their standard ligature glyphs.
-- Popup option menus now show a scrollbar when more choices are available than can fit on screen.
-- Backing out of Manage Fonts without changing fonts now returns to Font Options instead of Home.
-- The “Entering sleep” message now follows the reader's current orientation, including book-specific orientation overrides.
-- Underlined EPUB text now draws a continuous line across the spaces between adjacent underlined words.
-- Struck-through EPUB text now draws a continuous line across the spaces between adjacent struck-through words.
-- Chapter openers whose decorative image sits inside the heading (chapter number, ornament, then title) now stay together on one page instead of splitting the chapter number onto its own page.
-- Chapter openers with an inline ornament image no longer stack an oversized gap between the chapter number, the ornament, and the title.
-- Unsupported EPUB chapter image formats no longer trigger the low-memory image warning.
-- Returning to Home after reading with an SD card font now releases the reader's font caches so covers and thumbnails retain enough contiguous memory to render.
-- EPUB footnote and cross-reference previews now show the whole note. Previews of notes whose link target sits in the middle of a paragraph no longer start mid-sentence with the opening text missing.
-- XTCH books no longer show a memory error after opening or changing reader settings on X3/X4 devices.
+- Book menu tab navigation, popup scrolling, customized Reading Stats hints, and short button presses after low-power mode now work reliably.
+- Sleep screens now honor the current orientation, avoid X4 transition flashes, fall back to a valid wallpaper when needed, and handle low-memory image decoding without rebooting.
+- Choosing Set Cover uses the selected image in place, and Home no longer repeatedly generates missing EPUB covers.
+- Finished-book suggestions are now collected before an EPUB is moved to `/Read`.
+- Manage Fonts now opens and scans large catalogs more safely on X3/X4, reports low-memory failures instead of restarting, and returns to Font Options when cancelled.
+- Network screens refresh cleanly on X4; long errors wrap correctly; saved Wi-Fi networks and KOReader connections recover more reliably after restart or a missing address.
+- Translated Wi-Fi and clock labels no longer truncate text or time values, and clock sync no longer risks a reboot while saving settings on memory-constrained X3/X4 devices.
+- KOReader Sync no longer crashes during time setup, re-triggers while connecting, or loses precise EPUB positions; CrossPoint-only data stays on the official CrossPoint Sync server.
+- Firmware updates reject images for the wrong chip family, and saved Wi-Fi settings safely handle concurrent access and corrupted values.
+- EPUB opening, reflow, and background indexing now handle fragmented memory more safely, retry recoverable work, remain responsive to input and setting changes, and show useful errors instead of rebooting or silently returning Home.
+- Low-memory EPUB grayscale and sleep rendering now fall back safely without leaving stale display content.
+- Full-section indexing preserves more memory for large chapters and cancels speculative work on page turns, keeping the reader responsive.
+- SD-card font and clipping work now release temporary data at the right time, preserving memory for reflow, dictionary use, covers, and thumbnails on X3/X4.
+- EPUBs with book-specific built-in fonts no longer load an unnecessary global SD-card font, and custom fonts retain ligatures.
+- EPUB styling choices apply before style caches load; CSS-heavy books use less temporary memory; and disabling Embedded Style consistently skips unused stylesheet work.
+- EPUB layout now keeps CJK ruby and spaces, Russian paragraph continuations, Bionic Reading, underline/strikethrough runs, and right-to-left text correct.
+- EPUBs with flowing `<br>` elements, image-led or decorative chapter headings, unsupported images, and dense final pages now lay out without excess gaps, clipping, dropped images, or misleading low-memory warnings.
+- EPUB footnote and cross-reference previews now show complete notes, including targets in the middle of a paragraph.
+- Saved EPUB positions, clipping highlights, and selections now stay accurate after font, orientation, or indexing changes; selections also remain readable in dark mode and on memory-tight pages.
+- Dictionary misses can switch dictionaries without leaving the reader, and dictionary read failures now report an error instead of a false “not found.”
+- Reader popups, KOReader Wi-Fi labels, Lyra battery headers, and the sleep message now remain correctly oriented and positioned.
+- Manual refreshes preserve EPUB and TXT text anti-aliasing; XTC and XTCH status bars show the configured time-left estimate.
+- Watchdog panics with captured diagnostics open crash reporting, while reset-only events return normally; power-button wake timing no longer depends on SD-card startup.
+- The web file manager and uploads now handle simulator/device ports and stalled connections safely; unsupported settings stay hidden, and the optimizer removes empty chapter stubs without breaking table-of-contents links.
 
 ## [v1.4.0.1] - 2026-07-28
 

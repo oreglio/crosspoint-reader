@@ -18,6 +18,7 @@
 #include "activities/settings/SettingsActivity.h"
 #include "util/Dictionary.h"
 #include "util/DictionaryRegistry.h"
+#include "util/FontFamilyLabel.h"
 
 inline std::string fontSizePointLabel(const uint8_t pointSize) { return std::to_string(pointSize) + " pt"; }
 
@@ -151,7 +152,7 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
     const auto& families = registry->getFamilies();
     enumStringValues.reserve(families.size());
     std::transform(families.begin(), families.end(), std::back_inserter(enumStringValues),
-                   [](const SdCardFontFamilyInfo& f) { return f.name; });
+                   [](const SdCardFontFamilyInfo& f) { return fontFamilyLabel(f.name, fontFamilyPointSizeRange(f)); });
   }
 
   // Capture the SD font count for the lambdas
@@ -163,8 +164,9 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   // with all options when SD fonts are present.
   std::vector<std::string> allStringValues;
   if (sdFontCount > 0) {
-    allStringValues.push_back(I18N.get(StrId::STR_LEXEND_DECA));
-    allStringValues.push_back(I18N.get(StrId::STR_BITTER));
+    constexpr FontFamilyPointSizeRange builtinRange{10, 16};
+    allStringValues.push_back(fontFamilyLabel(I18N.get(StrId::STR_LEXEND_DECA), builtinRange));
+    allStringValues.push_back(fontFamilyLabel(I18N.get(StrId::STR_BITTER), builtinRange));
     allStringValues.insert(allStringValues.end(), enumStringValues.begin(), enumStringValues.end());
   }
 
@@ -272,8 +274,14 @@ inline SettingInfo buildDictionaryFontSizeSetting(const SdCardFontRegistry* regi
   s.enumStringValues.push_back(I18N.get(StrId::STR_USE_READER_FONT_SIZE));
   s.enumRawValues.push_back(0);
 
-  if (!registry || SETTINGS.dictionarySdFontFamilyName[0] == '\0') return s;
-  const auto* family = registry->findFamily(SETTINGS.dictionarySdFontFamilyName);
+  if (!registry) return s;
+  // With no dedicated dictionary family, a non-zero dictionary size applies
+  // to the reader's SD-card family. Built-in reader fonts have no selectable
+  // files, so they deliberately retain just the "use reader size" entry.
+  const char* familyName =
+      SETTINGS.dictionarySdFontFamilyName[0] != '\0' ? SETTINGS.dictionarySdFontFamilyName : SETTINGS.sdFontFamilyName;
+  if (familyName[0] == '\0') return s;
+  const auto* family = registry->findFamily(familyName);
   if (!family) return s;
 
   const auto sizes = family->availableSizes();

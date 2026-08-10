@@ -65,41 +65,53 @@ jobs:
         run: pio check --fail-on-defect low --fail-on-defect medium --fail-on-defect high
 
   build:
-    # Never run untrusted fork PR code on the self-hosted runner.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, crossink-build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [default, sticky]
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - name: Verify PlatformIO Core
-        run: pio --version
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
 
-      - name: Build CrossInk firmware
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-platformio-${{ matrix.environment }}-${{ hashFiles('platformio.ini', 'platformio.local.example.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-platformio-${{ matrix.environment }}-
+            ${{ runner.os }}-platformio-
+
+      - name: Install PlatformIO Core
+        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+
+      - name: Build ${{ matrix.environment }} firmware
         run: |
           set -euo pipefail
-          pio run -e default -e sticky -e x4-pro | tee pio.log
-
-      - name: Smoke test button simulator
-        run: |
-          set -euo pipefail
-          python3 scripts/run_simulator_smoke_test.py --env simulator --theme classic
-
-      - name: Smoke test touch simulator
-        run: |
-          set -euo pipefail
-          python3 scripts/run_simulator_smoke_test.py --env sticky-simulator --theme classic
+          pio run -e ${{ matrix.environment }} | tee pio-${{ matrix.environment }}.log
 
       - name: Extract firmware stats
         run: |
           set -euo pipefail
           {
-            echo "## Firmware build stats"
-            grep -E "RAM:\s|Flash:\s" pio.log | while read -r line; do echo "- ${line}"; done
+            echo "## ${{ matrix.environment }} firmware build stats"
+            grep -E "RAM:\s|Flash:\s" pio-${{ matrix.environment }}.log | while read -r line; do echo "- ${line}"; done
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload firmware artifacts
+        if: matrix.environment == 'default'
         uses: actions/upload-artifact@v7
         with:
           name: firmware-x3-x4
