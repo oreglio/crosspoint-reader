@@ -7,6 +7,15 @@
 // that still resolves, only the insertFont call stops running, so getLineHeight()
 // returns 0 and drawCenteredText draws nothing -- an empty ring, no build error.
 // Which faces exist is a build flag now, not a property of this file.
+//
+// So the file states its dependency to the compiler rather than to the reader.
+// A comment is what shipped v1.5.42 with an empty ring for two releases; this
+// stops the build instead, and whoever wants the 219 KB back has to give these
+// two screens a face they can draw with first.
+#if defined(OMIT_LARGE_FONT)
+#error \
+    "OMIT_LARGE_FONT drops the 16 pt face that COUNTDOWN_VALUE_FONT_ID points at: the countdown and pomodoro rings would draw empty. Give CountdownLayout.h a face that survives the build before omitting this one."
+#endif
 #define COUNTDOWN_VALUE_FONT_ID LEXENDDECA_16_FONT_ID
 
 class GfxRenderer;
