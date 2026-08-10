@@ -26,11 +26,19 @@
 - Optimized EPUBs now keep their KOReader sync identity: the web optimizer embeds the original file's document hash, and Progress Sync uses it to pair the optimized copy with the original (e.g. the same book in KOReader on your phone). A "Preserve Sync Identity" toggle (default on) lives in the optimizer's Advanced Mode.
 - Optimize on device: the File Manager can now optimize books that are already on the SD card — select books or folders (or use the per-book ⚡ action) and each one is downloaded, optimized in the browser, and swapped in place. Reading progress, favorites and the library cursor survive the swap; already-optimized books are detected and skipped; the original is never deleted before its optimized copy is safely on the card.
 
+- A quick-toggle drawer over the reading page, opened by holding a side button or a front page-turn button — pick `Quick toggles` for either pair in `Settings > Controls`. It carries only the switches that take effect at once: font size, dark mode, anti-aliasing, guide reading, publisher page numbers, chapter page count, book progress percentage, and the touchscreen switch on devices that have one. Anything that reflows the book stays in the reader menu, so nothing behind this panel starts a long indexing pass mid-paragraph. `Back` closes it, writing the settings once for the whole visit rather than once per switch.
+- The `Library` can now be reached from a long press rather than only from the home screen: as the `Menu` or `Back` long-press action, and from either button pair (`Settings > Controls`). The TXT and XTC readers answer the same gestures, so the setting means the same thing whatever you are reading.
+
 ### Changed
 
 - The File Manager becomes cards on phone-sized screens: tap a card to select it, serif titles that wrap instead of crushing the table, and a download button on each card.
 - Opening a folder in the File Manager no longer reloads the whole page. Only the folder's listing is fetched, so browsing lands in a moment instead of downloading the page again each time; `Back` and `Forward` still walk through the folders you visited, and a link opened in a new tab still works. Pages now carry a validator, so reopening the portal costs nothing when nothing has changed.
 - Font Family choices now identify built-in and SD-card fonts by their available point-size ranges.
+
+### Removed
+
+- The `Bitter` family and the 14 pt built-in reading sizes are no longer baked into the X3/X4 firmware, which is why the font picker offers fewer entries than before. That space is what pays for the rest of this release. SD-card fonts are untouched: a Bitter or a 14 pt family installed on the card reads exactly as it did.
+- X3/X4 firmware now carries English and French only. A device set to any other language falls back to English on this update and cannot be set back to it from Settings — the other translations are simply not in the build.
 
 ### Fixed
 
@@ -42,6 +50,15 @@
 - Dictionary font switches now retry after releasing the reader font when memory is tight.
 - XTC table of contents now includes every available page entry, so large books can jump beyond the first 128 pages.
 - Saved clipping highlights now remain accurate when a font or font-size change reflows a word across an inserted hyphen.
+
+- The Countdown and Pomodoro figure is drawn again on X3/X4. Since v1.5.42 the ring appeared but its middle stayed empty and the label under it sat wrong: the 16 pt face those two screens are pinned to had been dropped from the build.
+- Holding `Menu` to open the `Library` or the `File Browser` no longer opens whatever sits under the cursor the moment you let go. The release that ended the long press was landing in the screen that had just opened, which read it as a press of its own.
+- The quick-toggle drawer no longer saves the current book's reading settings as the global defaults. On a book with its own font, size, spacing, margins or orientation, flipping one switch in the drawer wrote all of them over the defaults every other book starts from.
+- The drawer and the Library no longer act on the release of the button that opened them: the hold that opened the drawer used to step one row on the way in, and the hold that opened the Library moved the selection.
+- Opening the drawer no longer reloads the page underneath it. The page was already on the screen, so the reload only cost time and memory — and left the area behind the panel white on the occasions it failed.
+- Choosing a built-in font family no longer changes the reading size along with it. Picking one while reading at 16 pt dropped you to 14 pt, a size this build does not carry.
+- The font picker no longer lists a family that is not in the build.
+- Side page turns in the TXT and XTC readers answer the press again, rather than the moment you let go, whenever the long-press action set for the side buttons does not exist in that reader — which includes `Chapter skip`, the setting they ship with, in the TXT reader. Waiting for the release is what lets a hold be told apart from a press; those two readers were paying that wait for gestures they do not have (`Chapter skip` and `Change font size` in TXT, `Change font size` and `Quick toggles` in both). Where the hold does mean something, nothing changes.
 
 ## [v1.5.0] - 2026-08-08
 
