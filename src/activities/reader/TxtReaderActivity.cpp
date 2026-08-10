@@ -25,6 +25,28 @@
 
 namespace {
 constexpr size_t CHUNK_SIZE = 8 * 1024;  // 8KB chunk for reading
+
+// Which side-button long-press actions THIS reader dispatches. Exhaustive on
+// purpose: -Werror=switch turns the next action added to SIDE_LONG_PRESS into a
+// build failure here, where the dispatch lives, instead of a setting that is
+// offered in Settings and quietly does nothing. Answering false is not free --
+// see detectPageTurn: an unhandled action used to cost the side page-turners
+// their press-time response for a gesture that did nothing.
+bool handlesSideLongPress(const CrossPointSettings::SIDE_LONG_PRESS action) {
+  switch (action) {
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_ORIENTATION_CHANGE:
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_LIBRARY:
+      return true;
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_CHAPTER_SKIP:
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_FONT_SIZE:
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_OFF:
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_QUICK_TOGGLES:
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_PRESS_COUNT:
+      return false;
+  }
+  return false;
+}
+
 // Cache file magic and version
 constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
 constexpr uint8_t CACHE_VERSION = 3;          // Increment when cache format changes
@@ -203,7 +225,15 @@ void TxtReaderActivity::loop() {
     return;
   }
 
-  if (SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_ORIENTATION_CHANGE) {
+  // The Library is format-agnostic, so the side gesture that opens it in the
+  // EPUB reader opens it here too. Without this the setting was offered in
+  // Settings, took effect in one reader out of three, and still cost the side
+  // page-turners their press-time response (see detectPageTurn) everywhere.
+  const bool sideLongPressChangesOrientation =
+      SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_ORIENTATION_CHANGE;
+  const bool sideLongPressOpensLibrary =
+      SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_LIBRARY;
+  if (sideLongPressChangesOrientation || sideLongPressOpensLibrary) {
     const bool topReleased = mappedInput.wasReleased(MappedInputManager::Button::Up);
     const bool bottomReleased = mappedInput.wasReleased(MappedInputManager::Button::Down);
     if (sideButtonLongPressHandled && (topReleased || bottomReleased)) {
@@ -217,7 +247,14 @@ void TxtReaderActivity::loop() {
     const bool bottomLongPressed =
         longPressReady && (mappedInput.isPressed(MappedInputManager::Button::Down) || bottomReleased);
 
-    if (!sideButtonLongPressHandled && (topLongPressed || bottomLongPressed)) {
+    // Direction carries no meaning for the Library, so either side button opens it.
+    if (!sideButtonLongPressHandled && sideLongPressOpensLibrary && (topLongPressed || bottomLongPressed)) {
+      sideButtonLongPressHandled = !(topReleased || bottomReleased);
+      activityManager.goToLibrary();
+      return;
+    }
+
+    if (!sideButtonLongPressHandled && sideLongPressChangesOrientation && (topLongPressed || bottomLongPressed)) {
       sideButtonLongPressHandled = !(topReleased || bottomReleased);
       SETTINGS.orientation = ReaderUtils::rotatedOrientation(SETTINGS.orientation, /*clockwise=*/bottomLongPressed);
       SETTINGS.saveToFile();
@@ -234,7 +271,9 @@ void TxtReaderActivity::loop() {
   }
 
   const bool frontLongPressChangesFont = SETTINGS.longPressButtonBehavior == CrossPointSettings::FONT_SIZE_CHANGE;
-  if (SETTINGS.longPressButtonBehavior == CrossPointSettings::ORIENTATION_CHANGE || frontLongPressChangesFont) {
+  const bool frontLongPressOpensLibrary = SETTINGS.longPressButtonBehavior == CrossPointSettings::LIBRARY;
+  if (SETTINGS.longPressButtonBehavior == CrossPointSettings::ORIENTATION_CHANGE || frontLongPressChangesFont ||
+      frontLongPressOpensLibrary) {
     const bool leftReleased = mappedInput.wasReleased(MappedInputManager::Button::Left);
     const bool rightReleased = mappedInput.wasReleased(MappedInputManager::Button::Right);
     if (frontButtonLongPressHandled && (leftReleased || rightReleased)) {
@@ -247,6 +286,10 @@ void TxtReaderActivity::loop() {
     const bool nextLongPressed = longPressReady && mappedInput.isPressed(MappedInputManager::Button::Right);
     if (!frontButtonLongPressHandled && (prevLongPressed || nextLongPressed)) {
       frontButtonLongPressHandled = true;
+      if (frontLongPressOpensLibrary) {
+        activityManager.goToLibrary();
+        return;
+      }
       if (frontLongPressChangesFont) {
         if (sdFontSystem.changeReaderFontSize(/*larger=*/nextLongPressed)) {
           SETTINGS.saveToFile();
@@ -276,7 +319,9 @@ void TxtReaderActivity::loop() {
     }
   }
 
-  auto [prevTriggered, nextTriggered, fromSideBtn, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  auto [prevTriggered, nextTriggered, fromSideBtn, fromTilt] = ReaderUtils::detectPageTurn(
+      mappedInput,
+      handlesSideLongPress(static_cast<CrossPointSettings::SIDE_LONG_PRESS>(SETTINGS.sideButtonLongPress)));
   (void)fromSideBtn;
   (void)fromTilt;
   if (!prevTriggered && !nextTriggered) {

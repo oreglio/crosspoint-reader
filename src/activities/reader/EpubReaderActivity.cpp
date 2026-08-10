@@ -67,6 +67,28 @@
 
 namespace {
 constexpr unsigned long TOUCH_DICTIONARY_LOOKUP_HOLD_MS = 1000;
+
+// Which side-button long-press actions THIS reader dispatches. Exhaustive on
+// purpose: -Werror=switch turns the next action added to SIDE_LONG_PRESS into a
+// build failure here, where the dispatch lives, instead of a setting that is
+// offered in Settings and quietly does nothing. Answering false is not free --
+// see detectPageTurn: an unhandled action used to cost the side page-turners
+// their press-time response for a gesture that did nothing.
+bool handlesSideLongPress(const CrossPointSettings::SIDE_LONG_PRESS action) {
+  switch (action) {
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_CHAPTER_SKIP:
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_FONT_SIZE:
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_ORIENTATION_CHANGE:
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_QUICK_TOGGLES:
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_LIBRARY:
+      return true;
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_OFF:
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_PRESS_COUNT:
+      return false;
+  }
+  return false;
+}
+
 // pagesPerRefresh now comes from SETTINGS.getRefreshFrequency()
 constexpr unsigned long longPressMenuMs = 600;
 constexpr uint16_t DEFAULT_AUTO_PAGE_TURN_INTERVAL_S = 30;
@@ -2683,7 +2705,8 @@ void EpubReaderActivity::loop() {
       SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_QUICK_TOGGLES;
   const bool sideLongPressOpensLibrary =
       SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_LIBRARY;
-  if (sideLongPressChangesFont || sideLongPressChangesOrientation || sideLongPressOpensQuickToggles || sideLongPressOpensLibrary) {
+  if (sideLongPressChangesFont || sideLongPressChangesOrientation || sideLongPressOpensQuickToggles ||
+      sideLongPressOpensLibrary) {
     const bool topReleased = mappedInput.wasReleased(MappedInputManager::Button::Up);
     const bool bottomReleased = mappedInput.wasReleased(MappedInputManager::Button::Down);
     if (sideButtonLongPressHandled && (topReleased || bottomReleased)) {
@@ -2763,12 +2786,12 @@ void EpubReaderActivity::loop() {
   }
 
   const bool frontLongPressChangesFont = SETTINGS.longPressButtonBehavior == CrossPointSettings::FONT_SIZE_CHANGE;
-  const bool frontLongPressOpensQuickToggles =
-      SETTINGS.longPressButtonBehavior == CrossPointSettings::QUICK_TOGGLES;
+  const bool frontLongPressOpensQuickToggles = SETTINGS.longPressButtonBehavior == CrossPointSettings::QUICK_TOGGLES;
   const bool frontLongPressOpensLibrary = SETTINGS.longPressButtonBehavior == CrossPointSettings::LIBRARY;
   const bool frontLongPressAction = SETTINGS.longPressButtonBehavior == CrossPointSettings::CHAPTER_SKIP ||
                                     SETTINGS.longPressButtonBehavior == CrossPointSettings::ORIENTATION_CHANGE ||
-                                    frontLongPressChangesFont || frontLongPressOpensQuickToggles || frontLongPressOpensLibrary;
+                                    frontLongPressChangesFont || frontLongPressOpensQuickToggles ||
+                                    frontLongPressOpensLibrary;
   if (frontLongPressAction) {
     const bool leftReleased = mappedInput.wasReleased(MappedInputManager::Button::Left);
     const bool rightReleased = mappedInput.wasReleased(MappedInputManager::Button::Right);
@@ -2846,7 +2869,9 @@ void EpubReaderActivity::loop() {
     }
   }
 
-  auto [prevTriggered, nextTriggered, fromSideBtn, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  auto [prevTriggered, nextTriggered, fromSideBtn, fromTilt] = ReaderUtils::detectPageTurn(
+      mappedInput,
+      handlesSideLongPress(static_cast<CrossPointSettings::SIDE_LONG_PRESS>(SETTINGS.sideButtonLongPress)));
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
   const bool powerReleased = mappedInput.wasReleased(MappedInputManager::Button::Power);

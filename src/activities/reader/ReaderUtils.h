@@ -150,9 +150,19 @@ inline bool isTouchMenuDismissGesture(const MappedInputManager& input) {
   return SETTINGS.touchReaderControls && input.hasTouch() && input.hasHomeKey() && input.wasLightPanelGesture();
 }
 
-inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
-  // Side buttons fire on press only when long-press action is OFF (nothing to detect).
-  const bool sideUsePress = SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_OFF;
+// sideHoldHandled: whether the calling reader dispatches the side-button
+// long-press action that is CURRENTLY configured. Each reader answers with its
+// own handlesSideLongPress(), an exhaustive switch next to the code that does
+// the dispatching -- the reader is the only place that knows, and the switch
+// makes the next action added to the enum a compile error there rather than a
+// silent "no".
+inline PageTurnResult detectPageTurn(const MappedInputManager& input, const bool sideHoldHandled) {
+  // Side buttons fire on press when there is no hold to detect. Waiting for the
+  // release costs the page turn its press-time response, so a reader that does
+  // not implement the configured action must not pay it: that was true of the
+  // drawer in TXT and XTC, of the font-size gesture in both, and of chapter
+  // skip in TXT -- which is the default setting.
+  const bool sideUsePress = !sideHoldHandled;
 
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();

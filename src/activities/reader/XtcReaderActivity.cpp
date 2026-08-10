@@ -32,6 +32,33 @@
 
 namespace {
 constexpr unsigned long MIN_READING_STATS_PAGE_MS = 2000UL;
+
+// Which side-button long-press actions THIS reader dispatches. Exhaustive on
+// purpose: -Werror=switch turns the next action added to SIDE_LONG_PRESS into a
+// build failure here, where the dispatch lives, instead of a setting that is
+// offered in Settings and quietly does nothing. Answering false is not free --
+// see detectPageTurn: an unhandled action used to cost the side page-turners
+// their press-time response for a gesture that did nothing.
+bool handlesSideLongPress(const CrossPointSettings::SIDE_LONG_PRESS action) {
+  switch (action) {
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_CHAPTER_SKIP:
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_LIBRARY:
+      return true;
+    // Deliberately absorbed rather than acted on, further down: XTC pages are
+    // pre-rendered bitmaps and cannot be rotated, and a hold the reader means
+    // as "rotate" must not fall through into a page turn. Absorbing IS the
+    // handling, and it needs the release to absorb.
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_ORIENTATION_CHANGE:
+      return true;
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_FONT_SIZE:
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_OFF:
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_QUICK_TOGGLES:
+    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_PRESS_COUNT:
+      return false;
+  }
+  return false;
+}
+
 constexpr uint16_t MIN_TIME_LEFT_PACE_SAMPLE_COUNT = 3;
 
 std::string confirmationHeading(const StrId actionLabelId) {
@@ -235,8 +262,12 @@ void XtcReaderActivity::loop() {
     return;
   }
 
-  // Side buttons fire on press only when long-press action is OFF.
-  const bool sideUsePress = SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_OFF;
+  // Side buttons fire on press when there is no hold to detect. XTC dispatches
+  // only chapter skip and the Library, so every other setting leaves the page
+  // turn on the press. Mirrors ReaderUtils::detectPageTurn, which this reader
+  // does not use.
+  const bool sideUsePress =
+      !handlesSideLongPress(static_cast<CrossPointSettings::SIDE_LONG_PRESS>(SETTINGS.sideButtonLongPress));
 
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
@@ -244,6 +275,18 @@ void XtcReaderActivity::loop() {
                                      : mappedInput.wasReleased(MappedInputManager::Button::PageBack);
   const bool sideNext = sideUsePress ? mappedInput.wasPressed(MappedInputManager::Button::PageForward)
                                      : mappedInput.wasReleased(MappedInputManager::Button::PageForward);
+  // Side-pair hold opens the Library, the same gesture the EPUB and TXT readers
+  // give it. Detected here rather than folded into the page-turn skip below:
+  // this is the only side long-press action XTC has of its own, and it has to
+  // fire on the hold, before the release turns a page.
+  if (SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_LIBRARY &&
+      mappedInput.getHeldTime() > ReaderUtils::SKIP_HOLD_MS &&
+      (mappedInput.isPressed(MappedInputManager::Button::PageBack) ||
+       mappedInput.isPressed(MappedInputManager::Button::PageForward))) {
+    activityManager.goToLibrary();
+    return;
+  }
+
   const bool frontPrev = mappedInput.wasReleased(MappedInputManager::Button::Left);
   const bool powerReleased = mappedInput.wasReleased(MappedInputManager::Button::Power);
   if (powerReleased && longPowerPageTurnHandled) {
@@ -299,8 +342,10 @@ void XtcReaderActivity::loop() {
   const bool powerPageTurn = shortPowerTurn || longPowerTurn || timedLongPowerTurn;
   const bool frontNext = mappedInput.wasReleased(MappedInputManager::Button::Right) || powerPageTurn;
 
+  const bool frontLongPressOpensLibrary = SETTINGS.longPressButtonBehavior == CrossPointSettings::LIBRARY;
   const bool frontLongPressAction = SETTINGS.longPressButtonBehavior == CrossPointSettings::CHAPTER_SKIP ||
-                                    SETTINGS.longPressButtonBehavior == CrossPointSettings::FONT_SIZE_CHANGE;
+                                    SETTINGS.longPressButtonBehavior == CrossPointSettings::FONT_SIZE_CHANGE ||
+                                    frontLongPressOpensLibrary;
   if (frontLongPressAction) {
     const bool leftReleased = mappedInput.wasReleased(MappedInputManager::Button::Left);
     const bool rightReleased = mappedInput.wasReleased(MappedInputManager::Button::Right);
@@ -314,6 +359,11 @@ void XtcReaderActivity::loop() {
     const bool nextLongPressed = longPressReady && mappedInput.isPressed(MappedInputManager::Button::Right);
     if (!frontButtonLongPressHandled && (prevLongPressed || nextLongPressed)) {
       frontButtonLongPressHandled = true;
+      if (frontLongPressOpensLibrary) {
+        activityManager.goToLibrary();
+        return;
+      }
+      // XTC pages are pre-rendered bitmaps: there is no font to resize.
       if (SETTINGS.longPressButtonBehavior == CrossPointSettings::FONT_SIZE_CHANGE) {
         return;
       }
