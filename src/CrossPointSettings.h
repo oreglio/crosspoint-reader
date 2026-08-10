@@ -261,6 +261,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     CHAPTER_SKIP = 1,
     ORIENTATION_CHANGE = 2,
     FONT_SIZE_CHANGE = 3,
+    QUICK_TOGGLES = 4,
     LONG_PRESS_BUTTON_BEHAVIOR_COUNT
   };
 

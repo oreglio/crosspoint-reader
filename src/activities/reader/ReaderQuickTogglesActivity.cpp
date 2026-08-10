@@ -2,14 +2,20 @@
 
 #include <I18n.h>
 
+#include <cstdio>
+
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 const ReaderQuickTogglesActivity::Toggle ReaderQuickTogglesActivity::TOGGLES[] = {
+    {StrId::STR_FONT_SIZE, nullptr, true},
     {StrId::STR_READER_DARK_MODE, &CrossPointSettings::readerDarkMode, true},
     {StrId::STR_TEXT_AA, &CrossPointSettings::textAntiAliasing, true},
     {StrId::STR_GUIDE_READING, &CrossPointSettings::guideReadingEnabled, false},
+#if CROSSINK_APP_CAP_TOUCH
+    // X3 and X4 have no touchscreen, so this row would be dead weight there.
     {StrId::STR_DISABLE_TOUCHSCREEN, &CrossPointSettings::disableReaderTouchscreen, false},
+#endif
 };
 
 const int ReaderQuickTogglesActivity::TOGGLE_COUNT =
@@ -21,10 +27,12 @@ constexpr int ROW_PADDING = 8;
 }  // namespace
 
 ReaderQuickTogglesActivity::ReaderQuickTogglesActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                                       void* backgroundContext, BackgroundRenderFn backgroundRender)
+                                                       void* backgroundContext, BackgroundRenderFn backgroundRender,
+                                                       FontStepFn fontStep)
     : Activity("ReaderQuickToggles", renderer, mappedInput),
       backgroundContext_(backgroundContext),
-      backgroundRender_(backgroundRender) {}
+      backgroundRender_(backgroundRender),
+      fontStep_(fontStep) {}
 
 void ReaderQuickTogglesActivity::onEnter() {
   Activity::onEnter();
@@ -60,8 +68,15 @@ void ReaderQuickTogglesActivity::drawPanel() const {
     }
 
     const char* label = I18N.get(TOGGLES[i].label);
-    const bool on = SETTINGS.*(TOGGLES[i].field) != 0;
-    const char* state = I18N.get(on ? StrId::STR_ON : StrId::STR_OFF);
+    char sizeText[12];
+    const char* state;
+    if (TOGGLES[i].field == nullptr) {
+      // Font row: show the point size, with arrows hinting Left/Right.
+      snprintf(sizeText, sizeof(sizeText), "< %u pt >", static_cast<unsigned>(SETTINGS.readerFontPointSize));
+      state = sizeText;
+    } else {
+      state = I18N.get(SETTINGS.*(TOGGLES[i].field) != 0 ? StrId::STR_ON : StrId::STR_OFF);
+    }
 
     const int textY = rowTop + ROW_PADDING;
     // Selected row is inverted, so its text draws in the opposite colour.
@@ -113,8 +128,23 @@ void ReaderQuickTogglesActivity::loop() {
     return;
   }
 
+  // Font row steps with Left/Right. The reader's own callback persists the new
+  // size and reindexes the current section, so the page under the panel has to
+  // be redrawn once it returns.
+  if (TOGGLES[selected_].field == nullptr && fontStep_) {
+    const bool smaller = mappedInput.wasReleased(MappedInputManager::Button::Left);
+    const bool larger = mappedInput.wasReleased(MappedInputManager::Button::Right);
+    if (smaller || larger) {
+      fontStep_(backgroundContext_, larger);
+      repaintPagePending_ = true;
+      requestUpdate();
+      return;
+    }
+  }
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     const Toggle& toggle = TOGGLES[selected_];
+    if (toggle.field == nullptr) return;  // font row is stepped, not toggled
     SETTINGS.*(toggle.field) = SETTINGS.*(toggle.field) ? 0 : 1;
     dirty_ = true;
     // Only dark mode and anti-aliasing change the page itself; the rest leave

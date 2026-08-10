@@ -395,6 +395,9 @@ class EpubReaderActivity final : public Activity {
   void renderDictionaryLookupBackground();
   static std::unique_ptr<Page> reloadDictionaryLookupPageCallback(void* context);
   static void renderDictionaryLookupBackgroundCallback(void* context);
+  // Lets the quick-toggle drawer step the font without knowing how the reader
+  // reflows: same path as the side-button gesture, current section only.
+  static void quickTogglesFontStepCallback(void* context, bool larger);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   // Opens the reader menu for the current position (short-press Confirm)
   void openReaderMenu();

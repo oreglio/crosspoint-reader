@@ -2701,7 +2701,8 @@ void EpubReaderActivity::loop() {
     if (!sideButtonLongPressHandled && sideLongPressOpensQuickToggles && (topLongPressed || bottomLongPressed)) {
       sideButtonLongPressHandled = !(topReleased || bottomReleased);
       auto drawer = makeUniqueNoThrow<ReaderQuickTogglesActivity>(
-          renderer, mappedInput, this, &EpubReaderActivity::renderDictionaryLookupBackgroundCallback);
+          renderer, mappedInput, this, &EpubReaderActivity::renderDictionaryLookupBackgroundCallback,
+          &EpubReaderActivity::quickTogglesFontStepCallback);
       if (!drawer) {
         LOG_ERR("RQT", "OOM allocating ReaderQuickTogglesActivity (%u bytes)",
                 static_cast<unsigned>(sizeof(ReaderQuickTogglesActivity)));
@@ -2747,9 +2748,11 @@ void EpubReaderActivity::loop() {
   }
 
   const bool frontLongPressChangesFont = SETTINGS.longPressButtonBehavior == CrossPointSettings::FONT_SIZE_CHANGE;
+  const bool frontLongPressOpensQuickToggles =
+      SETTINGS.longPressButtonBehavior == CrossPointSettings::QUICK_TOGGLES;
   const bool frontLongPressAction = SETTINGS.longPressButtonBehavior == CrossPointSettings::CHAPTER_SKIP ||
                                     SETTINGS.longPressButtonBehavior == CrossPointSettings::ORIENTATION_CHANGE ||
-                                    frontLongPressChangesFont;
+                                    frontLongPressChangesFont || frontLongPressOpensQuickToggles;
   if (frontLongPressAction) {
     const bool leftReleased = mappedInput.wasReleased(MappedInputManager::Button::Left);
     const bool rightReleased = mappedInput.wasReleased(MappedInputManager::Button::Right);
@@ -2763,6 +2766,19 @@ void EpubReaderActivity::loop() {
     const bool nextLongPressed = longPressReady && mappedInput.isPressed(MappedInputManager::Button::Right);
     if (!frontButtonLongPressHandled && (prevLongPressed || nextLongPressed)) {
       frontButtonLongPressHandled = true;
+      if (frontLongPressOpensQuickToggles) {
+        // Same drawer as the side-button gesture; direction carries no meaning.
+        auto drawer = makeUniqueNoThrow<ReaderQuickTogglesActivity>(
+            renderer, mappedInput, this, &EpubReaderActivity::renderDictionaryLookupBackgroundCallback,
+          &EpubReaderActivity::quickTogglesFontStepCallback);
+        if (!drawer) {
+          LOG_ERR("RQT", "OOM allocating ReaderQuickTogglesActivity (%u bytes)",
+                  static_cast<unsigned>(sizeof(ReaderQuickTogglesActivity)));
+          return;
+        }
+        startActivityForResult(std::move(drawer), [this](const ActivityResult&) { requestUpdate(); });
+        return;
+      }
       if (SETTINGS.longPressButtonBehavior == CrossPointSettings::CHAPTER_SKIP) {
         if (currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount()) {
           if (nextLongPressed) {
@@ -3063,6 +3079,13 @@ void EpubReaderActivity::renderDictionaryLookupBackground() {
 
 void EpubReaderActivity::renderDictionaryLookupBackgroundCallback(void* context) {
   static_cast<EpubReaderActivity*>(context)->renderDictionaryLookupBackground();
+}
+
+void EpubReaderActivity::quickTogglesFontStepCallback(void* context, const bool larger) {
+  auto* self = static_cast<EpubReaderActivity*>(context);
+  if (sdFontSystem.changeReaderFontSize(larger)) {
+    self->reindexCurrentSection();
+  }
 }
 
 void EpubReaderActivity::openWordSelect(bool framebufferContainsPage, int initialTouchX, int initialTouchY,

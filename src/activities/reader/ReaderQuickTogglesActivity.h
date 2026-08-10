@@ -27,9 +27,14 @@ class ReaderQuickTogglesActivity final : public Activity {
   // Matches DictionaryDefinitionActivity's shape: a raw function pointer plus a
   // context, per the no-std::function rule in AGENTS.md.
   using BackgroundRenderFn = void (*)(void* context);
+  // Steps the reader font one size and reindexes the current section only --
+  // the reader already does this for its side-button gesture, so the drawer
+  // borrows the same path rather than reflowing the whole book.
+  using FontStepFn = void (*)(void* context, bool larger);
 
   ReaderQuickTogglesActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                             void* backgroundContext = nullptr, BackgroundRenderFn backgroundRender = nullptr);
+                             void* backgroundContext = nullptr, BackgroundRenderFn backgroundRender = nullptr,
+                             FontStepFn fontStep = nullptr);
 
   void onEnter() override;
   void render(RenderLock&&) override;
@@ -43,6 +48,8 @@ class ReaderQuickTogglesActivity final : public Activity {
  private:
   struct Toggle {
     StrId label;
+    // nullptr marks the font-size row: it steps a value with Left/Right rather
+    // than flipping a boolean with Confirm.
     uint8_t CrossPointSettings::*field;
     // Dark mode and anti-aliasing change how the page itself is drawn, so the
     // page has to be repainted under the panel. The others only change future
@@ -62,6 +69,7 @@ class ReaderQuickTogglesActivity final : public Activity {
 
   void* backgroundContext_ = nullptr;
   BackgroundRenderFn backgroundRender_ = nullptr;
+  FontStepFn fontStep_ = nullptr;
   int selected_ = 0;
   bool repaintPagePending_ = true;
   bool dirty_ = false;
