@@ -279,10 +279,24 @@ void XtcReaderActivity::loop() {
   // give it. Detected here rather than folded into the page-turn skip below:
   // this is the only side long-press action XTC has of its own, and it has to
   // fire on the hold, before the release turns a page.
+  //
+  // Guarded like its siblings: the hold is consumed once, and the flag clears
+  // on the release that ends it rather than on the next frame that happens to
+  // find the button up.
+  if (sideButtonLongPressHandled) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
+        mappedInput.wasReleased(MappedInputManager::Button::PageForward) ||
+        !(mappedInput.isPressed(MappedInputManager::Button::PageBack) ||
+          mappedInput.isPressed(MappedInputManager::Button::PageForward))) {
+      sideButtonLongPressHandled = false;
+    }
+    return;
+  }
   if (SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_LIBRARY &&
       mappedInput.getHeldTime() > ReaderUtils::SKIP_HOLD_MS &&
       (mappedInput.isPressed(MappedInputManager::Button::PageBack) ||
        mappedInput.isPressed(MappedInputManager::Button::PageForward))) {
+    sideButtonLongPressHandled = true;
     activityManager.goToLibrary();
     return;
   }

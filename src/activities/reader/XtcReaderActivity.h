@@ -30,6 +30,11 @@ class XtcReaderActivity final : public Activity {
   ReadingStatsDateTime sessionStartLocalDateTime;
   bool hasSessionStartLocalDateTime = false;
   bool longPowerPageTurnHandled = false;
+  // Mirrors its two sibling readers. Without it the side-hold branch below
+  // re-fires on every loop for as long as the button is down: harmless for
+  // the Library, which replaces the activity on the first one, but the next
+  // side action added here would inherit an unguarded hold.
+  bool sideButtonLongPressHandled = false;
   bool frontButtonLongPressHandled = false;
   bool longPressBackHandled = false;
   ReaderProgressSaveDebouncer progressSaveDebouncer;
