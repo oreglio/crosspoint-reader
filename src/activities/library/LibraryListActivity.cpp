@@ -708,6 +708,10 @@ bool LibraryListActivity::rowTextFor(const int entry, std::string& title, std::s
 }
 
 void LibraryListActivity::loop() {
+  // Opened by a long press on a button pair, that button is still down: its
+  // release belongs to the gesture that got us here, not to this screen.
+  if (openingGestureLock_.consumeRelease(mappedInput)) return;
+
   // The menu owns every button while it is up, including the touch layer.
   if (popup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
   if (TouchHeaderBackButton::wasTapped(mappedInput, renderer)) {

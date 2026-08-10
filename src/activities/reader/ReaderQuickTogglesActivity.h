@@ -21,6 +21,7 @@
 #include "CrossPointSettings.h"
 #include "I18nKeys.h"
 #include "activities/Activity.h"
+#include "util/HoldOpenReleaseLock.h"
 
 class ReaderQuickTogglesActivity final : public Activity {
  public:
@@ -31,7 +32,6 @@ class ReaderQuickTogglesActivity final : public Activity {
   // the reader already does this for its side-button gesture, so the drawer
   // borrows the same path rather than reflowing the whole book.
   using FontStepFn = void (*)(void* context, bool larger);
-
   // Writes the toggles to disk. Persisting is the reader's job, not the
   // drawer's: a bare SETTINGS.saveToFile() here saves whatever the CURRENT
   // BOOK's overrides left in SETTINGS as the global defaults, so opening a
@@ -40,6 +40,7 @@ class ReaderQuickTogglesActivity final : public Activity {
   // saveGlobalSettingsPreservingBookOverrides(), which puts the pre-book
   // globals back around the write. Same shape as the font-step hook.
   using SaveSettingsFn = void (*)(void* context);
+
   // No defaulted arguments: every hook is required. The drawer cannot do any
   // of these three jobs itself, and a caller that silently got nullptr for the
   // save hook would be back to losing the user's toggles.
@@ -80,8 +81,11 @@ class ReaderQuickTogglesActivity final : public Activity {
   void* backgroundContext_ = nullptr;
   BackgroundRenderFn backgroundRender_ = nullptr;
   FontStepFn fontStep_ = nullptr;
-  int selected_ = 0;
   SaveSettingsFn saveSettings_ = nullptr;
+  int selected_ = 0;
   bool repaintPagePending_ = true;
   bool dirty_ = false;
+  // The drawer opens on a HOLD of one of the two button pairs, and every one of
+  // those four buttons does something here on release.
+  HoldOpenReleaseLock openingGestureLock_;
 };

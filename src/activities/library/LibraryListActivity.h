@@ -10,6 +10,7 @@
 
 #include "activities/Activity.h"
 #include "components/OptionPopup.h"
+#include "util/HoldOpenReleaseLock.h"
 
 // One flat list of every book on the card, newest first, with the title on line
 // 1 and the author on line 2 at a fixed column.
@@ -45,6 +46,11 @@ class LibraryListActivity final : public Activity {
 
  private:
   using UiApp = freeink::ui::FreeInkApp<20, 4>;
+  // The readers open the Library from a HOLD of either button pair, and all
+  // four of those buttons move the cursor or the sort strip here on release.
+  // The Confirm and Back routes into this screen arm the MappedInputManager
+  // suppressions instead; the pairs have none, so the lock lives here.
+  HoldOpenReleaseLock openingGestureLock_;
   bool openIndex();
   // Walk the card and write a fresh index. Blocking, with a popup: at ~70 books
   // it is well under a second, and it only runs when the index is missing or the

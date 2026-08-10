@@ -111,6 +111,10 @@ void ReaderQuickTogglesActivity::render(RenderLock&&) {
 }
 
 void ReaderQuickTogglesActivity::loop() {
+  // The drawer opens on the HOLD, so the button that opened it is still down
+  // here and its release is still to come.
+  if (openingGestureLock_.consumeRelease(mappedInput)) return;
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     // One write for the whole visit rather than one per toggle: flipping four
     // rows should not cost four SD writes (see the debounce rule in AGENTS.md).
