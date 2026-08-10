@@ -152,8 +152,14 @@ inline uint8_t closestBuiltinFontSizeIndex(const uint8_t targetPointSize) {
 // Build the font family setting dynamically. When registry is non-null, SD card fonts
 // are appended after the built-in fonts. Otherwise only built-in fonts are listed.
 inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
-  // Built-in font labels (StrId)
-  std::vector<StrId> enumValues = {StrId::STR_LEXEND_DECA, StrId::STR_BITTER};
+  // Built-in font labels (StrId), from the one table in util/FontFamilyLabel.h.
+  // Used when no SD-card fonts are installed; allStringValues below covers the
+  // mixed case.
+  std::vector<StrId> enumValues;
+  enumValues.reserve(BUILTIN_FONT_FAMILY_COUNT);
+  for (const auto& builtin : BUILTIN_FONT_FAMILIES) {
+    enumValues.push_back(builtin.label);
+  }
   // Runtime string labels for SD card fonts
   std::vector<std::string> enumStringValues;
 

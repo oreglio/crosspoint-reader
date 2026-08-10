@@ -1452,9 +1452,12 @@ void CrossPointWebServer::handleGetSettings() const {
         }
         JsonArray options = doc["options"].to<JsonArray>();
         if (s.nameId == StrId::STR_FONT_FAMILY && !fontFamilies.empty()) {
-          constexpr FontFamilyPointSizeRange builtinRange{10, 16};
-          options.add(fontFamilyLabel(I18N.get(StrId::STR_LEXEND_DECA), builtinRange));
-          options.add(fontFamilyLabel(I18N.get(StrId::STR_BITTER), builtinRange));
+          // Same table as the on-device pickers (util/FontFamilyLabel.h): the
+          // portal must not offer a family the firmware does not carry.
+          constexpr FontFamilyPointSizeRange builtinRange = builtinFontPointSizeRange();
+          for (const auto& builtin : BUILTIN_FONT_FAMILIES) {
+            options.add(fontFamilyLabel(I18N.get(builtin.label), builtinRange));
+          }
           for (const auto& family : fontFamilies) {
             options.add(fontFamilyLabel(family.name, fontFamilyPointSizeRange(family)));
           }
