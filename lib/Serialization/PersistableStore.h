@@ -98,6 +98,12 @@ class PersistableStore : public PersistableStoreBase {
     return instance;
   }
 
+ private:
+  // Whether loadFromFile() has run at all, successfully or not. Only
+  // ensureLoaded() reads it.
+  bool loaded = false;
+
+ public:
   bool saveToFile() const {
     std::lock_guard<std::mutex> lock(storeMutex);
     JsonDocument doc;
@@ -105,9 +111,28 @@ class PersistableStore : public PersistableStoreBase {
     return writeDocToFile(T::getFilePath(), doc);
   }
 
+  // Load this store unless it already has been. The lean network boot modes in
+  // main.cpp deliberately skip some stores -- an OTA boot has no use for recent
+  // books -- but backing out of those screens lands on the normal UI, where an
+  // unloaded store looks exactly like an empty one. Reading empty is a wrong
+  // screen; WRITING it is the user's file gone, because the writers here
+  // persist on the spot.
+  //
+  // Deliberately not called from the getters: those run on the render task, and
+  // a store that reads the SD card the first time something draws it would open
+  // a file while a book may already hold the one handle the card allows. The
+  // screens that can be reached from a lean boot call this in onEnter instead.
+  void ensureLoaded() {
+    if (loaded) return;
+    static_cast<T*>(this)->loadFromFile();
+  }
+
   bool loadFromFile() {
     bool ok;
     bool doResave;
+    // Set before doing any work: a store whose file is missing or corrupt has
+    // still been given its chance, and must not retry on every single call.
+    loaded = true;
     {
       std::lock_guard<std::mutex> lock(storeMutex);
       resaveRequested = false;

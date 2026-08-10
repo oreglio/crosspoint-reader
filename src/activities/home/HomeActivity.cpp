@@ -861,6 +861,12 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 void HomeActivity::onEnter() {
   Activity::onEnter();
 
+  // A lean network boot (Check for updates, Manage fonts, file transfer)
+  // skips this store, and backing out of those screens lands here. Without
+  // this the shelf reads empty -- and the first book opened from it would
+  // save that emptiness over the user's recent books.
+  RECENT_BOOKS.ensureLoaded();
+
   hasOpdsServers = OPDS_STORE.hasServers();
   const bool isCarouselTheme =
       static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::LYRA_CAROUSEL;

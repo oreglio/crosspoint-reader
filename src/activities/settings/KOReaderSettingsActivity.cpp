@@ -43,6 +43,11 @@ void KOReaderSettingsActivity::onRowEvent(const fui::ActionEvent& event, void* u
 void KOReaderSettingsActivity::onEnter() {
   Activity::onEnter();
 
+  // Same trap as recent books: an OTA or font-manager boot skips these
+  // credentials, and this screen writes each field on the spot -- editing
+  // one would have saved a blank username and password over the real ones.
+  KOREADER_STORE.ensureLoaded();
+
   selectedIndex = 0;
   uiReady = false;
   visibleRows = 1;

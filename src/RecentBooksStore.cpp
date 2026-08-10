@@ -59,6 +59,10 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
 
 void RecentBooksStore::addOrUpdateBook(const std::string& path, const std::string& title, const std::string& author,
                                        const std::string& coverBmpPath, const RecentBook::CoverState coverState) {
+  // Never write against a store that was never read: the lean network boot
+  // skips it, and every mutator here persists. Loading first is what keeps
+  // a single book from replacing the whole list on disk.
+  ensureLoaded();
   // Drop stale entries first so a new add can't evict a valid book in their stead.
   pruneMissing();
 
@@ -86,6 +90,10 @@ void RecentBooksStore::addOrUpdateBook(const std::string& path, const std::strin
 
 bool RecentBooksStore::updateBook(const std::string& path, const std::string& title, const std::string& author,
                                   const std::string& coverBmpPath, const RecentBook::CoverState coverState) {
+  // Never write against a store that was never read: the lean network boot
+  // skips it, and every mutator here persists. Loading first is what keeps
+  // a single book from replacing the whole list on disk.
+  ensureLoaded();
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
   if (it == recentBooks.end()) {
@@ -101,6 +109,10 @@ bool RecentBooksStore::updateBook(const std::string& path, const std::string& ti
 }
 
 bool RecentBooksStore::removeByPath(const std::string& path) {
+  // Never write against a store that was never read: the lean network boot
+  // skips it, and every mutator here persists. Loading first is what keeps
+  // a single book from replacing the whole list on disk.
+  ensureLoaded();
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
   if (it == recentBooks.end()) {
@@ -115,6 +127,10 @@ bool RecentBooksStore::removeByPath(const std::string& path) {
 
 void RecentBooksStore::updatePath(const std::string& oldPath, const std::string& newPath,
                                   const std::string& oldCachePath, const std::string& newCachePath) {
+  // Never write against a store that was never read: the lean network boot
+  // skips it, and every mutator here persists. Loading first is what keeps
+  // a single book from replacing the whole list on disk.
+  ensureLoaded();
   auto it = std::find_if(recentBooks.begin(), recentBooks.end(),
                          [&](const RecentBook& book) { return book.path == oldPath; });
   if (it == recentBooks.end()) {

@@ -463,6 +463,10 @@ bool selectRandomSleepImage(SleepImageMode mode, SleepImageSelection& selection,
 void SleepActivity::onEnter() {
   Activity::onEnter();
 
+  // Sleeping straight from a lean network boot never passes through Home,
+  // so the cover would have no book to draw.
+  RECENT_BOOKS.ensureLoaded();
+
   const bool renderQuickResume =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
       (fromTimeout &&

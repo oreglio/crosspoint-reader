@@ -91,6 +91,10 @@ bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
 }
 
 void KOReaderCredentialStore::setCredentials(const std::string& user, const std::string& pass) {
+  // The lean network boot skips these credentials, and the settings screen
+  // writes each field on its own -- editing one against an unloaded store
+  // would save blanks over the others.
+  ensureLoaded();
   username = user;
   password = pass;
 }
@@ -117,7 +121,13 @@ void KOReaderCredentialStore::clearCredentials() {
   saveToFile();
 }
 
-void KOReaderCredentialStore::setServerUrl(const std::string& url) { serverUrl = url; }
+void KOReaderCredentialStore::setServerUrl(const std::string& url) {
+  // The lean network boot skips these credentials, and the settings screen
+  // writes each field on its own -- editing one against an unloaded store
+  // would save blanks over the others.
+  ensureLoaded();
+  serverUrl = url;
+}
 
 std::string KOReaderCredentialStore::getBaseUrl() const {
   std::string url;
