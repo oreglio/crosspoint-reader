@@ -2,10 +2,11 @@
 
 #include "fontIds.h"
 
-// The largest font the firmware actually registers. main.cpp inserts Lexend Deca
-// and Bitter at 10/12/14/16 plus the UI faces at 10/12, and nothing above that —
-// the 18 and 20 identifiers exist but their data is not built in. UI_12 left the
-// figure lost inside the ring.
+// The countdown figure is pinned to one reading face, so platformio.ini must
+// keep 16 pt built. OMIT_LARGE_FONT unregisters it silently: the id is a macro
+// that still resolves, only the insertFont call stops running, so getLineHeight()
+// returns 0 and drawCenteredText draws nothing -- an empty ring, no build error.
+// Which faces exist is a build flag now, not a property of this file.
 #define COUNTDOWN_VALUE_FONT_ID LEXENDDECA_16_FONT_ID
 
 class GfxRenderer;
