@@ -4176,18 +4176,48 @@ void EpubReaderActivity::executeReaderQuickAction(CrossPointSettings::LONG_PRESS
   }
 }
 
+// True for every quick action that hands the still-pressed Confirm to something
+// that reads its release. The dispatch above fires on the HOLD, so the release
+// lands in whatever screen the action just opened: the Library read it as a hold
+// on the focused row and opened that book's menu.
+//
+// No `default:` on purpose: with every enumerator spelled out, `-Werror=switch`
+// turns the next unhandled action into a build failure instead of a stray press
+// on the device. Do not add one back. The trailing `return false` is not a
+// default in disguise -- it catches an out-of-range byte from a settings file
+// written by another build, which a `__builtin_unreachable()` would turn into
+// undefined behaviour.
 bool EpubReaderActivity::quickActionUsesConfirmRelease(const CrossPointSettings::LONG_PRESS_MENU_ACTION action) const {
   switch (action) {
     case CrossPointSettings::LONG_MENU_READING_STATS:
     case CrossPointSettings::LONG_MENU_CYCLE_PAGE_TURN:
     case CrossPointSettings::LONG_MENU_CREATE_CLIPPING:
     case CrossPointSettings::LONG_MENU_LOOKUP_WORD:
+    case CrossPointSettings::LONG_MENU_FILE_BROWSER:
+    case CrossPointSettings::LONG_MENU_LIBRARY:
       return true;
     case CrossPointSettings::LONG_MENU_FOOTNOTES:
       return currentPageFootnotes.size() > 1;
-    default:
+    case CrossPointSettings::LONG_MENU_OFF:
+    case CrossPointSettings::LONG_MENU_SLEEP:
+    case CrossPointSettings::LONG_MENU_CHANGE_FONT:
+    case CrossPointSettings::LONG_MENU_TOGGLE_GUIDE_DOTS:
+    case CrossPointSettings::LONG_MENU_TOGGLE_BIONIC:
+    case CrossPointSettings::LONG_MENU_TOGGLE_BOOKMARK:
+    case CrossPointSettings::LONG_MENU_REFRESH_SCREEN:
+    case CrossPointSettings::LONG_MENU_SYNC_PROGRESS:
+    case CrossPointSettings::LONG_MENU_MARK_FINISHED:
+    case CrossPointSettings::LONG_MENU_SCREENSHOT:
+    case CrossPointSettings::LONG_MENU_FILE_TRANSFER:
+    case CrossPointSettings::LONG_MENU_TOGGLE_TILT_PAGE_TURN:
+    case CrossPointSettings::LONG_MENU_TOGGLE_DARK_MODE:
+    case CrossPointSettings::LONG_MENU_CALIBRE_WIRELESS:
+    case CrossPointSettings::LONG_MENU_JOIN_NETWORK:
+    case CrossPointSettings::LONG_MENU_CREATE_HOTSPOT:
+    case CrossPointSettings::LONG_PRESS_MENU_ACTION_COUNT:
       return false;
   }
+  return false;
 }
 
 bool EpubReaderActivity::quickActionUsesPowerRelease(const CrossPointSettings::LONG_PRESS_MENU_ACTION action) const {
