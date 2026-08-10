@@ -59,6 +59,10 @@ constexpr uint8_t SLEEP_SCREEN_STORAGE_ORDER_COUNT =
     sizeof(SLEEP_SCREEN_STORAGE_ORDER) / sizeof(SLEEP_SCREEN_STORAGE_ORDER[0]);
 static_assert(SLEEP_SCREEN_STORAGE_ORDER_COUNT == CrossPointSettings::SLEEP_SCREEN_MODE_COUNT,
               "Update sleep screen persisted-value mapping when adding modes");
+static_assert(BUILTIN_FONT_FAMILY_COUNT == CrossPointSettings::BUILTIN_FONT_COUNT,
+              "Built-in font family table and BUILTIN_FONT_COUNT disagree. A screen would offer a "
+              "family this build does not carry, and its setting index would collide with the "
+              "first SD-card family");
 constexpr CrossPointSettings::FONT_SIZE READER_FONT_SIZE_STORAGE_ORDER[] = {
     CrossPointSettings::TINY,
     CrossPointSettings::SMALL,
