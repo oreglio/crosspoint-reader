@@ -38,10 +38,20 @@ inline SettingInfo buildBuiltinFontSizeSetting() {
   s.enumStringValues.reserve(CrossPointSettings::FONT_SIZE_COUNT);
   s.enumRawValues.reserve(CrossPointSettings::FONT_SIZE_COUNT);
 
+  // Only sizes that survived the build get an entry; the list length is what
+  // gets pushed, so nothing counts these by hand.
+#ifndef OMIT_TINY_FONT
   appendBuiltinFontSizeOption(s, CrossPointSettings::TINY);
+#endif
+#ifndef OMIT_SMALL_FONT
   appendBuiltinFontSizeOption(s, CrossPointSettings::SMALL);
+#endif
+#ifndef OMIT_MEDIUM_FONT
   appendBuiltinFontSizeOption(s, CrossPointSettings::MEDIUM);
+#endif
+#ifndef OMIT_LARGE_FONT
   appendBuiltinFontSizeOption(s, CrossPointSettings::LARGE);
+#endif
 
   return s;
 }
@@ -164,9 +174,40 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   // with all options when SD fonts are present.
   std::vector<std::string> allStringValues;
   if (sdFontCount > 0) {
-    constexpr FontFamilyPointSizeRange builtinRange{10, 16};
+    // The advertised range has to follow the sizes actually baked in, or the
+    // label promises point sizes the picker cannot offer.
+    constexpr FontFamilyPointSizeRange builtinRange {
+#if !defined(OMIT_TINY_FONT)
+      10,
+#elif !defined(OMIT_SMALL_FONT)
+      12,
+#elif !defined(OMIT_MEDIUM_FONT)
+      14,
+#else
+      16,
+#endif
+#if !defined(OMIT_LARGE_FONT)
+          16
+#elif !defined(OMIT_MEDIUM_FONT)
+          14
+#elif !defined(OMIT_SMALL_FONT)
+          12
+#else
+          10
+#endif
+    };
     allStringValues.push_back(fontFamilyLabel(I18N.get(StrId::STR_LEXEND_DECA), builtinRange));
+#ifndef OMIT_BITTER_FONT
     allStringValues.push_back(fontFamilyLabel(I18N.get(StrId::STR_BITTER), builtinRange));
+#endif
+    static_assert(CrossPointSettings::BUILTIN_FONT_COUNT ==
+#ifdef OMIT_BITTER_FONT
+                      1,
+#else
+                      2,
+#endif
+                  "Built-in font family labels here must match BUILTIN_FONT_COUNT, or the picker "
+                  "offers a family that was not built (see v1.5.21)");
     allStringValues.insert(allStringValues.end(), enumStringValues.begin(), enumStringValues.end());
   }
 
@@ -424,7 +465,13 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     // Built-in font-family entry. Replaced per-call with a registry-aware
     // version when SD fonts are installed.
     add(SettingInfo::Enum(StrId::STR_FONT_FAMILY, &CrossPointSettings::fontFamily,
-                          {StrId::STR_LEXEND_DECA, StrId::STR_BITTER}, "fontFamily", StrId::STR_CAT_READER));
+                          {
+                              StrId::STR_LEXEND_DECA,
+#ifndef OMIT_BITTER_FONT
+                              StrId::STR_BITTER,
+#endif
+                          },
+                          "fontFamily", StrId::STR_CAT_READER));
     add(buildBuiltinFontSizeSetting());
     add(SettingInfo::Enum(StrId::STR_SD_FONT_SIZE_RANGE, &CrossPointSettings::sdFontSizeRange,
                           {StrId::STR_FONT_RANGE_TEENSY, StrId::STR_FONT_RANGE_TINY, StrId::STR_FONT_RANGE_XLARGE,

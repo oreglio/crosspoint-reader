@@ -155,8 +155,23 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   };
 
   // Font family options (built-in fonts only; SD card fonts use sdFontFamilyName)
+  //
+  // The enum lists every family the fork knows about and never shrinks, so a
+  // persisted fontFamily keeps its meaning across builds with different fonts
+  // baked in. BUILTIN_FONT_COUNT is how many actually shipped in this build --
+  // it drives the settings list and the SD-font index offset, and the load path
+  // clamps a stored value against it (CrossPointSettings.cpp).
   enum FONT_FAMILY { LEXENDDECA = 0, BITTER = 1, FONT_FAMILY_COUNT };
-  static constexpr uint8_t BUILTIN_FONT_COUNT = FONT_FAMILY_COUNT;
+#if defined(OMIT_LEXENDDECA_FONT) && !defined(OMIT_BITTER_FONT)
+#error \
+    "Dropping Lexend Deca while keeping Bitter would renumber FONT_FAMILY and invalidate persisted settings. Drop trailing families only."
+#endif
+  static constexpr uint8_t BUILTIN_FONT_COUNT =
+#ifdef OMIT_BITTER_FONT
+      1;
+#else
+      FONT_FAMILY_COUNT;
+#endif
   // Font size options
   enum FONT_SIZE { TINY = 0, SMALL = 1, MEDIUM = 2, LARGE = 3, FONT_SIZE_COUNT };
   enum SD_FONT_SIZE_RANGE {
