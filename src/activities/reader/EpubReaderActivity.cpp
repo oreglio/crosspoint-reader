@@ -2708,7 +2708,15 @@ void EpubReaderActivity::loop() {
                 static_cast<unsigned>(sizeof(ReaderQuickTogglesActivity)));
         return;
       }
-      startActivityForResult(std::move(drawer), [this](const ActivityResult&) { requestUpdate(); });
+      startActivityForResult(std::move(drawer), [this](const ActivityResult&) {
+          // One reflow for the whole visit, now that the reader owns the screen again.
+          if (quickTogglesFontChanged_) {
+            quickTogglesFontChanged_ = false;
+            reindexCurrentSection();
+            return;
+          }
+          requestUpdate();
+        });
       return;
     }
     if (!sideButtonLongPressHandled && topLongPressed) {
@@ -2776,7 +2784,15 @@ void EpubReaderActivity::loop() {
                   static_cast<unsigned>(sizeof(ReaderQuickTogglesActivity)));
           return;
         }
-        startActivityForResult(std::move(drawer), [this](const ActivityResult&) { requestUpdate(); });
+        startActivityForResult(std::move(drawer), [this](const ActivityResult&) {
+          // One reflow for the whole visit, now that the reader owns the screen again.
+          if (quickTogglesFontChanged_) {
+            quickTogglesFontChanged_ = false;
+            reindexCurrentSection();
+            return;
+          }
+          requestUpdate();
+        });
         return;
       }
       if (SETTINGS.longPressButtonBehavior == CrossPointSettings::CHAPTER_SKIP) {
@@ -3083,8 +3099,13 @@ void EpubReaderActivity::renderDictionaryLookupBackgroundCallback(void* context)
 
 void EpubReaderActivity::quickTogglesFontStepCallback(void* context, const bool larger) {
   auto* self = static_cast<EpubReaderActivity*>(context);
+  // Change the setting only. Reflowing here would be reflowing under an
+  // activity that owns the screen: the reader's page cache is invalidated the
+  // moment the size changes, so the drawer's background repaint finds no page
+  // to reload and clears to white, and the reflow itself lands later anyway
+  // when the reader regains control. The reindex happens once, on close.
   if (sdFontSystem.changeReaderFontSize(larger)) {
-    self->reindexCurrentSection();
+    self->quickTogglesFontChanged_ = true;
   }
 }
 

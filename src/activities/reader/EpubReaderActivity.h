@@ -398,6 +398,9 @@ class EpubReaderActivity final : public Activity {
   // Lets the quick-toggle drawer step the font without knowing how the reader
   // reflows: same path as the side-button gesture, current section only.
   static void quickTogglesFontStepCallback(void* context, bool larger);
+  // Set while the drawer is open; consumed on close so the book is reflowed
+  // once for the whole visit rather than once per step.
+  bool quickTogglesFontChanged_ = false;
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   // Opens the reader menu for the current position (short-press Confirm)
   void openReaderMenu();

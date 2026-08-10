@@ -136,7 +136,10 @@ void ReaderQuickTogglesActivity::loop() {
     const bool larger = mappedInput.wasReleased(MappedInputManager::Button::Right);
     if (smaller || larger) {
       fontStep_(backgroundContext_, larger);
-      repaintPagePending_ = true;
+      // Deliberately no page repaint: the size change has already invalidated
+      // the reader's layout, so reloading the page here finds nothing and
+      // clears to white. The stale text above the panel stays put until the
+      // reader reflows it once, on close.
       requestUpdate();
       return;
     }
