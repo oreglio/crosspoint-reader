@@ -274,9 +274,9 @@ void EpubReaderMenuActivity::dictionaryFontChangedForMenu(void* ctx, const char*
     self->dictionaryFontPointSize = pointSize;
   }
   if (self->dictionaryFontChangedCallback) {
-    self->dictionaryFontChangedCallback(
-        self->dictionaryFontChangedContext,
-        self->hasDictionaryFontOverride ? self->dictionaryFontFamilyName : nullptr, self->dictionaryFontPointSize);
+    self->dictionaryFontChangedCallback(self->dictionaryFontChangedContext,
+                                        self->hasDictionaryFontOverride ? self->dictionaryFontFamilyName : nullptr,
+                                        self->dictionaryFontPointSize);
   }
 }
 
@@ -289,8 +289,11 @@ void EpubReaderMenuActivity::focusTabRow() {
   topIndex = 0;
 }
 
-void EpubReaderMenuActivity::cycleActiveTab() {
-  const auto nextTabIndex = ButtonNavigator::nextIndex(static_cast<int>(activeTabIndex()), MENU_TAB_COUNT);
+void EpubReaderMenuActivity::cycleActiveTab() { moveActiveTab(true); }
+
+void EpubReaderMenuActivity::moveActiveTab(const bool forward) {
+  const int nextTabIndex = forward ? ButtonNavigator::nextIndex(static_cast<int>(activeTabIndex()), MENU_TAB_COUNT)
+                                   : ButtonNavigator::previousIndex(static_cast<int>(activeTabIndex()), MENU_TAB_COUNT);
   activeTab = static_cast<MenuTab>(nextTabIndex);
   focusTabRow();
   requestUpdate();
@@ -334,22 +337,21 @@ bool EpubReaderMenuActivity::activateSelectedItem() {
 
   if (selectedAction == MenuAction::READER_OPTIONS) {
     const auto before = captureReaderLayoutSettings();
-    startActivityForResult(
-        std::make_unique<ReaderOptionsActivity>(
-            renderer, mappedInput, saveReaderSettingsCallback, saveReaderSettingsContext, saveGlobalSettingsCallback,
-            saveGlobalSettingsContext, beginGlobalSettingsEditCallback, beginGlobalSettingsEditContext,
-            endGlobalSettingsEditCallback, endGlobalSettingsEditContext, stablePageNumbersAvailable,
-            dictionaryFontFamilyName, dictionaryFontPointSize, hasDictionaryFontOverride, dictionaryFontChangedForMenu,
-            this),
-        [this, before](const ActivityResult& result) {
-          settingsChanged = settingsChanged || haveReaderLayoutSettingsChanged(before);
-          pendingOrientation = SETTINGS.orientation;  // sync in case orientation changed
-          if (result.isCancelled) {
-            finishCancelled();
-            return;
-          }
-          requestUpdate();
-        });
+    startActivityForResult(std::make_unique<ReaderOptionsActivity>(
+                               renderer, mappedInput, saveReaderSettingsCallback, saveReaderSettingsContext,
+                               saveGlobalSettingsCallback, saveGlobalSettingsContext, beginGlobalSettingsEditCallback,
+                               beginGlobalSettingsEditContext, endGlobalSettingsEditCallback,
+                               endGlobalSettingsEditContext, stablePageNumbersAvailable, dictionaryFontFamilyName,
+                               dictionaryFontPointSize, hasDictionaryFontOverride, dictionaryFontChangedForMenu, this),
+                           [this, before](const ActivityResult& result) {
+                             settingsChanged = settingsChanged || haveReaderLayoutSettingsChanged(before);
+                             pendingOrientation = SETTINGS.orientation;  // sync in case orientation changed
+                             if (result.isCancelled) {
+                               finishCancelled();
+                               return;
+                             }
+                             requestUpdate();
+                           });
     return true;
   }
 
@@ -557,6 +559,8 @@ void EpubReaderMenuActivity::loop() {
   buttonNavigator.onPreviousRelease([this, menuCount, &moveSelection] {
     moveSelection(ButtonNavigator::previousIndex(selectedIndex + 1, menuCount + 1));
   });
+  buttonNavigator.onNextContinuous([this] { moveActiveTab(true); });
+  buttonNavigator.onPreviousContinuous([this] { moveActiveTab(false); });
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     activateSelectedItem();

@@ -59,6 +59,10 @@ constexpr uint8_t SLEEP_SCREEN_STORAGE_ORDER_COUNT =
     sizeof(SLEEP_SCREEN_STORAGE_ORDER) / sizeof(SLEEP_SCREEN_STORAGE_ORDER[0]);
 static_assert(SLEEP_SCREEN_STORAGE_ORDER_COUNT == CrossPointSettings::SLEEP_SCREEN_MODE_COUNT,
               "Update sleep screen persisted-value mapping when adding modes");
+static_assert(BUILTIN_FONT_FAMILY_COUNT == CrossPointSettings::BUILTIN_FONT_COUNT,
+              "Built-in font family table and BUILTIN_FONT_COUNT disagree. A screen would offer a "
+              "family this build does not carry, and its setting index would collide with the "
+              "first SD-card family");
 constexpr CrossPointSettings::FONT_SIZE READER_FONT_SIZE_STORAGE_ORDER[] = {
     CrossPointSettings::TINY,
     CrossPointSettings::SMALL,
@@ -111,7 +115,32 @@ uint8_t normalizedSdFontRange(uint8_t range) {
 }
 
 bool isReaderFontSizeAvailable(const CrossPointSettings::FONT_SIZE size) {
-  return size < CrossPointSettings::FONT_SIZE_COUNT;
+  if (size >= CrossPointSettings::FONT_SIZE_COUNT) return false;
+  // A point size dropped from the build (see lib/EpdFont/builtinFonts/all.h)
+  // has no face to render with. Reporting it unavailable here is all the rest
+  // of the reader needs: getEffectiveReaderFontSize snaps a persisted
+  // preference to the nearest survivor, and the settings list stops offering
+  // it. Nothing counts sizes by hand.
+  switch (size) {
+#ifdef OMIT_TINY_FONT
+    case CrossPointSettings::TINY:
+      return false;
+#endif
+#ifdef OMIT_SMALL_FONT
+    case CrossPointSettings::SMALL:
+      return false;
+#endif
+#ifdef OMIT_MEDIUM_FONT
+    case CrossPointSettings::MEDIUM:
+      return false;
+#endif
+#ifdef OMIT_LARGE_FONT
+    case CrossPointSettings::LARGE:
+      return false;
+#endif
+    default:
+      return true;
+  }
 }
 
 CrossPointSettings::FONT_SIZE firstAvailableReaderFontSize() {
@@ -121,14 +150,65 @@ CrossPointSettings::FONT_SIZE firstAvailableReaderFontSize() {
   return (it != std::end(READER_FONT_SIZE_STORAGE_ORDER)) ? *it : CrossPointSettings::TINY;
 }
 
-int getFallbackReaderFontIdForFamily(const CrossPointSettings::FONT_FAMILY family) {
-  switch (family) {
-    case CrossPointSettings::BITTER:
-      return BITTER_10_FONT_ID;
-    case CrossPointSettings::LEXENDDECA:
-    default:
-      return LEXENDDECA_10_FONT_ID;
+// Single source of truth for (family, size) -> built-in font id. The live
+// lookup and the fallback path both go through it: when a family or point size
+// is dropped from the build, there is no second table left claiming it still
+// exists. Returns 0 when nothing matches, which callers treat as "fall back".
+int readerFontIdFor(const CrossPointSettings::FONT_FAMILY family, const CrossPointSettings::FONT_SIZE size) {
+#ifndef OMIT_BITTER_FONT
+  if (family == CrossPointSettings::BITTER) {
+    switch (size) {
+#ifndef OMIT_TINY_FONT
+      case CrossPointSettings::TINY:
+        return BITTER_10_FONT_ID;
+#endif
+#ifndef OMIT_SMALL_FONT
+      case CrossPointSettings::SMALL:
+        return BITTER_12_FONT_ID;
+#endif
+#ifndef OMIT_MEDIUM_FONT
+      case CrossPointSettings::MEDIUM:
+        return BITTER_14_FONT_ID;
+#endif
+#ifndef OMIT_LARGE_FONT
+      case CrossPointSettings::LARGE:
+        return BITTER_16_FONT_ID;
+#endif
+      default:
+        return 0;
+    }
   }
+#endif  // OMIT_BITTER_FONT
+#ifndef OMIT_LEXENDDECA_FONT
+  switch (size) {
+#ifndef OMIT_TINY_FONT
+    case CrossPointSettings::TINY:
+      return LEXENDDECA_10_FONT_ID;
+#endif
+#ifndef OMIT_SMALL_FONT
+    case CrossPointSettings::SMALL:
+      return LEXENDDECA_12_FONT_ID;
+#endif
+#ifndef OMIT_MEDIUM_FONT
+    case CrossPointSettings::MEDIUM:
+      return LEXENDDECA_14_FONT_ID;
+#endif
+#ifndef OMIT_LARGE_FONT
+    case CrossPointSettings::LARGE:
+      return LEXENDDECA_16_FONT_ID;
+#endif
+    default:
+      return 0;
+  }
+#else
+  return 0;
+#endif  // OMIT_LEXENDDECA_FONT
+}
+
+int getFallbackReaderFontIdForFamily(const CrossPointSettings::FONT_FAMILY family) {
+  // firstAvailableReaderFontSize() rather than a hardcoded 10 pt: the smallest
+  // size is itself droppable.
+  return readerFontIdFor(family, firstAvailableReaderFontSize());
 }
 
 // Convert legacy front button layout into explicit logical->hardware mapping.
@@ -437,12 +517,23 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
         char key[64];
         snprintf(key, sizeof(key), "%s_obf", info.key);
         obfuscation::DecodeStatus status = obfuscation::DecodeStatus::INVALID;
-        value = obfuscation::deobfuscateFromBase64(doc[key] | "", &status);
+        value = obfuscation::deobfuscateFromBase64(doc[key] | "", info.stringMaxLen - 1, &status);
         if (status == obfuscation::DecodeStatus::LEGACY && !value.empty()) needsResave = true;
+        if (status == obfuscation::DecodeStatus::TOO_LONG) {
+          LOG_ERR("CPS", "Oversized obfuscated value for key '%s'", info.key);
+          needsResave = true;
+        }
         if (status == obfuscation::DecodeStatus::INVALID || status == obfuscation::DecodeStatus::EMPTY ||
-            value.empty()) {
-          value = doc[info.key] | fieldDefault;
-          if (value != fieldDefault) needsResave = true;
+            status == obfuscation::DecodeStatus::TOO_LONG || value.empty()) {
+          const char* legacyValue = doc[info.key] | fieldDefault.c_str();
+          if (strlen(legacyValue) >= info.stringMaxLen) {
+            LOG_ERR("CPS", "Oversized plaintext value for key '%s'", info.key);
+            value = fieldDefault;
+            needsResave = true;
+          } else {
+            value = legacyValue;
+            if (value != fieldDefault) needsResave = true;
+          }
         }
       } else {
         value = doc[info.key] | fieldDefault;
@@ -981,36 +1072,9 @@ int CrossPointSettings::getReaderFontId() const {
 }
 
 int CrossPointSettings::getBuiltInReaderFontId() const {
-  const FONT_SIZE effectiveSize = getEffectiveReaderFontSize();
-
-  switch (fontFamily) {
-    case LEXENDDECA:
-    default:
-      switch (effectiveSize) {
-        case TINY:
-          return LEXENDDECA_10_FONT_ID;
-        case SMALL:
-          return LEXENDDECA_12_FONT_ID;
-        case MEDIUM:
-        default:
-          return LEXENDDECA_14_FONT_ID;
-        case LARGE:
-          return LEXENDDECA_16_FONT_ID;
-      }
-      return getFallbackReaderFontIdForFamily(LEXENDDECA);
-    case BITTER:
-      switch (effectiveSize) {
-        case TINY:
-          return BITTER_10_FONT_ID;
-        case SMALL:
-          return BITTER_12_FONT_ID;
-        case MEDIUM:
-        default:
-          return BITTER_14_FONT_ID;
-        case LARGE:
-          return BITTER_16_FONT_ID;
-      }
-      return getFallbackReaderFontIdForFamily(BITTER);
-  }
-  return getFallbackReaderFontIdForFamily(static_cast<FONT_FAMILY>(fontFamily));
+  const FONT_FAMILY family = static_cast<FONT_FAMILY>(fontFamily);
+  // getEffectiveReaderFontSize() already snaps to a size that survived the
+  // build, so readerFontIdFor only misses when the family itself was dropped.
+  const int id = readerFontIdFor(family, getEffectiveReaderFontSize());
+  return id != 0 ? id : getFallbackReaderFontIdForFamily(family);
 }

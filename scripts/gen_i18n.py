@@ -132,6 +132,25 @@ def load_translations(
     if not yaml_files:
         raise FileNotFoundError(f"No .yaml files found in {translations_dir}")
 
+    # Every shipped language costs flash: all 28 together are roughly 388 KB of
+    # the firmware image. CROSSINK_LANGUAGES -- set from custom_languages in
+    # platformio.ini -- narrows that to a chosen few. English always stays,
+    # since the generator keys the string table off it. Settings persist a
+    # language *code*, not an index, so narrowing the set does not disturb a
+    # device already set to one of the survivors.
+    wanted = os.environ.get("CROSSINK_LANGUAGES", "").strip()
+    if wanted:
+        keep = {name.strip().lower() for name in wanted.replace(",", " ").split() if name.strip()}
+        keep.add("english")
+        available = {f.stem.lower() for f in yaml_files}
+        unknown = keep - available
+        if unknown:
+            raise FileNotFoundError(
+                f"CROSSINK_LANGUAGES names unknown translations: {', '.join(sorted(unknown))}. "
+                f"Available: {', '.join(sorted(available))}"
+            )
+        yaml_files = [f for f in yaml_files if f.stem.lower() in keep]
+
     # Parse every file
     parsed: Dict[str, Dict[str, str]] = {}
     for yf in yaml_files:
@@ -471,6 +490,14 @@ def generate_keys_header(
     lines.append("};")
     lines.append("")
 
+    # Which languages this build actually carries. Code that special-cases a
+    # language -- keyboard layouts, for one -- guards on these so a narrowed
+    # custom_languages list cannot leave a dangling Language:: reference.
+    lines.append("// Languages present in this build (see custom_languages in platformio.ini)")
+    for lang in languages:
+        lines.append(f"#define I18N_HAS_{lang} 1")
+    lines.append("")
+
     # Extern declarations
     lines.append("// Language codes (defined in I18nStrings.cpp)")
     lines.append("extern const char* const LANGUAGE_CODES[];")
@@ -552,15 +579,23 @@ def generate_keys_header(
 
     # V1 language.bin migration table -- frozen enum order from commit 2f969a9.
     # Maps the old uint8_t index stored on disk to the current Language enum.
-    # If a Language enum value listed here is ever removed, this will fail to
-    # compile, signalling that the migration table needs updating.
+    # The table stays the same length whatever this build ships, so an old
+    # index never reads past its end. Entries whose language was not built fall
+    # back to English -- the same thing that happens to a persisted language
+    # code with no match.
     v1_codes = [
         "EN", "ES", "FR", "DE", "CS", "PT", "RU", "SV", "RO", "CA", "UK",
         "BE", "IT", "PL", "FI", "DA", "NL", "TR", "KK", "HU", "LT", "SI",
     ]
+    built = {code.upper() for code in languages}
+    dropped = [code for code in v1_codes if code not in built]
     lines.append("// V1 language.bin migration table (frozen enum order from 2f969a9)")
+    if dropped:
+        lines.append(f"// Not built in this firmware, mapped to EN: {', '.join(dropped)}")
     lines.append("constexpr Language V1_LANGUAGES[] = {")
-    lines.append("    " + ", ".join(f"Language::{c}" for c in v1_codes) + ",")
+    lines.append(
+        "    " + ", ".join(f"Language::{c if c in built else 'EN'}" for c in v1_codes) + ","
+    )
     lines.append("};")
     lines.append(
         f"constexpr uint8_t V1_LANGUAGE_COUNT = {len(v1_codes)};"
@@ -999,6 +1034,9 @@ if __name__ == "__main__":
 else:
     try:
         Import("env")
+        selected_languages = env.GetProjectOption("custom_languages", "")
+        if selected_languages:
+            os.environ["CROSSINK_LANGUAGES"] = selected_languages
         main(strip_unused=True)
         keys_path = Path("lib/I18n/I18nKeys.h")
         layout_hash = hashlib.sha256(keys_path.read_bytes()).hexdigest()[:16]

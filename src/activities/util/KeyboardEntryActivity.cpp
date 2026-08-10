@@ -112,13 +112,22 @@ const fui::KeyboardLayout URL_SHIFT_LAYOUT{URL_SHIFT_ROWS, 5};
 const fui::KeyboardLayout URL_SNIPPET_LAYOUT{URL_SNIP_ROWS, 4};
 
 fui::KeyboardLayoutId layoutForLanguage(const Language language) {
+  // Guarded on I18N_HAS_*: a build that ships fewer translations has fewer
+  // Language enumerators, and a case for one it does not carry would not
+  // compile. Dropping a language simply drops its keyboard layout with it.
   switch (language) {
+#ifdef I18N_HAS_FR
     case Language::FR:
       return fui::KeyboardLayoutId::AzertyFr;
+#endif
+#ifdef I18N_HAS_DE
     case Language::DE:
       return fui::KeyboardLayoutId::QwertzDe;
+#endif
+#ifdef I18N_HAS_ES
     case Language::ES:
       return fui::KeyboardLayoutId::SpanishEs;
+#endif
     default:
       return fui::KeyboardLayoutId::QwertyEn;
   }

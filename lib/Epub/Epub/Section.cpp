@@ -16,12 +16,13 @@
 
 namespace {
 constexpr uint32_t SECTION_CACHE_MAGIC = 0x535843FF;  // bytes: 0xFF, "CXS"
-// v59: page-start visible-text offsets make positions independent of wrapping.
-constexpr uint8_t SECTION_FILE_VERSION = 59;
+// v60: reserve page-edge space for ruby overhang and prefer longer equal-cost
+// CJK lines, invalidating cached pagination from the prior layout contract.
+constexpr uint8_t SECTION_FILE_VERSION = 60;
 // Suspended incremental build: valid pages plus LUTs and a parse-watermark trailer.
 // Change this with layout or payload changes so stale partial pages cannot resume
 // under a different layout contract.
-constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xFA;
+constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xF9;
 constexpr uint16_t INITIAL_SECTION_PAGE_LUT_ENTRIES = 1024;
 constexpr uint32_t HEADER_SIZE = sizeof(SECTION_CACHE_MAGIC) + sizeof(uint8_t) + sizeof(int) + sizeof(float) +
                                  sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) +
@@ -431,6 +432,16 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
   } clearActiveBuildTmpPath{activeBuildTmpSectionPath_};
   pageCount = 0;
   if (layoutAbortedForLowMemory) *layoutAbortedForLowMemory = false;
+  if (buildOptions.cancellationObserved) *buildOptions.cancellationObserved = false;
+  const auto cancelBuild = [&buildOptions]() {
+    if (!buildOptions.isCancellationRequested()) {
+      return false;
+    }
+    if (buildOptions.cancellationObserved) {
+      *buildOptions.cancellationObserved = true;
+    }
+    return true;
+  };
   const bool effectiveBionicReadingEnabled = bionicReadingEnabled;
   const bool effectiveGuideReadingEnabled = guideReadingEnabled;
   LOG_DBG("SCT",
@@ -459,6 +470,10 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
       Storage.remove(tmpHtmlPath.c_str());
     }
   };
+  if (cancelBuild()) {
+    LOG_DBG("SCT", "Section build cancelled before HTML inflate: spine=%d", spineIndex);
+    return false;
+  }
   if (!reusedHtml) {
     Storage.mkdir(htmlDir.c_str());
 
@@ -509,6 +524,12 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
     }
   }
   const std::string& parsePath = htmlCached ? htmlPath : tmpHtmlPath;
+
+  if (cancelBuild()) {
+    LOG_DBG("SCT", "Section build cancelled after HTML inflate: spine=%d", spineIndex);
+    cleanupTempHtml();
+    return false;
+  }
 
   if (Storage.exists(tmpSectionPath.c_str())) {
     Storage.remove(tmpSectionPath.c_str());
@@ -610,7 +631,35 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
       embeddedStyle, contentBase, imageBasePath, imageRendering, std::move(tocAnchors), popupFn, cssParser, renderMode,
       buildOptions.isPreview() ? std::string(buildOptions.previewAnchor) : std::string{}, buildOptions.previewMaxPages);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
-  const bool success = visitor.parseAndBuildPages();
+  bool cancelled = false;
+  bool success = false;
+  if (cancelBuild()) {
+    cancelled = true;
+  } else {
+    success = visitor.beginParse();
+  }
+  while (success && !cancelled) {
+    if (cancelBuild()) {
+      visitor.abortParse();
+      cancelled = true;
+      break;
+    }
+    const auto status = visitor.parseStep();
+    if (status == ChapterHtmlSlimParser::ParseStatus::Error) {
+      visitor.abortParse();
+      success = false;
+      break;
+    }
+    if (status == ChapterHtmlSlimParser::ParseStatus::Done) {
+      if (cancelBuild()) {
+        visitor.abortParse();
+        cancelled = true;
+      } else {
+        success = visitor.finishParse();
+      }
+      break;
+    }
+  }
   LOG_DBG("SCT", "Parser done: spine=%d success=%u pages=%u free=%u maxAlloc=%u", spineIndex, success, pageCount,
           ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
@@ -634,8 +683,12 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
     }
   }
 
-  if (!success || pageCompletionFailed) {
-    LOG_ERR("SCT", "Failed to parse XML and build pages");
+  if (!success || pageCompletionFailed || cancelled) {
+    if (cancelled) {
+      LOG_DBG("SCT", "Section build cancelled during parse: spine=%d", spineIndex);
+    } else {
+      LOG_ERR("SCT", "Failed to parse XML and build pages");
+    }
     // Explicitly close() file before calling Storage.remove()
     file.close();
     Storage.remove(tmpSectionPath.c_str());
@@ -1696,8 +1749,9 @@ std::optional<uint16_t> Section::getPageForVisibleTextOffset(const uint32_t offs
     uint16_t result = 0;
     for (uint16_t i = 0; i < build_->lutCount; i++) {
       const uint32_t start = build_->lut[i].visibleTextOffset;
-      if (start > offset || (preferFirstAtOffset && start == offset && i > 0)) break;
+      if (start > offset) break;
       result = i;
+      if (preferFirstAtOffset && start == offset) break;
     }
     const uint32_t last = build_->lut[build_->lutCount - 1].visibleTextOffset;
     if (offset <= last) return result;
@@ -1733,8 +1787,9 @@ std::optional<uint16_t> Section::getPageForVisibleTextOffset(const uint32_t offs
       return std::nullopt;
     }
     last = start;
-    if (start > offset || (preferFirstAtOffset && start == offset && i > 0)) break;
+    if (start > offset) break;
     result = i;
+    if (preferFirstAtOffset && start == offset) break;
   }
   if (version == SECTION_FILE_PARTIAL_VERSION && offset > last) return std::nullopt;
   return result;

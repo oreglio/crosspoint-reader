@@ -11,7 +11,7 @@
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
 #include "SettingsList.h"
-#include "activities/settings/FontDownloadActivity.h"
+#include "SilentRestart.h"
 #include "activities/settings/FontSelectionActivity.h"
 #include "activities/settings/StatusBarSettingsActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
@@ -148,9 +148,8 @@ void ReaderOptionsActivity::rebuildSettingsList() {
   if (dictionaryFontFamilyName[0] != '\0' && !selectedFamilyIsInstalled) {
     dictionaryFont.enumStringValues.push_back(std::string(dictionaryFontFamilyName) + " (" + tr(STR_UNAVAILABLE) + ")");
   }
-  const auto fontSize = std::find_if(fontSettings.begin(), fontSettings.end(), [](const SettingInfo& setting) {
-    return setting.nameId == StrId::STR_FONT_SIZE;
-  });
+  const auto fontSize = std::find_if(fontSettings.begin(), fontSettings.end(),
+                                     [](const SettingInfo& setting) { return setting.nameId == StrId::STR_FONT_SIZE; });
   const size_t dictionaryFontIndex =
       fontSize == fontSettings.end() ? 0 : static_cast<size_t>(std::distance(fontSettings.begin(), fontSize) + 1);
   fontSettings.insert(fontSettings.begin() + dictionaryFontIndex, std::move(dictionaryFont));
@@ -162,8 +161,10 @@ void ReaderOptionsActivity::rebuildSettingsList() {
   dictionaryFontSize.category = StrId::STR_CAT_READER;
   dictionaryFontSize.enumStringValues.push_back(tr(STR_DICT_USE_GLOBAL));
   dictionaryFontSize.enumRawValues.push_back(0);
-  if (dictionaryFontFamilyName[0] != '\0') {
-    if (const auto* family = sdFontSystem.registry().findFamily(dictionaryFontFamilyName)) {
+  const char* dictionarySizeFamily =
+      dictionaryFontFamilyName[0] != '\0' ? dictionaryFontFamilyName : SETTINGS.sdFontFamilyName;
+  if (dictionarySizeFamily[0] != '\0') {
+    if (const auto* family = sdFontSystem.registry().findFamily(dictionarySizeFamily)) {
       dictionaryFontSize.enumStringValues.reserve(family->files.size() + 1);
       dictionaryFontSize.enumRawValues.reserve(family->files.size() + 1);
       // Build a sorted, unique list directly from the catalog already resident
@@ -370,9 +371,7 @@ void ReaderOptionsActivity::openDictionaryFontSizePicker(const SettingInfo& sett
   const size_t optionCount = setting.enumRawValues.size();
   if (optionCount == 0) return;
 
-  uint8_t currentIndex = hasDictionaryFontOverride
-                             ? enumDisplayIndexForRawValue(setting, dictionaryFontPointSize)
-                             : 0;
+  uint8_t currentIndex = hasDictionaryFontOverride ? enumDisplayIndexForRawValue(setting, dictionaryFontPointSize) : 0;
   if (currentIndex >= optionCount) currentIndex = 0;
   const SettingInfo selectedSetting = setting;
   optionPopup.show(setting.nameId, selectedSetting.enumStringValues, currentIndex, [this, selectedSetting](int index) {
@@ -381,6 +380,13 @@ void ReaderOptionsActivity::openDictionaryFontSizePicker(const SettingInfo& sett
       if (index == 0) {
         dictionaryFontPointSize = SETTINGS.dictionaryFontPointSize;
       } else if (dictionaryFontFamilyName[0] != '\0') {
+        hasDictionaryFontOverride = true;
+        dictionaryFontPointSize = pointSize;
+      } else if (SETTINGS.sdFontFamilyName[0] != '\0') {
+        // Persist the reader family explicitly for this book so its size can
+        // differ from the global dictionary default after the menu closes.
+        std::strncpy(dictionaryFontFamilyName, SETTINGS.sdFontFamilyName, sizeof(dictionaryFontFamilyName) - 1);
+        dictionaryFontFamilyName[sizeof(dictionaryFontFamilyName) - 1] = '\0';
         hasDictionaryFontOverride = true;
         dictionaryFontPointSize = pointSize;
       }
@@ -505,13 +511,7 @@ void ReaderOptionsActivity::toggleCurrentSetting() {
         persistReaderSettings();
         settingsDirty = false;
       }
-      startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput),
-                             [this](const ActivityResult&) {
-                               persistGlobalSettings();
-                               sdFontSystem.refreshIfDirty();
-                               rebuildSettingsList();
-                               requestUpdate();
-                             });
+      silentRestartToManageFonts();
       return;
     }
     if (setting.action == SettingAction::CustomiseStatusBar) {
@@ -716,8 +716,7 @@ void ReaderOptionsActivity::buildOptionsScreen(UiApp::ScreenType& screen) {
         }
       } else {
         const uint8_t displayValue = enumDisplayIndexForRawValue(setting, dictionaryFontPointSize);
-        values[i] =
-            settingEnumOptionLabel(setting, displayValue < settingEnumOptionCount(setting) ? displayValue : 0);
+        values[i] = settingEnumOptionLabel(setting, displayValue < settingEnumOptionCount(setting) ? displayValue : 0);
       }
     } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
       values[i] = formatSettingValue(setting);

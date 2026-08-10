@@ -4,6 +4,7 @@
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalDisplay.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Serialization.h>
@@ -220,10 +221,16 @@ bool loadEpubHighlightedContext(const RecentBook& book, const bool loadProgress,
   return true;
 }
 
-void updateRecentBookCoverPath(const RecentBook& book, const std::string& coverBmpPath) {
-  if (!RECENT_BOOKS.updateBook(book.path, book.title, book.author, coverBmpPath)) {
+void updateRecentBookCover(const RecentBook& book) {
+  if (!RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.coverBmpPath, book.coverState)) {
     LOG_ERR("HOME", "failed to update recent book metadata: %s", book.path.c_str());
   }
+}
+
+void markCoverMissing(RecentBook& book) {
+  book.coverBmpPath.clear();
+  book.coverState = RecentBook::CoverState::Missing;
+  updateRecentBookCover(book);
 }
 
 bool hasThumbnailPlaceholder(const std::string& coverBmpPath) {
@@ -241,7 +248,7 @@ std::string getReusableCoverPath(const RecentBook& book) {
 }
 
 bool ensureReusableCoverPath(RecentBook& book) {
-  if (hasThumbnailPlaceholder(book.coverBmpPath)) {
+  if (book.coverState == RecentBook::CoverState::Missing || hasThumbnailPlaceholder(book.coverBmpPath)) {
     return false;
   }
 
@@ -251,7 +258,7 @@ bool ensureReusableCoverPath(RecentBook& book) {
   }
 
   book.coverBmpPath = reusablePath;
-  updateRecentBookCoverPath(book, reusablePath);
+  updateRecentBookCover(book);
   return true;
 }
 
@@ -702,8 +709,6 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             showLoadingProgress(10 + progress * progressIncrement);
             if (!epub.load(true, true, Epub::XLocationLoadMode::Skip)) {
               LOG_ERR("HOME", "carousel: failed to load EPUB cache for thumb generation: %s", book.path.c_str());
-              updateRecentBookCoverPath(book, "");
-              book.coverBmpPath = "";
               coverRendered = false;
               requestUpdate();
               progress++;
@@ -719,10 +724,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
                                               SETTINGS.getReaderFontId()) &&
                         success;
             if (!success) {
-              updateRecentBookCoverPath(book, "");
-              book.coverBmpPath = "";
-            } else {
-              if (bookIdx < bookUpdated.size()) bookUpdated[bookIdx] = true;
+              if (!epub.hasCoverImage()) markCoverMissing(book);
+            } else if (bookIdx < bookUpdated.size()) {
+              bookUpdated[bookIdx] = true;
             }
             coverRendered = false;
             requestUpdate();
@@ -737,10 +741,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
               if (sideMissing)
                 success =
                     xtc.generateThumbBmp(LyraCarouselTheme::kSideCoverW, LyraCarouselTheme::kSideCoverH) && success;
-              if (!success) {
-                updateRecentBookCoverPath(book, "");
-                book.coverBmpPath = "";
-              } else {
+              if (success) {
                 if (bookIdx < bookUpdated.size()) bookUpdated[bookIdx] = true;
               }
               coverRendered = false;
@@ -765,8 +766,6 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             showLoadingProgress(10 + progress * progressIncrement);
             if (!epub.load(true, true, Epub::XLocationLoadMode::Skip)) {
               LOG_ERR("HOME", "failed to load EPUB cache for thumb generation: %s", book.path.c_str());
-              updateRecentBookCoverPath(book, "");
-              book.coverBmpPath = "";
               coverRendered = false;
               requestUpdate();
               progress++;
@@ -783,10 +782,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
                                                            SETTINGS.getReaderFontId())
                            : epub.generateThumbBmp(0, coverHeight, &renderer, SETTINGS.getReaderFontId()));
             if (!success) {
-              updateRecentBookCoverPath(book, "");
-              book.coverBmpPath = "";
-            } else {
-              if (bookIdx < bookUpdated.size()) bookUpdated[bookIdx] = true;  // non-carousel path reuses same tracking
+              if (!epub.hasCoverImage()) markCoverMissing(book);
+            } else if (bookIdx < bookUpdated.size()) {
+              bookUpdated[bookIdx] = true;  // non-carousel path reuses same tracking
             }
             coverRendered = false;
             requestUpdate();
@@ -802,10 +800,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
                              ? xtc.generateThumbBmp(static_cast<uint16_t>(minimalHomeCoverWidth(coverHeight)),
                                                     static_cast<uint16_t>(minimalHomeCoverHeight(coverHeight)))
                              : xtc.generateThumbBmp(coverHeight));
-              if (!success) {
-                updateRecentBookCoverPath(book, "");
-                book.coverBmpPath = "";
-              } else {
+              if (success) {
                 if (bookIdx < bookUpdated.size()) bookUpdated[bookIdx] = true;
               }
               coverRendered = false;
@@ -1911,6 +1906,11 @@ void HomeActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
+  const auto displayHomeBuffer = [this] {
+    const auto refreshMode = initialFullRefresh ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH;
+    initialFullRefresh = false;
+    renderer.displayBuffer(refreshMode);
+  };
 
   if (usesMinimalHomeInteraction()) {
     renderer.clearScreen();
@@ -1927,7 +1927,7 @@ void HomeActivity::render(RenderLock&&) {
         const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
         GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
       }
-      renderer.displayBuffer();
+      displayHomeBuffer();
       return;
     }
 
@@ -1955,7 +1955,7 @@ void HomeActivity::render(RenderLock&&) {
                           recentBooks.empty() ? "" : tr(STR_READ));
     }
 
-    renderer.displayBuffer();
+    displayHomeBuffer();
 
     if (!firstRenderDone) {
       firstRenderDone = true;
@@ -2009,7 +2009,7 @@ void HomeActivity::render(RenderLock&&) {
         }
       }
 
-      renderer.displayBuffer();
+      displayHomeBuffer();
       // E-ink refresh complete — pre-render the missing adjacent frame while idle.
       updateSlidingWindowCache(centerIdx, bookCount);
       // Mirror the slow-path trigger: generate missing thumbnails on the second
@@ -2076,7 +2076,7 @@ void HomeActivity::render(RenderLock&&) {
                           : mappedInput.mapLabels(readLabel, tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+  displayHomeBuffer();
 
   if (!firstRenderDone) {
     firstRenderDone = true;

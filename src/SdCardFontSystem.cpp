@@ -6,6 +6,7 @@
 #include <MemoryBudget.h>
 
 #include <cstdio>
+#include <cstring>
 
 #include "CrossPointSettings.h"
 #include "fontIds.h"
@@ -211,6 +212,12 @@ void SdCardFontSystem::ensureRegistry() {
   if (registryLoaded_ && !dirty) return;
   if (dirty) LOG_DBG("SDFS", "Registry dirty — re-discovering fonts");
   registry_.discover();
+  if (registry_.lastDiscoveryFailed()) {
+    LOG_ERR("SDFS", "SD font registry scan ran out of memory (free=%u maxAlloc=%u)", ESP.getFreeHeap(),
+            ESP.getMaxAllocHeap());
+    registryDirty_.store(true, std::memory_order_release);
+    return;
+  }
   registryLoaded_ = true;
 }
 
@@ -335,6 +342,13 @@ uint8_t SdCardFontSystem::resolveLegacySizeStep(const char* familyName, const ui
 
 DictionaryFontActivation SdCardFontSystem::activateDictionaryFont(GfxRenderer& renderer, const char* familyName,
                                                                   uint8_t targetPointSize) {
+  // A non-zero size with no dedicated family means "use the reader's installed
+  // family at this size". This keeps the setting useful when the same custom
+  // family is wanted for reading and definitions without keeping two families
+  // resident.
+  if ((!familyName || familyName[0] == '\0') && targetPointSize != 0 && SETTINGS.sdFontFamilyName[0] != '\0') {
+    familyName = SETTINGS.sdFontFamilyName;
+  }
   if (!familyName || familyName[0] == '\0') {
     return {restoreReaderFont(renderer), false};
   }
@@ -352,6 +366,11 @@ DictionaryFontActivation SdCardFontSystem::activateDictionaryFont(GfxRenderer& r
   if (!findInstalledFontFile(familyName, targetPointSize, FontFileSelection::Closest, path, sizeof(path),
                              selectedPointSize)) {
     LOG_DBG("SDFS", "Dictionary font not found on card: %s", familyName);
+    const char* globalFamilyName = SETTINGS.dictionarySdFontFamilyName;
+    if (globalFamilyName[0] != '\0' && std::strcmp(familyName, globalFamilyName) != 0) {
+      LOG_DBG("SDFS", "Using global dictionary font while per-book font is unavailable: %s", globalFamilyName);
+      return activateDictionaryFont(renderer, globalFamilyName, SETTINGS.dictionaryFontPointSize);
+    }
     const int readerFontId = restoreReaderFont(renderer);
     MemoryBudget::logHeapShape("dict.font_reader_fallback");
     return {readerFontId, false};
@@ -363,7 +382,31 @@ DictionaryFontActivation SdCardFontSystem::activateDictionaryFont(GfxRenderer& r
     return {fontId, true};
   }
 
-  const auto heap = MemoryBudget::snapshot();
+  // A reader SD font can retain page glyphs, kerning, and advance tables after
+  // a long reading session. They are disposable at this handoff: keeping them
+  // through the headroom check makes a dictionary font appear unavailable until
+  // its book cache is deleted or the heap happens to be less fragmented.
+  const int activeReaderFontId = SETTINGS.getReaderFontId();
+  const auto beforeCacheRelease = MemoryBudget::snapshot();
+  if (renderer.releaseSdCardFontForLowMemory(activeReaderFontId)) {
+    const auto afterCacheRelease = MemoryBudget::snapshot();
+    LOG_DBG("SDFS", "Released reader SD-font caches before dictionary swap: free=%u->%u maxAlloc=%u->%u",
+            beforeCacheRelease.freeHeap, afterCacheRelease.freeHeap, beforeCacheRelease.maxAllocHeap,
+            afterCacheRelease.maxAllocHeap);
+  }
+
+  auto heap = MemoryBudget::snapshot();
+  if (!MemoryBudget::hasHeapForDictionarySdFont(heap)) {
+    // The reader family itself is also disposable for a dictionary swap. Retry
+    // after releasing it so its font data does not cause a false low-memory
+    // fallback.
+    const auto beforeReaderUnload = heap;
+    if (!manager_.currentFamilyName().empty()) manager_.unloadAll(renderer);
+    loadedFontPointSize_ = 0;
+    heap = MemoryBudget::snapshot();
+    LOG_DBG("SDFS", "Released reader font before dictionary swap retry: free=%u->%u maxAlloc=%u->%u",
+            beforeReaderUnload.freeHeap, heap.freeHeap, beforeReaderUnload.maxAllocHeap, heap.maxAllocHeap);
+  }
   if (!MemoryBudget::hasHeapForDictionarySdFont(heap)) {
     LOG_ERR("SDFS", "Low heap for dictionary font swap (%u free, %u max alloc, need %u/%u); using reader font",
             heap.freeHeap, heap.maxAllocHeap, MemoryBudget::DICTIONARY_SD_FONT_MIN_FREE,

@@ -18,6 +18,7 @@
 #include "activities/settings/SettingsActivity.h"
 #include "util/Dictionary.h"
 #include "util/DictionaryRegistry.h"
+#include "util/FontFamilyLabel.h"
 
 inline std::string fontSizePointLabel(const uint8_t pointSize) { return std::to_string(pointSize) + " pt"; }
 
@@ -37,10 +38,20 @@ inline SettingInfo buildBuiltinFontSizeSetting() {
   s.enumStringValues.reserve(CrossPointSettings::FONT_SIZE_COUNT);
   s.enumRawValues.reserve(CrossPointSettings::FONT_SIZE_COUNT);
 
+  // Only sizes that survived the build get an entry; the list length is what
+  // gets pushed, so nothing counts these by hand.
+#ifndef OMIT_TINY_FONT
   appendBuiltinFontSizeOption(s, CrossPointSettings::TINY);
+#endif
+#ifndef OMIT_SMALL_FONT
   appendBuiltinFontSizeOption(s, CrossPointSettings::SMALL);
+#endif
+#ifndef OMIT_MEDIUM_FONT
   appendBuiltinFontSizeOption(s, CrossPointSettings::MEDIUM);
+#endif
+#ifndef OMIT_LARGE_FONT
   appendBuiltinFontSizeOption(s, CrossPointSettings::LARGE);
+#endif
 
   return s;
 }
@@ -141,8 +152,14 @@ inline uint8_t closestBuiltinFontSizeIndex(const uint8_t targetPointSize) {
 // Build the font family setting dynamically. When registry is non-null, SD card fonts
 // are appended after the built-in fonts. Otherwise only built-in fonts are listed.
 inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
-  // Built-in font labels (StrId)
-  std::vector<StrId> enumValues = {StrId::STR_LEXEND_DECA, StrId::STR_BITTER};
+  // Built-in font labels (StrId), from the one table in util/FontFamilyLabel.h.
+  // Used when no SD-card fonts are installed; allStringValues below covers the
+  // mixed case.
+  std::vector<StrId> enumValues;
+  enumValues.reserve(BUILTIN_FONT_FAMILY_COUNT);
+  for (const auto& builtin : BUILTIN_FONT_FAMILIES) {
+    enumValues.push_back(builtin.label);
+  }
   // Runtime string labels for SD card fonts
   std::vector<std::string> enumStringValues;
 
@@ -151,7 +168,7 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
     const auto& families = registry->getFamilies();
     enumStringValues.reserve(families.size());
     std::transform(families.begin(), families.end(), std::back_inserter(enumStringValues),
-                   [](const SdCardFontFamilyInfo& f) { return f.name; });
+                   [](const SdCardFontFamilyInfo& f) { return fontFamilyLabel(f.name, fontFamilyPointSizeRange(f)); });
   }
 
   // Capture the SD font count for the lambdas
@@ -163,8 +180,12 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   // with all options when SD fonts are present.
   std::vector<std::string> allStringValues;
   if (sdFontCount > 0) {
-    allStringValues.push_back(I18N.get(StrId::STR_LEXEND_DECA));
-    allStringValues.push_back(I18N.get(StrId::STR_BITTER));
+    // Same table as the font picker uses (util/FontFamilyLabel.h), so the two
+    // screens cannot disagree about which families exist.
+    constexpr FontFamilyPointSizeRange builtinRange = builtinFontPointSizeRange();
+    for (const auto& builtin : BUILTIN_FONT_FAMILIES) {
+      allStringValues.push_back(fontFamilyLabel(I18N.get(builtin.label), builtinRange));
+    }
     allStringValues.insert(allStringValues.end(), enumStringValues.begin(), enumStringValues.end());
   }
 
@@ -272,8 +293,14 @@ inline SettingInfo buildDictionaryFontSizeSetting(const SdCardFontRegistry* regi
   s.enumStringValues.push_back(I18N.get(StrId::STR_USE_READER_FONT_SIZE));
   s.enumRawValues.push_back(0);
 
-  if (!registry || SETTINGS.dictionarySdFontFamilyName[0] == '\0') return s;
-  const auto* family = registry->findFamily(SETTINGS.dictionarySdFontFamilyName);
+  if (!registry) return s;
+  // With no dedicated dictionary family, a non-zero dictionary size applies
+  // to the reader's SD-card family. Built-in reader fonts have no selectable
+  // files, so they deliberately retain just the "use reader size" entry.
+  const char* familyName =
+      SETTINGS.dictionarySdFontFamilyName[0] != '\0' ? SETTINGS.dictionarySdFontFamilyName : SETTINGS.sdFontFamilyName;
+  if (familyName[0] == '\0') return s;
+  const auto* family = registry->findFamily(familyName);
   if (!family) return s;
 
   const auto sizes = family->availableSizes();
@@ -415,8 +442,17 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     // --- Reader ---
     // Built-in font-family entry. Replaced per-call with a registry-aware
     // version when SD fonts are installed.
+    // Braced list, so it cannot iterate BUILTIN_FONT_FAMILIES; keep it in the
+    // same order and the static_assert in CrossPointSettings.cpp catches a
+    // count that drifts.
     add(SettingInfo::Enum(StrId::STR_FONT_FAMILY, &CrossPointSettings::fontFamily,
-                          {StrId::STR_LEXEND_DECA, StrId::STR_BITTER}, "fontFamily", StrId::STR_CAT_READER));
+                          {
+                              StrId::STR_LEXEND_DECA,
+#ifndef OMIT_BITTER_FONT
+                              StrId::STR_BITTER,
+#endif
+                          },
+                          "fontFamily", StrId::STR_CAT_READER));
     add(buildBuiltinFontSizeSetting());
     add(SettingInfo::Enum(StrId::STR_SD_FONT_SIZE_RANGE, &CrossPointSettings::sdFontSizeRange,
                           {StrId::STR_FONT_RANGE_TEENSY, StrId::STR_FONT_RANGE_TINY, StrId::STR_FONT_RANGE_XLARGE,

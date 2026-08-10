@@ -16,6 +16,7 @@
 #include "components/UIThemeTokens.h"
 #include "components/UiAppHelpers.h"
 #include "fontIds.h"
+#include "util/FontFamilyLabel.h"
 
 namespace fui = freeink::ui;
 namespace {
@@ -103,13 +104,16 @@ void FontSelectionActivity::onEnter() {
   fonts_.clear();
   fonts_.reserve(CrossPointSettings::BUILTIN_FONT_COUNT + (registry_ ? registry_->getFamilyCount() : 0));
 
-  fonts_.push_back({I18N.get(StrId::STR_LEXEND_DECA), true, 0});
-  fonts_.push_back({I18N.get(StrId::STR_BITTER), true, 1});
+  constexpr FontFamilyPointSizeRange builtinRange = builtinFontPointSizeRange();
+  for (const auto& builtin : BUILTIN_FONT_FAMILIES) {
+    fonts_.push_back({fontFamilyLabel(I18N.get(builtin.label), builtinRange), true, builtin.settingIndex});
+  }
 
   if (registry_) {
     const auto& families = registry_->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
-      fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i)});
+      fonts_.push_back({fontFamilyLabel(families[i].name, fontFamilyPointSizeRange(families[i])), false,
+                        static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i)});
     }
   }
 
