@@ -319,6 +319,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     LONG_MENU_CREATE_HOTSPOT = 19,
     LONG_MENU_CREATE_CLIPPING = 20,
     LONG_MENU_LOOKUP_WORD = 21,
+    LONG_MENU_LIBRARY = 22,
     LONG_PRESS_MENU_ACTION_COUNT
   };
 
