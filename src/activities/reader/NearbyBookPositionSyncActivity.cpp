@@ -1284,6 +1284,10 @@ void NearbyBookPositionSyncActivity::render(RenderLock&&) {
       primary = tr(STR_ERROR_MSG);
       detail = errorMessage_;
       break;
+    case State::SHOWING_RESULT:
+      // Drawn by renderComparison() and returned above; listed so the switch
+      // stays exhaustive for -Werror=switch.
+      break;
   }
 
   if (state_ == State::READY || state_ == State::SYNCED || state_ == State::ERROR) {

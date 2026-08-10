@@ -1023,6 +1023,7 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::ControlsSideButtons:
       case SettingAction::SystemDevice:
       case SettingAction::SystemFilesCache:
+      case SettingAction::SystemLibrary:
       case SettingAction::SystemReadingStats:
       case SettingAction::SystemGlobalStats:
       case SettingAction::DisplaySleepScreen:
