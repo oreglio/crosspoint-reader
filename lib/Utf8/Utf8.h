@@ -18,6 +18,17 @@ void utf8TruncateChars(std::string& str, size_t numChars);
 // stored in NFD (e.g. some EPUB chapter titles) otherwise renders broken.
 std::string utf8ComposeNfc(const std::string& in);
 
+// The base letter a precomposed codepoint decomposes to, or 0 when there is
+// none ("é" -> "e", but "ø" -> 0: it is a letter in its own right, not
+// o-with-stroke). Lives here rather than in a caller because the compose table
+// is a ~5 KB static array in the header: a second includer is a second copy in
+// flash.
+//
+// A linear scan, unlike utf8ComposePair's binary search: the table is sorted by
+// (base, mark), which this lookup searches against the grain. A second table
+// sorted by composed would cost more flash than sharing this one saves.
+uint32_t utf8DecomposedBase(uint32_t cp);
+
 // Returns true when text contains at least one Unicode letter/number-like
 // codepoint that can be sent to dictionary lookup. Punctuation, symbols,
 // whitespace, and combining marks do not count by themselves.

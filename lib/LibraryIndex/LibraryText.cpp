@@ -1,7 +1,6 @@
 #include "LibraryText.h"
 
 #include <Utf8.h>
-#include <Utf8ComposeTable.h>
 
 #include <algorithm>
 #include <array>
@@ -54,18 +53,10 @@ const char* explicitMapping(const uint32_t cp) {
 // over a short query per keystroke, never over the whole index, so the scan is
 // not on any hot path. Reusing the generated table costs no extra flash — it is
 // already linked for utf8ComposeNfc().
-uint32_t decomposedBase(const uint32_t cp) {
-  if (cp < 0x00C0) return 0;  // no precomposed Latin letter below this
-  for (const auto& e : kUtf8ComposeTable) {
-    if (e.composed == cp) return e.base;
-  }
-  return 0;
-}
-
 // Fully decompose: é -> e, and the rare doubly-accented forms (ế -> ê -> e).
 uint32_t stripDiacritics(uint32_t cp) {
   for (int guard = 0; guard < 4; guard++) {
-    const uint32_t base = decomposedBase(cp);
+    const uint32_t base = utf8DecomposedBase(cp);
     if (base == 0) break;
     cp = base;
   }
@@ -93,21 +84,25 @@ constexpr const char* STOP_TAIL[] = {"a",    "an",   "the", "of",   "to",   "for
                                      "de",   "du",   "des", "la",   "le",   "les",  "un", "une", "et",
                                      "pour", "dans", "sur", "que",  "qui",  "ce",   "d",  "l",   "e"};
 
-bool isStopTail(const std::string& word) {
+bool isStopTail(const std::string_view word) {
   for (const char* s : STOP_TAIL) {
     if (word == s) return true;
   }
   return false;
 }
 
-void splitTokens(std::string_view folded, std::string* out, size_t maxTokens, size_t& count) {
+// Views into `folded`, not copies: the caller keeps that string alive as long
+// as the tokens, and a std::string per token costs an allocation each plus 24
+// bytes of stack apiece -- 288 B for the twelve, over the 256 B AGENTS.md asks
+// callers to justify.
+void splitTokens(std::string_view folded, std::string_view* out, size_t maxTokens, size_t& count) {
   count = 0;
   size_t i = 0;
   while (i < folded.size() && count < maxTokens) {
     while (i < folded.size() && folded[i] == ' ') i++;
     const size_t start = i;
     while (i < folded.size() && folded[i] != ' ') i++;
-    if (i > start) out[count++].assign(folded.substr(start, i - start));
+    if (i > start) out[count++] = folded.substr(start, i - start);
   }
 }
 
@@ -379,7 +374,7 @@ std::string authorKey(const std::string_view author) {
   const std::string folded = fold(cleaned);
 
   constexpr size_t MAX_TOKENS = 12;
-  std::string tokens[MAX_TOKENS];
+  std::string_view tokens[MAX_TOKENS];
   size_t count = 0;
   splitTokens(folded, tokens, MAX_TOKENS, count);
 
@@ -394,7 +389,7 @@ std::string authorKey(const std::string_view author) {
   std::string key;
   for (size_t i = 0; i < kept; i++) {
     if (!key.empty()) key.push_back(' ');
-    key += tokens[i];
+    key.append(tokens[i]);
   }
   // Truncate on bytes, not on a token boundary. Sorting puts a short forename
   // first, so a whole-token cut would reduce "Wollstonecraft, Mary" to the key
@@ -413,8 +408,10 @@ bool preferFilenameTitle(const std::string_view dcTitle, const std::string_view 
   if (fn.compare(0, dc.size(), dc) != 0) return false;
   if (fn[dc.size()] != ' ') return false;  // word boundary, not a mid-word prefix
 
+  // Views, like authorKey's: twenty-four std::strings here cost 576 B of stack
+  // on their own, more than twice what AGENTS.md asks callers to justify.
   constexpr size_t MAX_TOKENS = 24;
-  std::string extra[MAX_TOKENS];
+  std::string_view extra[MAX_TOKENS];
   size_t count = 0;
   splitTokens(std::string_view(fn).substr(dc.size() + 1), extra, MAX_TOKENS, count);
   if (count == 0) return false;
