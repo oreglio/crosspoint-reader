@@ -189,25 +189,45 @@ bool containsHiddenPathSegment(const std::string& path) {
   return false;
 }
 
-void collectMetadataPathsRecursively(const std::string& dirPath, std::vector<std::string>& paths) {
-  auto dir = Storage.open(dirPath.c_str());
-  if (!dir || !dir.isDirectory()) {
-    LOG_ERR("FileBrowser", "Failed to scan directory metadata before delete: %s", dirPath.c_str());
-    return;
-  }
+// A worklist rather than recursion. The frame is 464 bytes -- the 256-byte name
+// buffer plus the strings around it -- and the recursive form paid that per
+// directory level, against the 8 KB the loop task has: deep enough on an
+// imported card and the overflow is a corrupted neighbour, not an error.
+//
+// It also held every level's handles open at once: the child directory was
+// opened before the parent's entry was closed, so depth N meant N directory
+// handles plus N file handles on a card the storage layer would rather see
+// one reader at a time. This form holds one directory open, whatever the depth.
+//
+// Order changes (the worklist pops last-in first) and nothing depends on it:
+// the result is a set of paths to delete.
+void collectMetadataPaths(const std::string& rootPath, std::vector<std::string>& paths) {
+  std::vector<std::string> pending;
+  pending.push_back(rootPath);
 
   char name[256];
-  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
-    file.getName(name, sizeof(name));
-    const std::string childPath = buildFullPath(dirPath, name);
-    if (file.isDirectory()) {
-      collectMetadataPathsRecursively(childPath, paths);
-    } else if (hasFileMetadata(childPath)) {
-      paths.push_back(childPath);
+  while (!pending.empty()) {
+    const std::string dirPath = std::move(pending.back());
+    pending.pop_back();
+
+    auto dir = Storage.open(dirPath.c_str());
+    if (!dir || !dir.isDirectory()) {
+      LOG_ERR("FileBrowser", "Failed to scan directory metadata before delete: %s", dirPath.c_str());
+      continue;
     }
-    file.close();
+
+    for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+      file.getName(name, sizeof(name));
+      const std::string childPath = buildFullPath(dirPath, name);
+      if (file.isDirectory()) {
+        pending.push_back(childPath);
+      } else if (hasFileMetadata(childPath)) {
+        paths.push_back(childPath);
+      }
+      file.close();
+    }
+    dir.close();
   }
-  dir.close();
 }
 
 std::string getFileName(std::string filename);
@@ -467,7 +487,7 @@ void FileBrowserActivity::promptDeleteDirectory(const std::string& fullPath, con
     }
 
     std::vector<std::string> metadataPaths;
-    collectMetadataPathsRecursively(dirPath, metadataPaths);
+    collectMetadataPaths(dirPath, metadataPaths);
 
     if (!Storage.removeDir(dirPath.c_str())) {
       LOG_ERR("FileBrowser", "Failed to delete directory: %s", dirPath.c_str());
