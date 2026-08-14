@@ -146,6 +146,8 @@ void RecentBooksStore::updatePath(const std::string& oldPath, const std::string&
 bool RecentBooksStore::isMissing(const RecentBook& book) { return !Storage.exists(book.path.c_str()); }
 
 bool RecentBooksStore::pruneMissing() {
+  ensureLoaded();
+
   const size_t before = recentBooks.size();
   recentBooks.erase(std::remove_if(recentBooks.begin(), recentBooks.end(), &isMissing), recentBooks.end());
   return recentBooks.size() != before;

@@ -9,6 +9,7 @@
 
 #include <Xtc.h>
 
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -17,12 +18,15 @@
 #include "GlobalReadingStats.h"
 #include "ReaderProgressSaveDebouncer.h"
 #include "activities/Activity.h"
+#include "components/OptionPopup.h"
 
 class XtcReaderActivity final : public Activity {
+  OptionPopup quickActionsPopup;
   std::shared_ptr<Xtc> xtc;
 
   uint32_t currentPage = 0;
   int pagesUntilFullRefresh = 0;
+  unsigned long lastPageTurnTime = 0UL;
   unsigned long pageShownAtMs = 0UL;
   uint32_t sessionReadingSeconds = 0;
   BookReadingStats stats;
@@ -35,11 +39,12 @@ class XtcReaderActivity final : public Activity {
   // the Library, which replaces the activity on the first one, but the next
   // side action added here would inherit an unguarded hold.
   bool sideButtonLongPressHandled = false;
+  bool longPressMenuHandled = false;
   bool frontButtonLongPressHandled = false;
   bool longPressBackHandled = false;
   ReaderProgressSaveDebouncer progressSaveDebouncer;
-  // Next-book suggestion menu for the End-of-Book screen
-  EndOfBookOptions endOfBookOptions;
+  // The end screen owns these UI resources only while it is visible.
+  std::unique_ptr<EndOfBookOptions> endOfBookOptions;
 
   enum class StatusBarOverlayPosition { Bottom, Top };
   struct StatusBarInfo {
@@ -48,11 +53,11 @@ class XtcReaderActivity final : public Activity {
     std::string title;
   };
 
-  void renderPage();
-  void renderStatusBarOverlay(StatusBarOverlayPosition position) const;
-  StatusBarInfo getStatusBarInfo() const;
+  void renderPage(uint32_t pageToRender);
+  void renderStatusBarOverlay(StatusBarOverlayPosition position, uint32_t pageToRender) const;
+  StatusBarInfo getStatusBarInfo(uint32_t pageToRender) const;
   bool saveProgress(uint32_t page);
-  bool queueProgressSave();
+  bool queueProgressSave(uint32_t pageToRender);
   bool flushQueuedProgress();
   void loadProgress();
   void pauseReadingStatsTimer(const char* source = "unknown");
@@ -61,7 +66,7 @@ class XtcReaderActivity final : public Activity {
   bool forwardPageReadElapsed(uint32_t& seconds, const char* source) const;
   void recordCurrentPageReadingTime(const char* source = "unknown");
   void recordForwardPageTurn(uint32_t seconds, bool recordPace);
-  bool formatTimeLeftLabel(char* buf, size_t len) const;
+  bool formatTimeLeftLabel(char* buf, size_t len, uint32_t pageToRender) const;
   void commitReadingStats();
   void resetCurrentBookStatsAfterDelete();
   void setBookCompleted(bool isCompleted);
@@ -72,6 +77,9 @@ class XtcReaderActivity final : public Activity {
   void deleteBookCache();
   void openReaderMenu();
   void onReaderMenuConfirm(int action);
+  void toggleHomeButtonInReader();
+  static bool supportsQuickAction(CrossPointSettings::SHORT_PWRBTN action);
+  bool executeReaderShortcutAction(CrossPointSettings::SHORT_PWRBTN action);
   bool executeLongPressBackAction();
 
  public:
@@ -84,9 +92,16 @@ class XtcReaderActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  bool prepareManualRefresh() override {
+    pagesUntilFullRefresh = -1;
+    return true;
+  }
   bool isReaderActivity() const override { return true; }
+  void onInputLockChanged(bool locked) override;
   bool canSnapshotForSleepOverlay() const override { return true; }
   bool handlesReaderPowerSettingsOverride() const override { return true; }
+  bool allowPowerAsConfirmInReaderMode() const override { return quickActionsPopup.isActive(); }
+  bool handleShortcutAction(CrossPointSettings::SHORT_PWRBTN action) override;
   bool openReaderSettingsMenu() override {
     if (!xtc) {
       return false;

@@ -2,12 +2,14 @@
 #include <Logging.h>
 
 #include <cassert>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 
 #include "ActivityManager.h"  // for using the ActivityManager singleton
 #include "ActivityResult.h"
+#include "CrossPointSettings.h"
 #include "GfxRenderer.h"
 #include "MappedInputManager.h"
 #include "RenderLock.h"
@@ -55,6 +57,12 @@ class Activity {
   // work in flight; those can let the CPU drop to its low-power clock between
   // frames. Screens mid-transfer or mid-render must keep full speed.
   virtual bool allowPowerSavingWhileAwake() const { return false; }
+  // While true, main-loop global controls and activity replacement are
+  // suspended so an exclusive storage owner cannot race the filesystem.
+  virtual bool requiresExclusiveStorageLoop() const { return false; }
+  // Called by the app-wide Quick Lock. Reader activities use it to exclude
+  // locked time from reading statistics; other activities have no state to change.
+  virtual void onInputLockChanged(bool) {}
   virtual bool isReaderActivity() const { return false; }
   virtual bool isHomeActivity() const { return false; }
   // The open book uses its vertical swipe actions across the entire page;
@@ -64,11 +72,16 @@ class Activity {
   virtual bool allowFrontlightPanelGesture() const { return true; }
   virtual bool allowPowerAsConfirmInReaderMode() const { return false; }
   virtual bool allowGlobalHomeGesture() const { return true; }
+  // Lists that own vertical swipes can opt out of the global bottom-edge
+  // Home gesture while retaining the capacitive Home key on X4 Pro.
+  virtual bool allowGlobalHomeSwipeGesture() const { return true; }
   // Let overlays consume the global Home gesture as a dismiss action.
   virtual bool handleHomeGesture() { return false; }
   virtual bool canSnapshotForSleepOverlay() const { return false; }
   virtual bool handlesReaderPowerSettingsOverride() const { return false; }
   virtual bool openReaderSettingsMenu() { return false; }
+  virtual bool handleShortcutAction(uint8_t) { return false; }
+  virtual bool handleShortcutAction(CrossPointSettings::SHORT_PWRBTN) { return false; }
   virtual std::string getCurrentBookPath() const { return {}; }
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }
 

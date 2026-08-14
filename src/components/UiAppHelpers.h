@@ -4,6 +4,7 @@
 #include <FreeInkUIIcon.h>
 
 #include <atomic>
+#include <cstdint>
 
 #include "MappedInputManager.h"
 #include "components/UIScale.h"
@@ -20,45 +21,6 @@
 // Rows must opt in via InputLongPress to receive it.
 inline constexpr unsigned long UI_TOUCH_LONG_PRESS_MS = 500;
 
-// One app-wide ThemeTokens instance shared by every FreeInkApp via
-// setThemeRef, so per-app copies (~1.5KB each, and one per stacked activity)
-// aren't pure heap waste. Refreshed on every screen entry, so theme or font
-// changes between activities re-derive it.
-//
-// Backed by a small pool + an atomic cell (FreeInkApp::setThemeRef() takes a
-// pointer to the cell, not to a ThemeTokens instance directly) rather than a
-// single instance overwritten in place: refreshSharedUiThemeTokens() below
-// always builds the new tokens into whichever pool slot the cell does NOT
-// currently reference, then does one atomic store. Every app sharing the
-// cell picks up the change on its next theme() call, and nothing ever
-// dereferences an instance mid-overwrite — a plain in-place assignment could
-// be observed by the render task as a torn mix of old and new fields.
-inline std::atomic<const freeink::ui::ThemeTokens*>& sharedUiThemeCell() {
-  static std::atomic<const freeink::ui::ThemeTokens*> cell{nullptr};
-  return cell;
-}
-
-// Rebuilds the shared tokens for `target` and atomically publishes them via
-// sharedUiThemeCell().
-inline const freeink::ui::ThemeTokens& refreshSharedUiThemeTokens(const freeink::ui::GfxRendererTarget& target) {
-  static freeink::ui::ThemeTokens pool[2];
-  auto& cell = sharedUiThemeCell();
-  const auto* current = cell.load(std::memory_order_relaxed);
-  freeink::ui::ThemeTokens* next = (current == &pool[0]) ? &pool[1] : &pool[0];
-  *next = uiThemeTokens(target);
-  cell.store(next, std::memory_order_release);
-  return *next;
-}
-
-// Refresh the shared tokens from the active UITheme + this target's fonts and
-// point the app at them. Replaces the per-app `app.setTheme(...)` copies for
-// screens hosted through UiAppHost.
-template <typename App>
-inline void applySharedUiTheme(App& app, const freeink::ui::GfxRendererTarget& target) {
-  refreshSharedUiThemeTokens(target);
-  app.setThemeRef(&sharedUiThemeCell());
-}
-
 // Bind the uiScale fonts before FreeInkApp's constructor derives its theme
 // metrics from the body font's line height.
 inline freeink::ui::GfxRendererTarget makeUiTarget(const GfxRenderer& renderer) {
@@ -68,6 +30,56 @@ inline freeink::ui::GfxRendererTarget makeUiTarget(const GfxRenderer& renderer) 
   target.setFont(freeink::ui::GfxRendererTarget::FONT_BODY, spec.bodyFontId);
   target.setFont(freeink::ui::GfxRendererTarget::FONT_TITLE, spec.titleFontId);
   return target;
+}
+
+// Activities share two static token generations rather than each retaining an
+// identical ~1.5KB copy. A render task always reads the published generation;
+// live configuration changes build the other generation before swapping the
+// atomic pointer, so no reader can observe a partially updated token object.
+namespace UiAppThemeDetail {
+struct ConfigKey {
+  uint8_t uiTheme = UINT8_MAX;
+  uint8_t uiScale = UINT8_MAX;
+  bool hasTouch = false;
+  int16_t bodyLineHeight = -1;
+
+  bool operator==(const ConfigKey& other) const {
+    return uiTheme == other.uiTheme && uiScale == other.uiScale && hasTouch == other.hasTouch &&
+           bodyLineHeight == other.bodyLineHeight;
+  }
+};
+
+inline freeink::ui::ThemeTokens* tokenSlots() {
+  static freeink::ui::ThemeTokens slots[2];
+  return slots;
+}
+
+inline std::atomic<const freeink::ui::ThemeTokens*>& publishedTokens() {
+  static std::atomic<const freeink::ui::ThemeTokens*> published{nullptr};
+  return published;
+}
+
+inline ConfigKey& lastConfig() {
+  static ConfigKey config;
+  return config;
+}
+}  // namespace UiAppThemeDetail
+
+template <size_t MaxInteractions, size_t MaxHandlers>
+inline void applySharedUiTheme(freeink::ui::FreeInkApp<MaxInteractions, MaxHandlers>& app,
+                               const freeink::ui::GfxRendererTarget& target) {
+  const UiAppThemeDetail::ConfigKey config{SETTINGS.uiTheme, SETTINGS.uiScale, gpio.hasTouch(),
+                                           target.lineHeight(freeink::ui::GfxRendererTarget::FONT_BODY)};
+  auto& published = UiAppThemeDetail::publishedTokens();
+  const auto current = published.load(std::memory_order_acquire);
+  if (current == nullptr || !(config == UiAppThemeDetail::lastConfig())) {
+    auto* slots = UiAppThemeDetail::tokenSlots();
+    auto* next = current == &slots[0] ? &slots[1] : &slots[0];
+    *next = uiThemeTokens(target);
+    published.store(next, std::memory_order_release);
+    UiAppThemeDetail::lastConfig() = config;
+  }
+  app.setThemeRef(&published);
 }
 
 // Tap release with coords, plus the raw release the tap classifier never
@@ -205,6 +217,13 @@ inline freeink::ui::InputSnapshot touchSnapshotFrom(const MappedInputManager& ma
   freeink::ui::InputSnapshot snap{};
   int tx = 0;
   int ty = 0;
+  if (mappedInput.wasScreenLongPress(tx, ty)) {
+    snap.touchReleased = true;
+    snap.longPress = true;
+    snap.touchX = static_cast<int16_t>(tx);
+    snap.touchY = static_cast<int16_t>(ty);
+    return snap;
+  }
   // Live contact position: only InputDrag-masked elements (sliders) react, so
   // carrying it in every snapshot is free for ordinary screens.
   if (mappedInput.isScreenTouchHeld(tx, ty)) {
@@ -217,12 +236,8 @@ inline freeink::ui::InputSnapshot touchSnapshotFrom(const MappedInputManager& ma
     snap.touchX = static_cast<int16_t>(tx);
     snap.touchY = static_cast<int16_t>(ty);
   }
-  unsigned long heldMs = 0;
-  if (mappedInput.wasScreenTapped(tx, ty, heldMs)) {
+  if (mappedInput.wasScreenTapped(tx, ty)) {
     snap.touchReleased = true;
-    // A stationary press held past the threshold routes as a long-press so
-    // rows masked InputLongPress can offer a hold action (delete / forget).
-    snap.longPress = heldMs >= UI_TOUCH_LONG_PRESS_MS;
     snap.touchX = static_cast<int16_t>(tx);
     snap.touchY = static_cast<int16_t>(ty);
   } else if (mappedInput.wasScreenTouchReleased()) {

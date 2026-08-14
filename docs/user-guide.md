@@ -5,10 +5,7 @@ nav_order: 1.5
 
 # CrossInk User Guide
 
-Welcome to the **CrossInk** firmware. This guide covers day-to-day device use.
-For focused reference material, see [Reader Features](./reader-features.md),
-[Controls](./controls.md), [SD Card Fonts](./sd-card-fonts.md),
-[File Transfer](./webserver.md), and [Troubleshooting](./troubleshooting.md).
+This guide covers day-to-day device use. For focused reference material, see [Reader Features](./reader-features.md), [Controls](./controls.md), [SD Card Fonts](./sd-card-fonts.md), [File Transfer](./webserver.md), and [Troubleshooting](./troubleshooting.md). For Dashboard and Minimal Home-screen gestures, see [Touch Navigation](./touch-navigation.md).
 
 - [CrossInk User Guide](#crossink-user-guide)
   - [1. Hardware Overview](#1-hardware-overview)
@@ -136,6 +133,11 @@ The same screen also has **Receive File**, which receives a supported
 book or image directly from another nearby CrossInk reader without joining a
 Wi-Fi network. See [Nearby File Transfer](./nearby-file-transfer.md) for the
 complete sender and receiver workflow.
+
+On X4 Pro, the screen also includes **USB Drive**. This exposes the reader's SD
+card to a computer over USB for direct file management. See the
+[USB Drive instructions](./installation.md#usb-drive) for the safe-eject and
+disconnect behavior.
 
 > [!TIP]
 > Advanced users can manage files programmatically with the same HTTP endpoints

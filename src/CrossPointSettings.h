@@ -273,8 +273,66 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     CREATE_HOTSPOT = 20,
     CREATE_CLIPPING = 21,
     LOOKUP_WORD = 22,
+    // Values 23-26 are already persisted by the X4 Pro Home-key feature.
+    // Keep Quick Actions separate so existing Home-key mappings retain their meaning.
+    TOGGLE_HOME_BUTTON_IN_READER = 26,
+    QUICK_ACTIONS = 27,
+    TOGGLE_FRONTLIGHT = 28,
+    TOGGLE_TOUCHSCREEN = 29,
+    // Appended after the X4 Pro and Quick Actions values so existing settings
+    // files continue to mean exactly the same thing.
+    QUICK_LOCK = 30,
+    // This fork: the Library shelf as a shortcut target (long-press menus).
+    SHORTCUT_LIBRARY = 31,
     SHORT_PWRBTN_COUNT
   };
+
+  // Power + Up side-button chord actions. Keep this order aligned with
+  // ButtonShortcutController::ChordAction because the runtime casts the
+  // persisted value to that enum.
+  enum POWER_CHORD_ACTION {
+    CHORD_SCREENSHOT = 0,
+    CHORD_QUICK_LOCK = 1,
+    // Values 2 and 3 were removed Next Page and Previous Page actions. Keep
+    // them unused so an interim settings file cannot remap them to another action.
+    CHORD_DISABLED = 4,
+    CHORD_SLEEP = 5,
+    CHORD_PAGE_TURN = 6,
+    CHORD_TOGGLE_BOOKMARK = 7,
+    CHORD_READING_STATS = 8,
+    CHORD_MARK_FINISHED = 9,
+    CHORD_FORCE_REFRESH = 10,
+    CHORD_TOGGLE_FONT = 11,
+    CHORD_TOGGLE_GUIDE_DOTS = 12,
+    CHORD_TOGGLE_BIONIC_READING = 13,
+    CHORD_CYCLE_PAGE_TURN = 14,
+    CHORD_SYNC_PROGRESS = 15,
+    CHORD_FILE_TRANSFER = 16,
+    CHORD_CALIBRE_WIRELESS = 17,
+    CHORD_JOIN_NETWORK = 18,
+    CHORD_CREATE_HOTSPOT = 19,
+    CHORD_TOGGLE_DARK_MODE = 20,
+    CHORD_FOOTNOTES = 21,
+    CHORD_FILE_BROWSER = 22,
+    CHORD_CREATE_CLIPPING = 23,
+    CHORD_LOOKUP_WORD = 24,
+    CHORD_TOGGLE_HOME_BUTTON = 25,
+    CHORD_QUICK_ACTIONS = 26,
+    CHORD_TOGGLE_FRONTLIGHT = 27,
+    CHORD_TOGGLE_TOUCHSCREEN = 28,
+    POWER_CHORD_ACTION_COUNT
+  };
+
+  // Home-key shortcuts reuse power-button actions where possible. Keep the
+  // dedicated values stable because they are persisted in settings.bin.
+  enum HOME_BUTTON_ACTION {
+    HOME_BUTTON_BACK_HOME = 23,
+    HOME_BUTTON_TOGGLE_FRONTLIGHT = 24,
+    HOME_BUTTON_READER_MENU = 25,
+    HOME_BUTTON_ACTION_COUNT = 26
+  };
+
+  static constexpr uint8_t QUICK_ACTION_SLOT_ACTION_COUNT = 23;
 
   // Hide battery percentage
   enum HIDE_BATTERY_PERCENTAGE { HIDE_NEVER = 0, HIDE_READER = 1, HIDE_ALWAYS = 2, HIDE_BATTERY_PERCENTAGE_COUNT };
@@ -342,7 +400,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     LONG_MENU_CREATE_HOTSPOT = 19,
     LONG_MENU_CREATE_CLIPPING = 20,
     LONG_MENU_LOOKUP_WORD = 21,
+    // Appended: values are persisted in settings.bin. This fork shipped
+    // LONG_MENU_LIBRARY as 22 first, so upstream's later additions shift.
     LONG_MENU_LIBRARY = 22,
+    LONG_MENU_QUICK_ACTIONS = 23,
+    LONG_MENU_QUICK_LOCK = 24,
     LONG_PRESS_MENU_ACTION_COUNT
   };
 
@@ -412,6 +474,17 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t shortPwrBtn = IGNORE;
   // Long power button action behaviour
   uint8_t longPwrBtn = SLEEP;
+  // Power + Up shortcut action. Disabled by default so the established
+  // Power + Down screenshot chord remains screenshot-only.
+  uint8_t powerChordAction = CHORD_DISABLED;
+  // X4 Pro capacitive Home-key actions. Values below SHORT_PWRBTN_COUNT map
+  // directly to the matching power-button shortcut action.
+  uint8_t homeButtonTapAction = HOME_BUTTON_BACK_HOME;
+  uint8_t homeButtonDoubleTapAction = HOME_BUTTON_TOGGLE_FRONTLIGHT;
+  uint8_t homeButtonLongPressAction = HOME_BUTTON_READER_MENU;
+  // Home-key devices can lock the capacitive Home key while a reader page is
+  // active. Reader menus temporarily override this without changing the value.
+  uint8_t homeButtonInReaderEnabled = 1;
   // EPUB reading orientation settings
   // 0 = portrait (default), 1 = landscape clockwise, 2 = inverted, 3 = landscape counter-clockwise
   uint8_t orientation = PORTRAIT;
@@ -521,6 +594,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t longPressMenuAction = LONG_MENU_OFF;
   // Long-press Back quick action in reader (defaults to the historical file browser shortcut)
   uint8_t longPressBackAction = LONG_MENU_FILE_BROWSER;
+  // Five reusable reader commands and their single owning shortcut. Keep these
+  // adjacent so old settings files simply retain their default-initialized tail.
+  uint8_t quickActionSlots[5] = {IGNORE, IGNORE, IGNORE, IGNORE, IGNORE};
+  uint8_t quickActionsTrigger = 0;
   // Tilt-based page turning on devices with a supported IMU (X3 and Sticky).
   uint8_t tiltPageTurn = TILT_OFF;
   uint8_t tiltPageTurnDirection = TILT_LEFT_RIGHT;

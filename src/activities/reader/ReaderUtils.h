@@ -59,13 +59,13 @@ inline int getTopClockStatusBarHeight() {
   return std::max(UITheme::getStatusBarHeight(), metrics.statusBarVerticalMargin);
 }
 
-inline int getTopClockStatusBarReservedHeight() {
+inline int getTopClockStatusBarReservedHeight(const GfxRenderer& renderer) {
   const int statusBarHeight = getTopClockStatusBarHeight();
   if (statusBarHeight <= 0) {
     return 0;
   }
 
-  return UITheme::getInstance().getMetrics().topPadding + statusBarHeight;
+  return UITheme::getInstance().getMetrics().topPadding + UITheme::getTopStatusBarInset(renderer) + statusBarHeight;
 }
 
 inline uint8_t rotatedOrientation(const uint8_t orientation, const bool clockwise) {
@@ -139,8 +139,10 @@ inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const Mapp
 // Reader menu opens on its board-specific vertical swipe anywhere on the open
 // page, or a long press of the capacitive home key (a short home tap still goes home).
 inline bool isTouchMenuGesture(const MappedInputManager& input) {
-  return SETTINGS.touchReaderControls && input.hasTouch() &&
-         (input.wasReaderMenuGesture() || input.wasReaderMenuHold());
+  // The capacitive Home key is independent from screen touch. Its configured
+  // long-press reader-menu action must still work when screen touch is disabled.
+  return input.wasReaderMenuHold() ||
+         (SETTINGS.touchReaderControls && input.hasTouch() && input.wasReaderMenuGesture());
 }
 
 // X4 Pro opens the reader menu with an upward swipe. Its top-edge downward
@@ -191,7 +193,12 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input, const bool
 // renderer.waitRefreshComplete() and must rebuild the differential baseline
 // before the next page turn (the tiled grayscale cleanup does).
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh, bool async = false) {
-  const auto mode = (pagesUntilFullRefresh <= 1) ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+  // A negative countdown is reserved for the explicit Refresh Screen shortcut.
+  // Regular cadence cleanup remains a HALF refresh at 1, while the manual command
+  // uses the panel's visibly complete waveform.
+  const auto mode = pagesUntilFullRefresh < 0    ? HalDisplay::FULL_REFRESH
+                    : pagesUntilFullRefresh <= 1 ? HalDisplay::HALF_REFRESH
+                                                 : HalDisplay::FAST_REFRESH;
   if (async) {
     renderer.displayBufferAsync(mode);
   } else {

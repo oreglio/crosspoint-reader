@@ -13,6 +13,7 @@
 #include <new>
 
 #include "CrossPointSettings.h"
+#include "activities/boot_sleep/SleepImageIndex.h"
 #include "util/BookCacheUtils.h"
 
 namespace {
@@ -387,6 +388,7 @@ void WebDAVHandler::handlePut(WebServer& s) {
   }
 
   clearBookCachePreservingUserState(path.c_str());
+  SleepImageIndex::invalidateForPath(path.c_str());
   // Arrivals and departures both reshape the shelf.
   library::markShelfStaleIfBook(path.c_str());
   s.send(_putExisted ? 204 : 201);
@@ -430,6 +432,7 @@ void WebDAVHandler::handleDelete(WebServer& s) {
     }
     file.close();
     if (Storage.rmdir(path.c_str())) {
+      SleepImageIndex::invalidateForPath(path.c_str());
       s.send(204);
     } else {
       s.send(500, "text/plain", "Failed to remove directory");
@@ -438,6 +441,7 @@ void WebDAVHandler::handleDelete(WebServer& s) {
     file.close();
     clearBookCache(path.c_str());
     if (Storage.remove(path.c_str())) {
+      SleepImageIndex::invalidateForPath(path.c_str());
       library::markShelfStaleIfBook(path.c_str());
       s.send(204);
     } else {
@@ -479,6 +483,7 @@ void WebDAVHandler::handleMkcol(WebServer& s) {
   }
 
   if (Storage.mkdir(path.c_str())) {
+    SleepImageIndex::invalidateForPath(path.c_str());
     s.send(201);
   } else {
     s.send(500, "text/plain", "Failed to create directory");
@@ -550,6 +555,8 @@ void WebDAVHandler::handleMove(WebServer& s) {
   file.close();
 
   if (success) {
+    SleepImageIndex::invalidateForPath(srcPath.c_str());
+    SleepImageIndex::invalidateForPath(dstPath.c_str());
     s.send(dstExists ? 204 : 201);
   } else {
     s.send(500, "text/plain", "Move failed");
@@ -651,6 +658,7 @@ void WebDAVHandler::handleCopy(WebServer& s) {
   dstFile.close();
 
   if (copyOk) {
+    SleepImageIndex::invalidateForPath(dstPath.c_str());
     s.send(dstExists ? 204 : 201);
   } else {
     Storage.remove(dstPath.c_str());

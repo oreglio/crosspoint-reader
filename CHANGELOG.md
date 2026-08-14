@@ -34,7 +34,6 @@
 - The Library shelf now renders through the same FreeInkUI components as the rest of the interface, which is what brings touch to it: on touch devices, tap a book to open it, hold it for its menu, tap a sort tab to switch views (hold the ★ tab for the favorites sort menu, the `Titles` tab to flip direction), tap a letter in the A-Z grid to jump, and swipe to page the list. Button navigation, search, favorites, details, deletion and the remembered shelf posture all behave as before.
 - The File Manager becomes cards on phone-sized screens: tap a card to select it, serif titles that wrap instead of crushing the table, and a download button on each card.
 - Opening a folder in the File Manager no longer reloads the whole page. Only the folder's listing is fetched, so browsing lands in a moment instead of downloading the page again each time; `Back` and `Forward` still walk through the folders you visited, and a link opened in a new tab still works. Pages now carry a validator, so reopening the portal costs nothing when nothing has changed.
-- Font Family choices now identify built-in and SD-card fonts by their available point-size ranges.
 
 ### Removed
 
@@ -45,12 +44,6 @@
 
 - Books uploaded through the fast (WebSocket) upload path now appear in the Library without a manual index rebuild.
 - Filenames that list the same author twice — the shape export tools leave behind, as in `Henry S_ Warren, Henry S_ Warren Jr` — no longer have that name rearranged into nonsense on the shelf. Authors written surname-first still read the right way round, so `Austen, Jane` shows as `Jane Austen`.
-- Network connections no longer trigger repeated full-panel flashes.
-- Dictionary word selection now follows the physical front-button direction in counter-clockwise landscape mode.
-- End-of-book suggestions can now be opened by tapping them on touch devices.
-- Dictionary font switches now retry after releasing the reader font when memory is tight.
-- XTC table of contents now includes every available page entry, so large books can jump beyond the first 128 pages.
-- Saved clipping highlights now remain accurate when a font or font-size change reflows a word across an inserted hyphen.
 
 - The Countdown and Pomodoro figure is drawn again on X3/X4. Since v1.5.42 the ring appeared but its middle stayed empty and the label under it sat wrong: the 16 pt face those two screens are pinned to had been dropped from the build.
 - Holding `Menu` to open the `Library` or the `File Browser` no longer opens whatever sits under the cursor the moment you let go. The release that ended the long press was landing in the screen that had just opened, which read it as a press of its own.
@@ -63,9 +56,68 @@
 - Checking for updates no longer risks your recent books. `Check for updates` restarts the device into a lightweight network mode that does not read the recent-books file, and `Back` from that screen landed on a Home that showed `No open book` with a full shelf behind it — and, worse, saved that emptiness the moment you opened a book, leaving a single entry where the whole list had been. The KOReader sync credentials had the same trap: editing one field would have written blanks over the others.
 - Firmware images now carry their own version and build time. Every release so far shipped the build information of an unrelated image, so a binary asked which build it was answered confidently and wrongly. Nothing on the device read it, but a device dump can now be traced back to the code it came from.
 
+## [v1.5.1] - 2026-08-12
+
+### Added
+
+- Full Xteink X4 Pro support, including USB Drive access to its SD card and direct USB file transfers.
+- New "Quick Lock" shortcut that locks the device without putting it to sleep. It can be assigned to Power + Up, long-press Back, or long-press Menu shortcuts and uses the regular sleep timeout.
+- New Quick Actions menu
+- Quick Actions can now be assigned to Power + Up and, on X4 Pro, tap, long-press, or double-tap Home.
+- Power-button shortcuts and Quick Actions can now toggle the frontlight or reader touchscreen when supported.
+- On one-cover Lyra, Dashboard, and Minimal Home screens, swipe left to switch between the two most recent books.
+
+### Changed
+
+- Font settings now label the downloadable-font manager as “Download Fonts”.
+- Shortcut action pickers now use a consistent option order while hiding actions unsupported by the selected trigger or device.
+- Wi-Fi passwords are now shown while entering them, making corrections easier on-device.
+- EPUB progress calculations now reuse a bounded in-memory spine-size index while reading, reducing repeated SD-card seeks.
+- Waking from deep sleep now keeps the selected sleep screen visible until Home or the reader is ready, removing the boot-up splash screen.
+- Reader menu settings now group Controls and Mark as Finished with the gear-tab actions in a consistent order.
+- Font Family choices now identify built-in and SD-card fonts by their available point-size ranges.
+
+### Fixed
+
+- Touch readers can now cancel a font download from the progress screen or its header Back button.
+- Sleep screens now reuse a compact SD-card index for custom wallpaper folders, avoiding a full folder scan on every sleep while rebuilding safely after file changes.
+- Touch taps and on-screen keyboard presses now route reliably while UI screens redraw.
+- Long-pressing Up or Down in long popup lists now advances by a full page.
+- EPUB table fixes now preserve final-column widths, give dense tables enough space for leading labels, and split oversized words instead of clipping them.
+- Nearby Position Sync now leaves the sending device with a single Back action after sharing a position and tolerates repeated packets while the receiving reader prepares the location.
+- Clearing an EPUB's reading cache now returns Home so the book can rebuild its cache safely when reopened.
+- Large EPUB tables now use a bounded row-streaming grid on low-memory devices, preserving readable styled cells and falling back explicitly for unsupported table structures.
+- Large EPUBs with thousands of chapters can now finish indexing on X3/X4 without running out of memory.
+- Dictionary definition popups no longer leave an empty white button-hint block over the reader page.
+- Recent Books and KOReader Sync settings now remain intact after returning from lightweight network screens.
+- XTCH cover and thumbnail generation now stays within the available memory on X3/X4 after its cache is cleared.
+- Change Font shortcuts now switch away from an active SD-card font instead of reindexing with the same font.
+- Network connections no longer trigger repeated full-panel flashes.
+- Dictionary word selection now follows the physical front-button direction in counter-clockwise landscape mode.
+- End-of-book suggestions can now be opened by tapping them on touch devices.
+- XTC and XTCH readers now ignore overlapping page turns while the display is updating, preventing corrupted pages after rapid swipes.
+- XTC and XTCH readers no longer corrupt a page when turning or opening the menu during rendering.
+- Dictionary font switches now retry after releasing the reader font when memory is tight.
+- XTC table of contents now includes every available page entry, so large books can jump beyond the first 128 pages.
+- Saved clipping highlights now remain accurate when a font or font-size change reflows a word across an inserted hyphen.
+- Xteink readers wake faster by skipping redundant bootloader image validation after sleep.
+- Large EPUB images keep the reader responsive during decoding.
+- Full-height EPUB images no longer disappear when their container adds a top margin.
+- EPUB page estimates now keep image-only and mixed image pages from being multiplied by XHTML byte density.
+- Cancelling a chapter, footnote, location, or QR screen opened from the EPUB menu returns to that menu.
+- EPUB and XTC readers retain less memory during ordinary reading by loading end-of-book suggestions only when needed.
+- Long inherited dictionary-font names no longer overlap or extend beyond Font Options rows at Large UI size.
+- KOReader Sync progress no longer remains interleaved with EPUB image pages after returning to the reader.
+
 ## [v1.5.0] - 2026-08-08
 
 ### Added
+
+- X4 Pro readers can lock the Home button while reading, with a Power-button shortcut to toggle it.
+- End-of-book suggestions can now be opened directly by tapping their rows on touch devices.
+- Quick Actions lets readers assign up to five favorite reader commands to one Power, Back, or Menu shortcut.
+
+### Fixed
 
 - EPUB tables now lay out a row at a time in both Incremental and Full Section indexing, keeping regular tables readable without whole-table buffering.
 - Touch support for Seeed Studio Sticky
@@ -87,6 +139,7 @@
 
 ### Changed
 
+- PSRAM-equipped readers now keep EPUB grayscale and image-cache working buffers in external memory, preserving more internal RAM for layout and reducing repeated SD reads on image pages.
 - Reader font sizes now persist as actual point sizes, keeping the closest matching size when font families or installed files change.
 - SD-card fonts now include the built-in reader fallback stack for common symbols, emoji, and selected CJK glyphs while retaining Noto Sans fallback coverage.
 - Downloadable SD-card fonts are now rendered with the same darker anti-aliasing as the built-in reading fonts.
@@ -212,6 +265,7 @@
 
 ### Fixed
 
+- Quick Resume no longer shows a blank page after EPUB next-chapter indexing.
 - Calibre Wireless transfer status no longer stacks the last received-file message on top of the upload percentage.
 - X3 Tilt Direction now labels left/right choices as `Left-Right` and `Right-Left`, with existing left/right preferences migrated to keep the same physical tilt behavior.
 - EPUB layout now honors publisher page-break CSS, avoids stretching justified spaces before closing punctuation, and keeps large CSS rule sets in a smaller disk-backed lookup cache.
