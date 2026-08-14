@@ -7,6 +7,8 @@
 #include <LibraryText.h>
 #include <Logging.h>
 
+#include <algorithm>
+
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "activities/ActivityManager.h"
@@ -50,54 +52,131 @@ constexpr unsigned long kHoldMs = 800;
 }  // namespace
 
 LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-    : Activity("Library", renderer, mappedInput),
-      uiTarget(makeUiTarget(renderer)),
-      app(uiTarget, uiTarget.deviceContext()) {}
+    // Long-press opt-in: rows and tabs carry InputLongPress, so a held tap is
+    // the row menu / the tab's secondary action, mirroring the button holds.
+    : UiTabListActivity("Library", renderer, mappedInput, /*wantsTouchLongPress=*/true) {}
+
+// The strip's tab order, which is also the cycle order: the ★ first, then
+// Recent, Titles, Author, Search. The star sits at the edge because a glyph
+// wedged between two words breaks the row's reading — first device feedback —
+// and an edge is where the eye expects the special place anyway. Moving onto
+// ★ or a sort tab applies it at once; Search waits for Confirm, since opening
+// a keyboard is not something a sideways press should do by itself.
+//
+// Both title directions live on ONE tab. Z-A paid a full strip slot for a rare
+// use, and French labels were already overflowing the right edge; direction is
+// state on the tab (the drawn triangle), not a place in the row.
+constexpr int kFavTab = 0;
+constexpr int kRecentTab = 1;
+constexpr int kTitlesTab = 2;
+constexpr int kAuthorTab = 3;
+constexpr int kSearchTab = 4;
+constexpr int kTabSlots = kSearchTab + 1;
+
+// No longer one-to-one: both title orders map to the Titles tab.
+int sortTabIndex(const library::SortOrder order) {
+  switch (order) {
+    case library::SortOrder::TitleAsc:
+    case library::SortOrder::TitleDesc:
+      return kTitlesTab;
+    case library::SortOrder::AuthorAsc:
+      return kAuthorTab;
+    case library::SortOrder::DateDesc:
+      return kRecentTab;
+  }
+  return kRecentTab;
+}
+
+library::SortOrder orderForTab(const int tab) {
+  if (tab == kTitlesTab) return sTitleDescending ? library::SortOrder::TitleDesc : library::SortOrder::TitleAsc;
+  if (tab == kAuthorTab) return library::SortOrder::AuthorAsc;
+  return library::SortOrder::DateDesc;
+}
+
+// The strip needs the mode alone. The header strings carry a "Library ·" prefix
+// that reads as four copies of the word once they sit side by side.
+const char* tabLabelFor(const int tab) {
+  if (tab == kRecentTab) return tr(STR_LIBRARY_TAB_RECENT);
+  if (tab == kTitlesTab) return tr(STR_LIBRARY_TAB_TITLES);
+  if (tab == kAuthorTab) return tr(STR_LIBRARY_TAB_AUTHOR);
+  return tr(STR_LIBRARY_SEARCH);
+}
+
+int LibraryListActivity::tabCount() const { return kTabSlots; }
+
+// The ACTIVE VIEW's tab — the ★ or the sort composing the shelf. Never Search:
+// Search is an action on the strip, not a view, so the strip's own cursor
+// (tabCursor) is the only state that can sit on it.
+int LibraryListActivity::activeTab() const { return sFavoritesView ? kFavTab : sortTabIndex(sSortOrder); }
+
+const char* LibraryListActivity::tabLabel(const int index) const { return tabLabelFor(index); }
+
+int LibraryListActivity::selectedEntry() const {
+  // Ring 0 (strip focused) keeps row 0 as the working selection, exactly as
+  // the pre-ring code kept selectedIndex at 0 while the strip held the focus.
+  const int entry = ringPos() - 1;
+  return entry < 0 ? 0 : entry;
+}
+
+void LibraryListActivity::resetListPosition() {
+  auto& n = activeNav();
+  n.top = 0;
+  if (n.selected != 0) n.selected = 1;
+  pageStarts.clear();
+}
 
 void LibraryListActivity::onEnter() {
-  Activity::onEnter();
-  selectedIndex = 0;
-  topIndex = 0;
-  visibleRows = 1;
-  app.setTheme(uiThemeTokens(uiTarget));
-
-  // Optimistic open: if an index exists, paint from it immediately and let the
-  // user decide when to refresh. Only a missing or unreadable index forces the
-  // walk, so entering the screen is normally instant.
-  indexReady = openIndex();
-  // Books arrived (or left) since the last build: every ingestion path marks
-  // one flag, consumed here. The rebuild reconciles, so the newcomer tops
-  // Recently added and every other book keeps its place.
-  if (library::takeShelfStale() && indexReady) {
-    index.close();
-    indexReady = false;
-  }
-  if (!indexReady) {
-    // Held across the popup and the build, for the same reason the Settings
-    // rebuild holds it: the render task's SD-loaded fonts read glyph data at
-    // draw time, and the walk needs the card to itself.
-    RenderLock lock(*this);
-    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-    indexReady = rebuildIndex() && openIndex();
-  }
-  degraded = indexReady && index.ranksDegraded();
-  // Corrupt or unreadable favorites degrade to an empty set, logged inside;
-  // the shelf itself must never be held up by its smallest file.
-  favorites.load();
-  // The shelf's posture comes back from disk, not from the statics alone:
+  // The shelf's posture comes back from disk before the base sizes the ring:
   // this reader deep-sleeps between sessions and wakes through a full boot,
   // so RAM state forgets the shelf several times a day — which read as "the
-  // filters do not save" on the device.
+  // filters do not save" on the device. activeTab() reads these statics, and
+  // the base's per-tab state must bind to the restored view, not the default.
   library::LibraryShelfState state;
   library::loadLibraryState(state);
   sFavoritesView = state.favoritesView;
   sTitleDescending = state.titleDescending;
   sSortOrder = state.shelfSort;
   sFavSortOrder = state.favSort;
-  // `filtered` belongs to THIS instance: without a rebuild here, a restored ★
-  // view opened on an empty list until the reader wiggled the tabs.
-  applyFilter();
-  restoreSelection(state.selected);
+
+  {
+    // One lock across the base lifecycle AND the data phase: the base onEnter
+    // schedules a paint, and the render task must not read the index or the
+    // filter before they are in place. The rebuild also needs the lock for
+    // the same reason the Settings rebuild does: the render task's SD-loaded
+    // fonts read glyph data at draw time, and the walk needs the card to
+    // itself.
+    RenderLock lock(*this);
+    UiTabListActivity::onEnter();
+    app.on(ACTION_LETTER, &LibraryListActivity::letterActionTrampoline, this);
+    app.on(ACTION_LETTER_MODE, &LibraryListActivity::letterModeActionTrampoline, this);
+    tabCursor = activeTab();
+    // Optimistic open: if an index exists, paint from it immediately and let
+    // the user decide when to refresh. Only a missing or unreadable index
+    // forces the walk, so entering the screen is normally instant.
+    indexReady = openIndex();
+    // Books arrived (or left) since the last build: every ingestion path marks
+    // one flag, consumed here. The rebuild reconciles, so the newcomer tops
+    // Recently added and every other book keeps its place.
+    if (library::takeShelfStale() && indexReady) {
+      index.close();
+      indexReady = false;
+    }
+    if (!indexReady) {
+      GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+      indexReady = rebuildIndex() && openIndex();
+    }
+    degraded = indexReady && index.ranksDegraded();
+    // Corrupt or unreadable favorites degrade to an empty set, logged inside;
+    // the shelf itself must never be held up by its smallest file.
+    favorites.load();
+    // `filtered` belongs to THIS instance: without a rebuild here, a restored ★
+    // view opened on an empty list until the reader wiggled the tabs.
+    applyFilter();
+    auto& n = activeNav();
+    n.selected = 1;
+    n.top = 0;
+    restoreSelection(state.selected);
+  }
   requestUpdate(true);
 }
 
@@ -112,7 +191,7 @@ void LibraryListActivity::onExit() {
   state.shelfSort = sSortOrder;
   state.favSort = sFavSortOrder;
   if (indexReady) {
-    rowKeyFor(selectedIndex, state.selected);
+    rowKeyFor(selectedEntry(), state.selected);
   } else {
     state.selected = exitSelection;
   }
@@ -157,18 +236,21 @@ bool LibraryListActivity::rebuildIndex() {
 
 void LibraryListActivity::openSelectedBook() {
   if (!indexReady) return;
-  const uint16_t ordinal = index.ordinalForRow(currentOrder(), static_cast<uint16_t>(rowFor(selectedIndex)));
+  const uint16_t ordinal = index.ordinalForRow(currentOrder(), static_cast<uint16_t>(rowFor(selectedEntry())));
   if (ordinal == 0xFFFF) return;
 
   library::ClixRecord record{};
   std::string path;
   if (!index.readRecord(ordinal, record) || !index.readPath(record, path)) {
-    LOG_ERR("LIB", "cannot resolve path for row %d", selectedIndex);
+    LOG_ERR("LIB", "cannot resolve path for row %d", selectedEntry());
     return;
   }
   // Staged for onExit: once the index closes, the selection can no longer be
   // resolved, and the book being opened is exactly the one to come back to.
-  rowKeyFor(selectedIndex, exitSelection);
+  rowKeyFor(selectedEntry(), exitSelection);
+  // A tap flash on the row would gray an unrelated element of the reader
+  // screen this navigation opens.
+  app.clearTapFlash();
   // Release the index handle first: on hardware SdFat allows one open reader per
   // path at a time, and the reader is about to open files of its own.
   index.close();
@@ -176,14 +258,19 @@ void LibraryListActivity::openSelectedBook() {
   activityManager.goToReader(std::move(path));
 }
 
+void LibraryListActivity::activateIndex(int) { openSelectedBook(); }
+
+void LibraryListActivity::onRowLongPress(int) { openBookMenu(); }
+
 void LibraryListActivity::restoreSelection(const library::FavoriteKey& sel) {
   if (sel.nameHash == 0 && sel.fileSize == 0) return;
   const int count = rowCount();
   for (int entry = 0; entry < count; entry++) {
     library::FavoriteKey key;
     if (rowKeyFor(entry, key) && key == sel) {
-      selectedIndex = entry;
-      topIndex = entry;
+      auto& n = activeNav();
+      n.selected = entry + 1;
+      n.top = entry;
       return;
     }
   }
@@ -208,7 +295,10 @@ void LibraryListActivity::toggleFavoriteAt(const int entry) {
   BookActions::drawToast(renderer, nowFavorite ? tr(STR_LIBRARY_FAV_ADDED) : tr(STR_LIBRARY_FAV_REMOVED));
   delay(1200);
   // Removing while looking AT the ★ view must take the row out of it.
-  if (sFavoritesView) applyFilter();
+  if (sFavoritesView) {
+    applyFilter();
+    resetListPosition();
+  }
   requestUpdate(true);
 }
 
@@ -217,13 +307,13 @@ void LibraryListActivity::openBookMenu() {
   std::string title;
   std::string author;
   bool isFavorite = false;
-  rowTextFor(selectedIndex, title, author, &isFavorite);
+  rowTextFor(selectedEntry(), title, author, &isFavorite);
   const std::vector<std::string> options{tr(STR_LIBRARY_MENU_OPEN),
                                          isFavorite ? tr(STR_LIBRARY_MENU_FAV_REMOVE) : tr(STR_LIBRARY_MENU_FAV_ADD),
                                          tr(STR_LIBRARY_MENU_DETAILS), tr(STR_DELETE)};
   popup.show(title.c_str(), options, 0, [this](const int choice) {
     if (choice == 0) openSelectedBook();
-    if (choice == 1) toggleFavoriteAt(selectedIndex);
+    if (choice == 1) toggleFavoriteAt(selectedEntry());
     if (choice == 2) {
       detailsView = true;
       requestUpdate(true);
@@ -234,14 +324,14 @@ void LibraryListActivity::openBookMenu() {
 }
 
 void LibraryListActivity::promptDeleteSelectedBook() {
-  const uint16_t ordinal = index.ordinalForRow(currentOrder(), static_cast<uint16_t>(rowFor(selectedIndex)));
+  const uint16_t ordinal = index.ordinalForRow(currentOrder(), static_cast<uint16_t>(rowFor(selectedEntry())));
   library::ClixRecord record{};
   std::string path;
   std::string title;
   if (ordinal == 0xFFFF || !index.readRecord(ordinal, record) || !index.readPath(record, path)) return;
   if (!index.readTitle(record, title) || title.empty()) index.readName(record, title);
   library::FavoriteKey key;
-  const bool hasKey = rowKeyFor(selectedIndex, key);
+  const bool hasKey = rowKeyFor(selectedEntry(), key);
 
   const std::string heading = tr(STR_DELETE) + std::string("? ");
   startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, title),
@@ -280,8 +370,10 @@ void LibraryListActivity::promptDeleteSelectedBook() {
                            }
                            degraded = indexReady && index.ranksDegraded();
                            applyFilter();
-                           selectedIndex = 0;
-                           topIndex = 0;
+                           auto& n = activeNav();
+                           n.selected = 1;
+                           n.top = 0;
+                           pageStarts.clear();
                            requestUpdate(true);
                          });
 }
@@ -319,48 +411,10 @@ void LibraryListActivity::openFavoritesSortMenu() {
         return;
     }
     applyFilter();
-    selectedIndex = 0;
-    topIndex = 0;
+    resetListPosition();
     requestUpdate(true);
   });
   requestUpdate();
-}
-
-// The strip's tab order, which is also the cycle order: the ★ first, then
-// Recent, Titles, Author, Search. The star sits at the edge because a glyph
-// wedged between two words breaks the row's reading — first device feedback —
-// and an edge is where the eye expects the special place anyway. Moving onto
-// ★ or a sort tab applies it at once; Search waits for Confirm, since opening
-// a keyboard is not something a sideways press should do by itself.
-//
-// Both title directions live on ONE tab. Z-A paid a full strip slot for a rare
-// use, and French labels were already overflowing the right edge; direction is
-// state on the tab (the drawn triangle), not a place in the row.
-constexpr int kFavTab = 0;
-constexpr int kRecentTab = 1;
-constexpr int kTitlesTab = 2;
-constexpr int kAuthorTab = 3;
-constexpr int kSearchTab = 4;
-constexpr int kTabSlots = kSearchTab + 1;
-
-// No longer one-to-one: both title orders map to the Titles tab.
-int sortTabIndex(const library::SortOrder order) {
-  switch (order) {
-    case library::SortOrder::TitleAsc:
-    case library::SortOrder::TitleDesc:
-      return kTitlesTab;
-    case library::SortOrder::AuthorAsc:
-      return kAuthorTab;
-    case library::SortOrder::DateDesc:
-      return kRecentTab;
-  }
-  return kRecentTab;
-}
-
-library::SortOrder orderForTab(const int tab) {
-  if (tab == kTitlesTab) return sTitleDescending ? library::SortOrder::TitleDesc : library::SortOrder::TitleAsc;
-  if (tab == kAuthorTab) return library::SortOrder::AuthorAsc;
-  return library::SortOrder::DateDesc;
 }
 
 // Direction is a flip of existing state, not a different tab: the strip keeps
@@ -377,10 +431,9 @@ void LibraryListActivity::flipTitleDirection() {
     sSortOrder = order;
   }
   // Same invalidation as activating a tab: the filter holds POSITIONS in the
-  // old order, and applyFilter also drops every remembered page boundary.
+  // old order, and every remembered page boundary died with them.
   applyFilter();
-  selectedIndex = 0;
-  topIndex = 0;
+  resetListPosition();
   requestUpdate(true);
 }
 
@@ -391,25 +444,72 @@ void LibraryListActivity::cycleSortOrder(const bool forward) {
     // untouched: favorites compose with whatever order is current.
     sFavoritesView = true;
     applyFilter();
-    selectedIndex = 0;
-    topIndex = 0;
+    // The view changed, so the ring below belongs to the NEW tab; the strip
+    // keeps the focus it had (ring 0), the list under it starts at the top.
+    auto& n = activeNav();
+    n.selected = 0;
+    n.top = 0;
+    pageStarts.clear();
   } else if (tabCursor != kSearchTab) {
     sFavoritesView = false;
     sSortOrder = orderForTab(tabCursor);
     applyFilter();
-    selectedIndex = 0;
-    topIndex = 0;
+    auto& n = activeNav();
+    n.selected = 0;
+    n.top = 0;
+    pageStarts.clear();
   }
   requestUpdate();
 }
 
-// The strip needs the mode alone. The header strings carry a "Library ·" prefix
-// that reads as four copies of the word once they sit side by side.
-const char* tabLabelFor(const int tab) {
-  if (tab == kRecentTab) return tr(STR_LIBRARY_TAB_RECENT);
-  if (tab == kTitlesTab) return tr(STR_LIBRARY_TAB_TITLES);
-  if (tab == kAuthorTab) return tr(STR_LIBRARY_TAB_AUTHOR);
-  return tr(STR_LIBRARY_SEARCH);
+void LibraryListActivity::stepTab(const int direction) { cycleSortOrder(direction > 0); }
+
+// Touch tap on a strip pill: the same application the button cycle does, minus
+// the travel. Search still waits for nothing — a tap IS the deliberate act the
+// sideways press wasn't.
+void LibraryListActivity::onTabAction(const int index) {
+  if (index == kSearchTab) {
+    tabCursor = kSearchTab;
+    app.clearTapFlash();
+    openSearch();
+    return;
+  }
+  tabCursor = index;
+  if (index == kFavTab) {
+    sFavoritesView = true;
+  } else {
+    sFavoritesView = false;
+    sSortOrder = orderForTab(index);
+  }
+  applyFilter();
+  // Tab taps land with the tab bar focused, like the button cycle leaves it.
+  auto& n = activeNav();
+  n.selected = 0;
+  n.top = 0;
+  pageStarts.clear();
+  app.clearTapFlash();
+  requestUpdate();
+}
+
+// A held tap on a tab pill is the tab's secondary action — the same map the
+// Confirm hold follows on the focused strip.
+void LibraryListActivity::onTabLongPress(const int index) {
+  if (index == kTitlesTab) {
+    flipTitleDirection();
+    return;
+  }
+  if (index == kFavTab) {
+    openFavoritesSortMenu();
+    return;
+  }
+  if (index == kSearchTab && !query.empty()) {
+    // Search's secondary action clears its own filter, without a trip
+    // through the keyboard.
+    query.clear();
+    applyFilter();
+    resetListPosition();
+    requestUpdate(true);
+  }
 }
 
 const char* LibraryListActivity::sortOrderLabel() const {
@@ -426,36 +526,12 @@ const char* LibraryListActivity::sortOrderLabel() const {
   return "";
 }
 
-// Row geometry, computed from the live renderer so it follows the UI font-size
-// setting. Two title lines plus one author line, uniform for every row: uniform
-// is what keeps the author at the same x and y on every row, which is the whole
-// reason this screen exists.
-// Height of one row, given how many title lines it actually needs. Rows are
-// variable: reserving a second title line for a one-line title leaves a hole
-// between the title and its own author, which reads as a layout bug.
-//
-// The author still sits at a fixed LEFT edge on every row — that is the column
-// the eye sweeps. Its vertical position follows its title, which is what makes
-// the pair read as one object.
-int LibraryListActivity::rowHeightFor(const int titleLines, const bool hasAuthor) const {
-  return titleLineH * titleLines + (hasAuthor ? authorLineH : 0) + LIBRARY_ROW_PADDING;
-}
-
-void LibraryListActivity::measureRows() {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  titleLineH = renderer.getLineHeight(UI_10_FONT_ID);
-  authorLineH = renderer.getLineHeight(SMALL_FONT_ID);
-  // The sort strip sits between the header and the list, and takes its height
-  // from the list rather than overlaying it.
-  tabsTop = metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput);
-  listTop = tabsTop + LIBRARY_TABS_HEIGHT + metrics.verticalSpacing;
-  listHeight = renderer.getScreenHeight() - metrics.buttonHintsHeight - metrics.verticalSpacing - listTop;
-}
-
 int LibraryListActivity::rowCount() const {
   const bool filteredView = !query.empty() || sFavoritesView;
   return filteredView ? static_cast<int>(filtered.size()) : static_cast<int>(index.bookCount());
 }
+
+int LibraryListActivity::listCount() const { return rowCount(); }
 
 // Entry position on screen to row position in the sort order. Identity while
 // unfiltered, so the shelf costs nothing when nothing is typed.
@@ -468,6 +544,8 @@ int LibraryListActivity::rowFor(const int entry) const {
 // One pass over the sort order, keeping what matches. No index, no cache: at the
 // 512-book cap this is 512 comparisons of at most 96 bytes, which is far below
 // the cost of the panel repaint that will follow it anyway.
+// Pure data: the ring/viewport reset moved to the callers, which know whether
+// the strip keeps the focus and which tab's state the reset lands on.
 void LibraryListActivity::applyFilter() {
   filtered.clear();
   // Cleared even on the empty-query path: dropping a filter changes the list just
@@ -509,8 +587,6 @@ void LibraryListActivity::applyFilter() {
       filtered.push_back(static_cast<uint16_t>(row));
     }
   }
-  selectedIndex = 0;
-  topIndex = 0;
 }
 
 // 26 letters over 5 columns. A grid rather than a strip because reaching a letter
@@ -581,86 +657,69 @@ void LibraryListActivity::jumpToLetter(const char letter) {
     // alphabetically at all, so that one matches exactly.
     const bool hit = jumpByGivenName ? c == letter : descending ? c <= letter : c >= letter;
     if (hit) {
-      selectedIndex = entry;
-      topIndex = entry;
+      auto& n = activeNav();
+      n.selected = entry + 1;
+      n.top = entry;
       pageStarts.clear();
       return;
     }
   }
 }
 
-void LibraryListActivity::drawLetterGrid() {
-  const int width = renderer.getScreenWidth();
-  const int cell = (width - 2 * LIBRARY_SIDE_PADDING) / kLetterCols;
-  const int rows = (kLetterCount + kLetterCols - 1) / kLetterCols;
-  const int cellH = listHeight / (rows + 1);
-  const int top = listTop + cellH / 2;
-  // Both modes shown, not just the active one. Printing only the current choice
-  // hides the fact that there IS a choice — the same reason the sort strip lists
-  // every mode. On a panel that refreshes whole, the second label is free.
-  // First name before last, because the words themselves carry that order and
-  // reading them the other way round jars. "Last name" rather than "surname":
-  // parallel vocabulary, and the plainer of the two for anyone reading English as
-  // a second language.
-  // Sorted by author the choice is which WORD the letters mean; sorted by title
-  // it is the direction. One line, one idiom, one rule to learn. "A-Z"/"Z-A"
-  // are letter symbols rather than words, so they carry no translation.
-  const bool titleOrder = currentOrder() != library::SortOrder::AuthorAsc;
-  const char* labels[2] = {titleOrder ? "A-Z" : tr(STR_LIBRARY_JUMP_GIVEN),
-                           titleOrder ? "Z-A" : tr(STR_LIBRARY_JUMP_SURNAME)};
-  const int active = titleOrder ? (sTitleDescending ? 1 : 0) : (jumpByGivenName ? 0 : 1);
-  const int gap = 20;
-  int labelW[2];
-  for (int i = 0; i < 2; i++) labelW[i] = renderer.getTextWidth(SMALL_FONT_ID, labels[i]);
-  const int modeH = renderer.getLineHeight(SMALL_FONT_ID);
-  int mx = (width - (labelW[0] + labelW[1] + gap)) / 2;
-  const int modeY = listTop + 2;
-
-  for (int i = 0; i < 2; i++) {
-    const bool on = i == active;
-    // Focused, the active choice inverts — the strongest signal this panel has
-    // that Left/Right are about to change it. Unfocused it keeps an underline, so
-    // the line stays quiet while the grid holds attention.
-    if (on && letterCursor < 0) {
-      renderer.fillRoundedRect(mx - 5, modeY - 2, labelW[i] + 10, modeH + 4, 4, Color::Black);
-    }
-    renderer.drawText(SMALL_FONT_ID, mx, modeY, labels[i], !(on && letterCursor < 0));
-    if (on && letterCursor >= 0) renderer.fillRect(mx, modeY + modeH + 1, labelW[i], 1, true);
-    mx += labelW[i] + gap;
-  }
-
-  // Centre the block itself. Laying it out from the left margin left the last
-  // column hanging off the right edge, since 26 letters do not fill 5 columns
-  // evenly and the remainder all landed on one side.
-  const int originX = (width - kLetterCols * cell) / 2;
-
+void LibraryListActivity::openLetterGrid() {
+  // Only where an alphabet exists to jump through. Sorted by date there is no
+  // letter order to walk, so the press stays inert rather than opening a grid
+  // whose every choice would land somewhere arbitrary.
+  jumpByGivenName = false;
+  computeLettersPresent();
+  letterCursor = 0;
   for (int i = 0; i < kLetterCount; i++) {
-    const int cx = originX + (i % kLetterCols) * cell;
-    const int cy = top + (i / kLetterCols) * cellH;
-    const bool present = (lettersPresent & (1u << i)) != 0;
-
-    // The pill and the glyph share one centre, so the letter sits in the middle
-    // of its square rather than in a corner of it.
-    const int pillW = cell - 6;
-    const int pillH = cellH - 6;
-    const int pillX = cx + (cell - pillW) / 2;
-    // A letter no book starts with is simply not drawn. Its slot stays empty and
-    // nothing moves, because the grid's positions come from the alphabet's index
-    // and not from what happens to be painted — the earlier worry about losing
-    // one's place was unfounded.
-    if (!present) continue;
-    if (i == letterCursor) {
-      renderer.fillRoundedRect(pillX, cy, pillW, pillH, 4, Color::Black);
+    if (lettersPresent & (1u << i)) {
+      letterCursor = i;
+      break;
     }
-    // Three attempts at showing an unavailable letter failed on a 1-bit panel: a
-    // smaller font read as inconsistent typography, dithering the glyph erased it,
-    // and an outlined cursor said nothing legible. Not drawing it says it plainly.
-    char label[2] = {static_cast<char>('A' + i), 0};
-    const int tw = renderer.getTextWidth(UI_10_FONT_ID, label);
-    const int th = renderer.getLineHeight(UI_10_FONT_ID);
-    renderer.drawText(UI_10_FONT_ID, pillX + (pillW - tw) / 2, cy + (pillH - th) / 2, label,
-                      !(present && i == letterCursor));
   }
+  letterGrid = true;
+  requestUpdate();
+}
+
+// The mode line above the grid. Sorted by author the choice is which WORD the
+// letters mean; sorted by title it is the direction — the novice path to the
+// same flip the strip's hold offers.
+void LibraryListActivity::toggleLetterGridMode() {
+  if (currentOrder() == library::SortOrder::AuthorAsc) {
+    jumpByGivenName = !jumpByGivenName;
+    // The letters present as first names are not those present as surnames.
+    // The cursor is on the mode line, not on a letter, so nothing needs
+    // re-seating here — Down does that entering the grid.
+    computeLettersPresent();
+  } else {
+    // The letter SET is direction blind (first letters do not change), so
+    // nothing needs recomputing.
+    flipTitleDirection();
+  }
+  requestUpdate();
+}
+
+void LibraryListActivity::letterActionTrampoline(const fui::ActionEvent& event, void* user) {
+  auto* self = static_cast<LibraryListActivity*>(user);
+  if (!self->letterGrid) return;
+  if (event.value < 0 || event.value >= kLetterCount) return;
+  if (!(self->lettersPresent & (1u << event.value))) return;
+  self->jumpToLetter(static_cast<char>('a' + event.value));
+  self->letterGrid = false;
+  self->app.clearTapFlash();
+  self->requestUpdate();
+}
+
+void LibraryListActivity::letterModeActionTrampoline(const fui::ActionEvent& event, void* user) {
+  auto* self = static_cast<LibraryListActivity*>(user);
+  if (!self->letterGrid) return;
+  // Tapping the already-active choice states nothing new.
+  const bool titleOrder = currentOrder() != library::SortOrder::AuthorAsc;
+  const int active = titleOrder ? (sTitleDescending ? 1 : 0) : (self->jumpByGivenName ? 0 : 1);
+  if (event.value == active) return;
+  self->toggleLetterGridMode();
 }
 
 void LibraryListActivity::openSearch() {
@@ -674,7 +733,11 @@ void LibraryListActivity::openSearch() {
                            if (result.isCancelled) return;
                            query = std::get<KeyboardResult>(result.data).text;
                            applyFilter();
-                           tabsFocused = false;
+                           // The result belongs to the list: the cursor lands
+                           // on the first surviving row, not on the strip.
+                           auto& n = activeNav();
+                           n.selected = 1;
+                           n.top = 0;
                            requestUpdate();
                          });
 }
@@ -707,18 +770,17 @@ bool LibraryListActivity::rowTextFor(const int entry, std::string& title, std::s
   return true;
 }
 
-void LibraryListActivity::loop() {
+bool LibraryListActivity::handleCustomInput() {
   // Opened by a long press on a button pair, that button is still down: its
   // release belongs to the gesture that got us here, not to this screen.
-  if (openingGestureLock_.consumeRelease(mappedInput)) return;
+  if (openingGestureLock_.consumeRelease(mappedInput)) return true;
 
   // The menu owns every button while it is up, including the touch layer.
-  if (popup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+  if (popup.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
   if (TouchHeaderBackButton::wasTapped(mappedInput, renderer)) {
     finishAfterBackPress();
-    return;
+    return true;
   }
-  const int count = rowCount();
 
   // Details is a reading page: the only thing to do on it is leave.
   if (detailsView) {
@@ -727,31 +789,27 @@ void LibraryListActivity::loop() {
       detailsView = false;
       requestUpdate(true);
     }
-    return;
+    return true;
   }
 
-  // The grid owns every button while it is open, so its block runs FIRST. Sitting
-  // below the Back handlers, its own Back was unreachable: Back left the activity
-  // with the grid still on screen.
+  // The grid owns every button while it is open, so its block runs FIRST:
+  // sitting below the Back handlers, its own Back was unreachable.
   if (letterGrid) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       letterGrid = false;
       requestUpdate();
-      return;
+      return true;
     }
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       // Refused on a letter no book has. Jumping to where it WOULD fall is a
-      // correct answer to a question the reader did not ask, and the outlined
-      // cursor has already said the key is inert.
+      // correct answer to a question the reader did not ask, and the grid has
+      // already said the key is inert by not drawing it.
       if (letterCursor >= 0 && (lettersPresent & (1u << letterCursor))) {
         jumpToLetter(static_cast<char>('a' + letterCursor));
         letterGrid = false;
-        // Hand focus back to the list, or the next Confirm reopens the grid
-        // instead of opening the book just jumped to.
-        tabsFocused = false;
         requestUpdate();
       }
-      return;
+      return true;
     }
     // letterCursor == -1 is the mode line above the grid, reached by pressing Up
     // from the top row — the same idiom the sort strip uses, so there is one rule
@@ -759,19 +817,7 @@ void LibraryListActivity::loop() {
     if (letterCursor < 0) {
       if (mappedInput.wasReleased(MappedInputManager::Button::Left) ||
           mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-        if (currentOrder() == library::SortOrder::AuthorAsc) {
-          jumpByGivenName = !jumpByGivenName;
-          // The letters present as first names are not those present as
-          // surnames. The cursor is on the mode line, not on a letter, so
-          // nothing needs re-seating here — Down does that entering the grid.
-          computeLettersPresent();
-        } else {
-          // In title order the mode line is the direction — the novice path to
-          // the same flip the strip's hold offers. The letter SET is direction
-          // blind (first letters do not change), so nothing needs recomputing.
-          flipTitleDirection();
-        }
-        requestUpdate();
+        toggleLetterGridMode();
       }
       if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
         // Land on a letter that exists. Dropping onto "a" when no book starts
@@ -786,7 +832,10 @@ void LibraryListActivity::loop() {
         }
         requestUpdate();
       }
-      return;
+      // Touch reaches the letters and the mode line through the app's hit
+      // rects even while a button cursor sits on the mode line.
+      routeModalTouch();
+      return true;
     }
 
     int delta = 0;
@@ -797,7 +846,7 @@ void LibraryListActivity::loop() {
       if (letterCursor < kLetterCols) {
         letterCursor = -1;
         requestUpdate();
-        return;
+        return true;
       }
       delta = -kLetterCols;
     }
@@ -817,81 +866,82 @@ void LibraryListActivity::loop() {
       }
       requestUpdate();
     }
-    return;
+    routeModalTouch();
+    return true;
   }
+
+  // Swipes page the viewport without moving the selection, like every FUI
+  // list — but this list's back-paging history describes a path the viewport
+  // just left, so the boundaries die with the swipe.
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
+    auto& n = activeNav();
+    const int delta = swipe == MappedInputManager::SwipeDir::Up ? n.visibleRows : -n.visibleRows;
+    if (n.scrollBy(delta, rowCount())) {
+      pageStarts.clear();
+      requestUpdate();
+    }
+    return true;
+  }
+
+  return false;
+}
+
+bool LibraryListActivity::handleButtons() {
+  const int count = rowCount();
+  auto& n = activeNav();
 
   // Back clears the filter before it leaves. A shelf showing 7 of 60 books is a
   // state the reader must be able to undo, and giving it the press they would
   // reach for anyway costs no screen space and needs no explaining.
-  if (!query.empty() && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    query.clear();
-    filtered.clear();
-    selectedIndex = 0;
-    topIndex = 0;
-    // Boundaries measured against the filtered list mean nothing once the whole
-    // shelf is back.
-    pageStarts.clear();
-    requestUpdate();
-    return;
-  }
   // Back in the ★ view exits the Library WITH the view intact — deliberately
-  // not the search idiom. A query is a transient filter and Back undoes it
-  // (above); the star is a PLACE — first tab, restored on return — and the
-  // first cut treated it as a filter, so the reader's exit habit silently
-  // wiped their view on every leave. The strip is the way to another view.
+  // not the search idiom. A query is a transient filter and Back undoes it;
+  // the star is a PLACE — first tab, restored on return. The strip is the way
+  // to another view.
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    finishAfterBackPress();
-    return;
+    if (!query.empty()) {
+      query.clear();
+      applyFilter();
+      resetListPosition();
+      requestUpdate();
+    } else {
+      finishAfterBackPress();
+    }
+    return true;
   }
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     // Dispatched on release, by held time, so one press means exactly one
     // thing. A hold is the secondary action of the FOCUSED context — the rule
     // the whole gesture map follows.
     if (mappedInput.getHeldTime() >= kHoldMs) {
-      // The hold is the secondary action of what is focused. On the strip's
-      // Titles tab it flips the direction — the triangle and the header both
-      // change, so the flip explains itself. On a book row it opens the row's
-      // own menu.
-      if (tabsFocused) {
+      // On the strip's Titles tab the hold flips the direction — the triangle
+      // and the header both change, so the flip explains itself. On a book row
+      // it opens the row's own menu.
+      if (tabsFocused()) {
         if (tabCursor == kTitlesTab) flipTitleDirection();
         if (tabCursor == kFavTab) openFavoritesSortMenu();
-        // Search's secondary action clears its own filter, without a trip
-        // through the keyboard.
         if (tabCursor == kSearchTab && !query.empty()) {
           query.clear();
           applyFilter();
-          selectedIndex = 0;
-          topIndex = 0;
+          resetListPosition();
           requestUpdate(true);
         }
       } else {
         openBookMenu();
       }
-      return;
+      return true;
     }
-    if (tabsFocused) {
+    if (tabsFocused()) {
       if (tabCursor == kSearchTab) {
         openSearch();
       } else if (currentOrder() != library::SortOrder::DateDesc) {
-        // Only where an alphabet exists to jump through. Sorted by date there
-        // is no letter order to walk, so the press stays inert rather than
-        // opening a grid whose every choice would land somewhere arbitrary.
-        jumpByGivenName = false;
-        computeLettersPresent();
-        letterCursor = 0;
-        for (int i = 0; i < kLetterCount; i++) {
-          if (lettersPresent & (1u << i)) {
-            letterCursor = i;
-            break;
-          }
-        }
-        letterGrid = true;
-        requestUpdate();
+        openLetterGrid();
       }
-      return;
+      return true;
     }
     if (count > 0) openSelectedBook();
-    return;
+    return true;
   }
 
   // Left and Right page. On this hardware ButtonNavigator maps them as aliases of
@@ -904,207 +954,319 @@ void LibraryListActivity::loop() {
   // is an exact place. Its end deliberately has no such shortcut — a page's size
   // is only known once drawn, so a jump there would land near the last book
   // rather than on it, which is not what "last page" promises.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Right) && (tabsFocused || count > 0)) {
-    if (tabsFocused) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Right) && (tabsFocused() || count > 0)) {
+    if (tabsFocused()) {
       cycleSortOrder(/*forward=*/true);
     } else {
       nextPage();
     }
-    return;
+    return true;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Left) && (tabsFocused || count > 0)) {
-    if (tabsFocused) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left) && (tabsFocused() || count > 0)) {
+    if (tabsFocused()) {
       cycleSortOrder(/*forward=*/false);
     } else if (mappedInput.getHeldTime() >= kHoldMs) {
       // The visited-page history is a path; jumping off it makes those
       // boundaries meaningless, exactly as the letter jump does.
-      selectedIndex = 0;
-      topIndex = 0;
+      n.selected = 1;
+      n.top = 0;
       pageStarts.clear();
       requestUpdate();
     } else {
       previousPage();
     }
-    return;
+    return true;
   }
 
-  // Scrolling keeps the selection inside the window, using the row count the last
-  // frame actually held. One frame stale and self-correcting, which is the only
-  // honest option when row heights depend on the titles being shown.
   // The list PAGES, it does not scroll. On e-ink moving one row costs the same
   // full-panel refresh as turning a whole page, so scrolling spends the panel's
   // most expensive operation on its smallest possible result. Up and Down move
   // within the page; at an edge they turn it and land on the far row, so the
   // reader never loses the sense of a fixed frame.
   if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
-    if (tabsFocused) {
+    if (tabsFocused()) {
       // already at the top
-    } else if (selectedIndex == 0 && !degraded) {
+    } else if (n.selected == 1 && !degraded) {
       // Degraded hides the strip, so it must not take focus either: cycling
       // orders behind a hidden strip would repaint the same walk-order list
       // under a different title.
-      tabsFocused = true;
-      tabCursor = sFavoritesView ? kFavTab : sortTabIndex(sSortOrder);
+      n.selected = 0;
+      tabCursor = activeTab();
       requestUpdate();
-    } else if (selectedIndex > topIndex) {
-      selectedIndex--;
+    } else if (n.selected - 1 > n.top) {
+      n.selected--;
       requestUpdate();
-    } else if (topIndex > 0) {
+    } else if (n.top > 0) {
       previousPage(/*selectLast=*/true);
     }
+    return true;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Down) && count > 0) {
-    if (tabsFocused) {
-      tabsFocused = false;
+    if (tabsFocused()) {
+      n.selected = 1;
       requestUpdate();
-    } else if (selectedIndex < topIndex + visibleRows - 1 && selectedIndex < count - 1) {
-      selectedIndex++;
+    } else if (n.selected - 1 < n.top + n.visibleRows - 1 && n.selected - 1 < count - 1) {
+      n.selected++;
       requestUpdate();
-    } else if (topIndex + visibleRows < count) {
+    } else if (n.top + n.visibleRows < count) {
       nextPage();
     }
+    return true;
   }
+
+  return false;
+}
+
+// Touch routing for the modal grid: handleCustomInput consumes the whole pass
+// while a mode is up, so the base's routeListTouch never runs — the app's hit
+// rects (letters, mode line) are routed here instead.
+void LibraryListActivity::routeModalTouch() {
+  const auto route = UiAppHost::routeTouch(mappedInput, /*withLongPress=*/true);
+  if (route.routed && app.invalidated()) requestUpdate();
 }
 
 // The sort strip: every mode visible at once, the active one underlined. On a
 // panel that refreshes whole, showing the alternatives costs nothing per frame
 // and saves a menu round-trip to discover them.
-void LibraryListActivity::drawSortTabs(const int top) {
-  const int width = renderer.getScreenWidth();
-  const int lineH = renderer.getLineHeight(SMALL_FONT_ID);
-  const int height = lineH + 8;
-
-  // No band fill. On a 1-bit panel the dithered grey is a literal checkerboard,
-  // and it is the same pattern the selected row uses — two things competing for
-  // the eye with one texture. The pill alone carries the state.
-
-  // Equal-width slots, as in Settings, so the tabs do not shift as labels change.
-  const int slot = width / kTabSlots;
+//
+// The band is a fui::tabBar — which is what makes the pills tappable — with
+// the shelf's own two-state treatment: focused, the cursor's pill inverts
+// (the strongest signal this panel has that Left/Right now belong to the
+// strip); unfocused, the active VIEW carries a plain underline, so the list
+// keeps the reader's attention. No band fill: on a 1-bit panel the dithered
+// grey is a literal checkerboard, the same pattern the selected row uses.
+void LibraryListActivity::buildSortTabs(UiScreen& screen) {
+  fui::TabItem tabs[kTabSlots];
   for (int i = 0; i < kTabSlots; i++) {
     if (i == kFavTab) {
       // A drawn mark, not a word: nothing to translate, and it is the same
       // star the favorite rows carry, so the strip teaches the marker.
-      constexpr int starW = 16;
-      const int x = i * slot + (slot - starW) / 2;
-      const int iconY = top + 4 + (lineH - starW) / 2;
-      const bool selected = tabsFocused ? i == tabCursor : sFavoritesView;
-      if (selected && tabsFocused) {
-        renderer.fillRoundedRect(x - 6, top + 2, starW + 12, height - 4, 4, Color::Black);
-        renderer.drawIconInverted(icon_star_16_bits, x, iconY, starW);
-      } else {
-        renderer.drawIcon(icon_star_16_bits, x, iconY, starW);
-      }
-      if (selected && !tabsFocused) renderer.fillRect(x, top + 4 + lineH + 1, starW, 1, true);
-      continue;
+      tabs[i].icon = fui::bitmapFromIcon(icon_star_16_fui);
+    } else {
+      tabs[i].label = tabLabelFor(i);
     }
-    const char* label = tabLabelFor(i);
-    const int w = renderer.getTextWidth(SMALL_FONT_ID, label);
-    // The active Titles tab carries its direction as a small drawn triangle, so
-    // direction is never hidden state. Drawn with fillRect rather than a font
-    // glyph: ▴/▾ are not guaranteed in this face at this size, and a 7-pixel
-    // triangle needs no glyph coverage at all.
-    const bool activeTitles = i == kTitlesTab && sortTabIndex(sSortOrder) == kTitlesTab;
-    // An active query filters every view, so its tab says so: the same
-    // state-on-the-tab idiom as the triangle, a dot for "filtered".
-    const bool queryDot = i == kSearchTab && !query.empty();
-    constexpr int triW = 7;
-    constexpr int triH = 4;
-    constexpr int triGap = 5;
-    constexpr int dotW = 5;
-    const int blockW = activeTitles ? w + triGap + triW : (queryDot ? w + triGap + dotW : w);
-    const int x = i * slot + (slot - blockW) / 2;
+    tabs[i].value = static_cast<int16_t>(i);
     // Focused, the cursor marks the pill; unfocused, the active VIEW does —
     // which is ★ while the favorites view is on, not the sort composing it.
-    const bool selected =
-        tabsFocused ? i == tabCursor : (!sFavoritesView && i != kSearchTab && sortTabIndex(sSortOrder) == i);
+    tabs[i].selected = tabsFocused()    ? i == tabCursor
+                       : sFavoritesView ? i == kFavTab
+                                        : (i != kSearchTab && sortTabIndex(sSortOrder) == i);
+  }
 
-    // Focused, the pill inverts, which is the strongest signal this panel has
-    // that Left/Right now belong to the strip. Unfocused it stays a plain
-    // underline, so the list keeps the reader's attention.
-    if (selected && tabsFocused) {
-      renderer.fillRoundedRect(x - 6, top + 2, blockW + 12, height - 4, 4, Color::Black);
+  fui::TabBarProps props;
+  props.tabs = tabs;
+  props.count = kTabSlots;
+  props.action = ACTION_TAB;
+  props.inputMask = fui::InputTouch | fui::InputLongPress;
+  props.text = screen.theme().smallText;
+  props.tabInset = fui::Insets{2, 0, 2, 0};
+  props.contentInset = fui::Insets{2, 6, 2, 6};
+  props.minTouchSize = screen.theme().minTouchSize;
+
+  fui::StyleSet styles;
+  styles.explicitlySet = true;
+  styles.normal.foreground = fui::Paint::solid(fui::Color::Black);
+  if (tabsFocused()) {
+    styles.selected.background = fui::Paint::solid(fui::Color::Black);
+    styles.selected.foreground = fui::Paint::solid(fui::Color::White);
+    styles.selected.radius = 4;
+  } else {
+    styles.selected.foreground = fui::Paint::solid(fui::Color::Black);
+    props.selectedUnderline = 1;
+  }
+  styles.focused = styles.selected;
+  styles.active = styles.selected;
+  props.tabStyles = styles;
+
+  const fui::Rect band = screen.takeTop(LIBRARY_TABS_HEIGHT);
+  fui::tabBar(screen.frame(), band, props);
+
+  // The two state decorations no component slot carries, drawn on the band
+  // through the same target. The active Titles tab tells its direction as a
+  // small triangle, so direction is never hidden state; an active query
+  // filters every view, so its tab says so with a dot — the same
+  // state-on-the-tab idiom.
+  const int16_t slot = static_cast<int16_t>(band.width / kTabSlots);
+  const int16_t lineH = screen.target().lineHeight(props.text.font);
+  const bool activeTitles = sortTabIndex(sSortOrder) == kTitlesTab;
+  if (activeTitles) {
+    const int16_t w = screen.target().measureText(props.text.font, tabLabelFor(kTitlesTab), props.text).width;
+    const int16_t x = static_cast<int16_t>(band.x + kTitlesTab * slot + (slot - w) / 2 + w + 5);
+    const int16_t midY = static_cast<int16_t>(band.y + 2 + (lineH + 4) / 2);
+    constexpr int16_t triW = 7;
+    constexpr int16_t triH = 4;
+    const fui::Paint ink = fui::Paint::solid(fui::Color::Black);
+    if (sTitleDescending) {
+      screen.target().triangle(fui::Point{x, static_cast<int16_t>(midY - triH / 2)},
+                               fui::Point{static_cast<int16_t>(x + triW), static_cast<int16_t>(midY - triH / 2)},
+                               fui::Point{static_cast<int16_t>(x + triW / 2), static_cast<int16_t>(midY + triH / 2)},
+                               ink);
+    } else {
+      screen.target().triangle(fui::Point{static_cast<int16_t>(x + triW / 2), static_cast<int16_t>(midY - triH / 2)},
+                               fui::Point{x, static_cast<int16_t>(midY + triH / 2)},
+                               fui::Point{static_cast<int16_t>(x + triW), static_cast<int16_t>(midY + triH / 2)}, ink);
     }
-    renderer.drawText(SMALL_FONT_ID, x, top + 4, label, !(selected && tabsFocused));
-    if (activeTitles) {
-      // Four one-pixel rows stack into ▴ (A-Z) or ▾ (Z-A), centred beside the
-      // label, in the same colour as the text so it survives the inverted pill.
-      const bool dark = !(selected && tabsFocused);
-      const int triX = x + w + triGap;
-      const int triY = top + 4 + (lineH - triH) / 2;
-      for (int row = 0; row < triH; row++) {
-        const int rowW = sTitleDescending ? triW - 2 * row : 1 + 2 * row;
-        renderer.fillRect(triX + (triW - rowW) / 2, triY + row, rowW, 1, dark);
-      }
-    }
-    if (queryDot) {
-      // The rounded rect at radius 2 on a 5-px square is a circle at this
-      // size; same colour as the text so it survives the inverted pill.
-      renderer.fillRoundedRect(x + w + triGap, top + 4 + (lineH - dotW) / 2, dotW, dotW, 2,
-                               !(selected && tabsFocused) ? Color::Black : Color::White);
-    }
-    if (selected && !tabsFocused) renderer.fillRect(x, top + 4 + lineH + 1, blockW, 1, true);
+  }
+  if (!query.empty()) {
+    const int16_t w = screen.target().measureText(props.text.font, tabLabelFor(kSearchTab), props.text).width;
+    const int16_t x = static_cast<int16_t>(band.x + kSearchTab * slot + (slot - w) / 2 + w + 5);
+    constexpr int16_t dotW = 5;
+    const int16_t y = static_cast<int16_t>(band.y + 2 + (lineH + 4 - dotW) / 2);
+    screen.target().fill(fui::Rect{x, y, dotW, dotW}, fui::Paint::solid(fui::Color::Black), 2);
   }
 }
 
-void LibraryListActivity::render(RenderLock&&) {
-  // The menu paints over the retained frame — no clear, no page redraw, the
-  // same overlay idiom Settings uses for its popups.
-  if (popup.processRender(renderer, mappedInput)) return;
-  renderer.clearScreen();
-  const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
-  const char* title = detailsView ? tr(STR_LIBRARY_MENU_DETAILS)
-                      // The ★ view announces itself: a list that changes under an unchanged
-                      // title reads as an indexing bug — it did, on the device.
-                      : sFavoritesView ? tr(STR_LIBRARY_SORT_FAVORITES)
-                      : degraded       ? tr(STR_LIBRARY_TITLE_UNSORTED)
-                                       : sortOrderLabel();
-  if (mappedInput.hasTouchHardware()) {
-    TouchHeaderBackButton::draw(renderer, uiTarget, header, title, true);
-  } else {
-    GUI.drawHeader(renderer, header, title);
-  }
+// The list itself. Only the visible window is materialized — strings and
+// ListItems for at most one page — and the window is laid out with the same
+// accumulation the widget uses (uniform rows, shorter section headers), so
+// the page the reader sees is exactly the page navigation counts. The widget
+// then receives the window as a list that fits whole: count = what was built,
+// topIndex = 0, and the true position stays in the activity's ListNav.
+void LibraryListActivity::buildRows(UiScreen& screen) {
+  auto& n = activeNav();
+  const int count = rowCount();
+  // Sorted by author, the permutation already places one author's books
+  // consecutively, so grouping costs one header row per run and no extra
+  // pass. The author then appears once above the run instead of under every
+  // title, which is what makes the shelf answer "what else has this person
+  // written".
+  const bool grouped = currentOrder() == library::SortOrder::AuthorAsc;
 
-  if (detailsView) {
-    measureRows();
-    drawDetails();
-  } else if (letterGrid) {
-    drawLetterGrid();
-  } else if (rowCount() == 0) {
-    // The strip stays visible over an empty FILTERED view — it is the way out.
-    // Only a card with no books at all drops it: there is nothing to sort.
-    if (!degraded && index.bookCount() > 0) {
-      measureRows();
-      drawSortTabs(tabsTop);
+  fui::ListProps props;
+  props.action = ACTION_ROW;
+  props.inputMask = fui::InputTouch | fui::InputLongPress;
+  props.labelText = screen.theme().bodyText;
+  // One line per title, truncated by the widget. Decided with upstream: "more
+  // books in the screen, even if half the name is hidden" — the SDK-side
+  // per-item height follow-up brings the wrapped titles back.
+  props.labelText.maxLines = 1;
+  // Author headings never carried a rule; whitespace and proximity group.
+  props.headerUnderline = false;
+  // The position readout carries "where am I"; a scroll track beside it would
+  // say the same thing twice.
+  props.scrollIndicator = false;
+  const auto rowType = grouped ? UiListRowType::SingleLine : UiListRowType::WithSubtitle;
+  props.rowHeight = uiListRowHeight(screen.theme(), rowType);
+  if (props.rowGap < 0) props.rowGap = screen.theme().listRowGap;
+
+  const fui::Rect band = screen.body();
+  const int16_t rowH = props.rowHeight;
+  const int16_t rowGap = props.rowGap;
+  const uint16_t visibleCap = fui::listVisibleRows(band, rowH, rowGap);
+  // Header geometry, mirroring components/lists/list.h exactly: header row =
+  // small line + 4, sectionGap above every non-first header.
+  const int16_t headerLh = screen.target().lineHeight(screen.theme().smallText.font);
+  const int16_t headerH = static_cast<int16_t>(headerLh + 4);
+
+  if (n.top < 0) n.top = 0;
+  if (n.top > count - 1) n.top = count - 1;
+
+  // The window buffers are sized once per build and never grow while items
+  // hold pointers into them: c_str() stability is what makes the borrow safe.
+  const size_t cap = static_cast<size_t>(visibleCap) + 1;
+  if (winTitles.size() < cap) winTitles.resize(cap);
+  if (winAuthors.size() < cap) winAuthors.resize(cap);
+  if (winHeaders.size() < cap) winHeaders.resize(cap);
+  winItems.clear();
+  if (winItems.capacity() < cap * 2) winItems.reserve(cap * 2);
+
+  const fui::BitmapRef bookIcon = listIconFor(UIIcon::Book);
+  const fui::BitmapRef starIcon = fui::bitmapFromIcon(icon_star_24_fui);
+
+  int16_t cursorY = 0;
+  int books = 0;
+  int headers = 0;
+  int selItem = -1;
+  int lastBookItem = -1;
+  const int displayEntry = n.selected > 0 ? n.selected - 1 : 0;
+  for (int entry = n.top; entry < count; entry++) {
+    bool isFavorite = false;
+    std::string& title = winTitles[static_cast<size_t>(books)];
+    std::string& author = winAuthors[static_cast<size_t>(books)];
+    rowTextFor(entry, title, author, &isFavorite);
+
+    // The first row of a page always carries its heading: without it a page
+    // can open on books whose author was named on the page before.
+    const bool startsGroup =
+        grouped && !author.empty() && (books == 0 || author != winAuthors[static_cast<size_t>(books - 1)]);
+
+    // Fit check, mirroring the widget's own accumulation — a heading is never
+    // emitted without the book it names (the widget's height break would
+    // strand it as a trailing orphan).
+    const int itemIdx = static_cast<int>(winItems.size());
+    int16_t needed = static_cast<int16_t>(rowH);
+    if (startsGroup) {
+      const int16_t pad = itemIdx != 0 ? props.sectionGap : 0;
+      needed = static_cast<int16_t>(needed + pad + headerH + rowGap);
     }
-    // The empty ★ view teaches the gesture that fills it.
-    renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2,
-                              sFavoritesView ? tr(STR_LIBRARY_FAVORITES_EMPTY) : tr(STR_LIBRARY_EMPTY));
-  } else {
-    measureRows();
-    if (!degraded) drawSortTabs(tabsTop);
-    drawRows();
+    const int bookItemIdx = itemIdx + (startsGroup ? 1 : 0);
+    if (cursorY + needed > band.height || books >= static_cast<int>(visibleCap) ||
+        bookItemIdx >= static_cast<int>(visibleCap)) {
+      break;
+    }
+
+    if (startsGroup) {
+      // Written surname-first, as a catalogue does: the shelf is ORDERED by
+      // surname, and printing "Anton Chekhov" above a run that sits between
+      // Chateaubriand and Crane makes the order look arbitrary. Only in author
+      // order: elsewhere the natural spelling reads better.
+      // Into its OWN storage, NOT back into the author slot: the run
+      // comparison above reads the next row's author straight from the index,
+      // so "Xun, Lu" would never match "Lu Xun" and every row after a heading
+      // would start a fresh group.
+      std::string& heading = winHeaders[static_cast<size_t>(headers++)];
+      heading = author;
+      const size_t lastSpace = heading.find_last_of(' ');
+      if (lastSpace != std::string::npos && lastSpace + 1 < heading.size()) {
+        heading = heading.substr(lastSpace + 1) + ", " + heading.substr(0, lastSpace);
+      }
+      fui::ListItem header;
+      header.isHeader = true;
+      header.label = heading.c_str();
+      winItems.push_back(header);
+      const int16_t pad = itemIdx != 0 ? props.sectionGap : 0;
+      cursorY = static_cast<int16_t>(cursorY + pad + headerH + rowGap);
+    }
+
+    fui::ListItem item;
+    item.label = title.c_str();
+    if (!grouped && !author.empty()) item.subtitle = author.c_str();
+    // The mark replaces the row's book icon outright: the icon is decoration
+    // every row shares, the star is information, and reusing the slot moves
+    // no text. Skipped in the ★ view itself, where every row would carry it
+    // and it would say nothing.
+    item.icon = (isFavorite && !sFavoritesView) ? starIcon : bookIcon;
+    item.actionValue = static_cast<int16_t>(entry);
+    if (entry == displayEntry) selItem = static_cast<int>(winItems.size());
+    lastBookItem = static_cast<int>(winItems.size());
+    winItems.push_back(item);
+    cursorY = static_cast<int16_t>(cursorY + rowH + rowGap);
+    books++;
   }
 
-  if (!detailsView) drawPositionReadout();
-  // The bottom pair delivers Left/Right on this hardware, so labelling it
-  // "Up/Down" describes the wrong axis — it pages the list, switches tabs and
-  // steps letters, none of which is vertical. mapLabels takes previous/next
-  // precisely so the caller can say what they do here. On the details page the
-  // pair does nothing, and an empty label is how the hints bar says so.
-  const char* prevLabel = detailsView ? "" : (letterGrid || tabsFocused ? tr(STR_DIR_LEFT) : tr(STR_LIBRARY_PAGE_PREV));
-  const char* nextLabel =
-      detailsView ? "" : (letterGrid || tabsFocused ? tr(STR_DIR_RIGHT) : tr(STR_LIBRARY_PAGE_NEXT));
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), prevLabel, nextLabel);
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer();
+  // Report how much this page held, for the next input pass to page by; then
+  // put the ring back inside it. previousPage() aims past the end because a
+  // page's size is only known once built — clamp now that it has been.
+  n.visibleRows = books > 0 ? books : 1;
+  if (n.selected - 1 >= n.top + n.visibleRows) {
+    n.selected = n.top + n.visibleRows;
+    selItem = lastBookItem;
+  }
+  if (n.selected - 1 >= count) n.selected = count;
+
+  props.items = winItems.data();
+  props.count = static_cast<uint16_t>(winItems.size());
+  props.topIndex = 0;
+  props.selectedIndex = static_cast<int16_t>(selItem);
+  screen.list(props);
 }
 
 // The Details page: where the stored author provenance finally reaches the
 // reader. Every record has carried "where this author string came from" since
 // the first build — folder name, the book's own reading cache, or the EPUB
 // package document — and this is the screen honest enough to say it.
-void LibraryListActivity::drawDetails() {
-  const uint16_t ordinal = index.ordinalForRow(currentOrder(), static_cast<uint16_t>(rowFor(selectedIndex)));
+void LibraryListActivity::buildDetails(UiScreen& screen) {
+  const uint16_t ordinal = index.ordinalForRow(currentOrder(), static_cast<uint16_t>(rowFor(selectedEntry())));
   library::ClixRecord record{};
   if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) return;
 
@@ -1122,20 +1284,28 @@ void LibraryListActivity::drawDetails() {
   if (slash != std::string::npos && slash > 0) folder = path.substr(0, slash);
 
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int x = LIBRARY_SIDE_PADDING;
-  const int w = renderer.getScreenWidth() - 2 * LIBRARY_SIDE_PADDING;
-  int y = listTop;
+  auto& target = screen.target();
+  const fui::Rect body = screen.body();
+  const int16_t x = static_cast<int16_t>(body.x + LIBRARY_SIDE_PADDING);
+  const int16_t w = static_cast<int16_t>(body.width - 2 * LIBRARY_SIDE_PADDING);
+  int16_t y = body.y;
 
-  const auto titleLines = renderer.wrappedText(UI_12_FONT_ID, title.c_str(), w, 3);
-  for (const auto& line : titleLines) {
-    renderer.drawText(UI_12_FONT_ID, x, y, line.c_str(), true);
-    y += renderer.getLineHeight(UI_12_FONT_ID);
-  }
+  // Each block is drawn into a rect of exactly its measured height, so the
+  // vertical centering layoutText applies is a no-op and the page reads
+  // top-down as it always has.
+  const auto drawBlock = [&](const char* text, fui::TextStyle style) {
+    const fui::Size size = fui::measureWrappedText(target, text, style, w);
+    target.text(fui::Rect{x, y, w, size.height}, text, style);
+    y = static_cast<int16_t>(y + size.height);
+  };
+
+  fui::TextStyle titleStyle = screen.theme().titleText;
+  titleStyle.maxLines = 3;
+  drawBlock(title.c_str(), titleStyle);
 
   if (!author.empty()) {
-    y += metrics.verticalSpacing;
-    renderer.drawText(UI_10_FONT_ID, x, y, renderer.truncatedText(UI_10_FONT_ID, author.c_str(), w).c_str(), true);
-    y += renderer.getLineHeight(UI_10_FONT_ID);
+    y = static_cast<int16_t>(y + metrics.verticalSpacing);
+    drawBlock(author.c_str(), screen.theme().bodyText);
     const char* provenance = nullptr;
     switch (library::recordAuthorProvenance(record)) {
       case library::CLIX_AUTHOR_FROM_FOLDER:
@@ -1152,21 +1322,15 @@ void LibraryListActivity::drawDetails() {
         // would claim more than the build knows.
         break;
     }
-    if (provenance != nullptr) {
-      renderer.drawText(SMALL_FONT_ID, x, y, provenance, true);
-      y += renderer.getLineHeight(SMALL_FONT_ID);
-    }
+    if (provenance != nullptr) drawBlock(provenance, screen.theme().smallText);
   }
 
   // The file itself: name, folder, then size and format on one line.
-  y += metrics.verticalSpacing * 2;
-  const auto nameLines = renderer.wrappedText(SMALL_FONT_ID, name.c_str(), w, 2);
-  for (const auto& line : nameLines) {
-    renderer.drawText(SMALL_FONT_ID, x, y, line.c_str(), true);
-    y += renderer.getLineHeight(SMALL_FONT_ID);
-  }
-  renderer.drawText(SMALL_FONT_ID, x, y, renderer.truncatedText(SMALL_FONT_ID, folder.c_str(), w).c_str(), true);
-  y += renderer.getLineHeight(SMALL_FONT_ID);
+  y = static_cast<int16_t>(y + metrics.verticalSpacing * 2);
+  fui::TextStyle fileStyle = screen.theme().smallText;
+  fileStyle.maxLines = 2;
+  drawBlock(name.c_str(), fileStyle);
+  drawBlock(folder.c_str(), screen.theme().smallText);
 
   const char* formatToken = "";
   switch (library::recordFormat(record)) {
@@ -1193,154 +1357,182 @@ void LibraryListActivity::drawDetails() {
   } else {
     snprintf(sizeLine, sizeof(sizeLine), "%u KB %s", static_cast<unsigned>(record.fileSize / 1024u), formatToken);
   }
-  renderer.drawText(SMALL_FONT_ID, x, y, sizeLine, true);
+  drawBlock(sizeLine, screen.theme().smallText);
 }
 
-void LibraryListActivity::drawRows() {
-  measureRows();
-  const int count = rowCount();
-  if (topIndex > selectedIndex) topIndex = selectedIndex;
-  const int width = renderer.getScreenWidth();
-  const int textX = LIBRARY_SIDE_PADDING + LIBRARY_ICON_SIZE + LIBRARY_ICON_GAP;
-  const int textW = width - textX - LIBRARY_SIDE_PADDING;
+// The A-Z grid, as components: one button per PRESENT letter (an absent letter
+// is simply not drawn — its slot stays empty and nothing moves, because the
+// grid's positions come from the alphabet's index), and two mode buttons above
+// it. Buttons are what make the letters tappable.
+void LibraryListActivity::buildLetterGrid(UiScreen& screen) {
+  const fui::Rect body = screen.body();
+  auto& target = screen.target();
+  const int cell = (body.width - 2 * LIBRARY_SIDE_PADDING) / kLetterCols;
+  const int rows = (kLetterCount + kLetterCols - 1) / kLetterCols;
+  const int cellH = body.height / (rows + 1);
 
-  // Rows have content-dependent heights, so the page is filled by accumulating
-  // them rather than by dividing the band. A row is only drawn if it fits whole:
-  // a half-drawn row at the bottom edge would look like a rendering fault.
-  std::string title;
-  std::string author;
-  std::string previousAuthor;
-  // Sorted by author, the permutation already places one author's books
-  // consecutively, so grouping costs one comparison per row and no extra pass.
-  // The author then appears once above the run instead of under every title,
-  // which is what makes the shelf answer "what else has this person written".
-  const bool grouped = currentOrder() == library::SortOrder::AuthorAsc;
-  // Proximity does the grouping. The heading sits close to the books it names and
-  // far from the run above, so it reads as belonging downward; equal gaps on both
-  // sides — which is what the first cut had — leave it attached to nothing.
-  const int groupGapAbove = LIBRARY_ROW_PADDING + 6;
-  const int groupGapBelow = 3;
-  const int groupH = grouped ? authorLineH + groupGapAbove + groupGapBelow : 0;
-  // Books indent under their heading, so the left edge itself says which rows
-  // belong to whom, without a box or a rule doing the work.
-  const int groupIndent = grouped ? LIBRARY_ICON_GAP : 0;
+  // Both modes shown, not just the active one. Printing only the current choice
+  // hides the fact that there IS a choice — the same reason the sort strip lists
+  // every mode. Sorted by author the choice is which WORD the letters mean;
+  // sorted by title it is the direction. "A-Z"/"Z-A" are letter symbols rather
+  // than words, so they carry no translation.
+  const bool titleOrder = currentOrder() != library::SortOrder::AuthorAsc;
+  const char* labels[2] = {titleOrder ? "A-Z" : tr(STR_LIBRARY_JUMP_GIVEN),
+                           titleOrder ? "Z-A" : tr(STR_LIBRARY_JUMP_SURNAME)};
+  const int active = titleOrder ? (sTitleDescending ? 1 : 0) : (jumpByGivenName ? 0 : 1);
+  const fui::TextStyle modeText = screen.theme().smallText;
+  const int16_t modeH = target.lineHeight(modeText.font);
+  constexpr int16_t kModeGap = 20;
+  int16_t labelW[2];
+  for (int i = 0; i < 2; i++) labelW[i] = target.measureText(modeText.font, labels[i], modeText).width;
+  int16_t mx = static_cast<int16_t>(body.x + (body.width - (labelW[0] + labelW[1] + kModeGap)) / 2);
+  const int16_t modeY = static_cast<int16_t>(body.y + 2);
 
-  int y = listTop;
-  int drawn = 0;
-  for (int entry = topIndex; entry < count; entry++) {
-    bool isFavorite = false;
-    rowTextFor(entry, title, author, &isFavorite);
-    const auto lines = renderer.wrappedText(UI_10_FONT_ID, title.c_str(), textW, LIBRARY_TITLE_LINES);
-    const int height = rowHeightFor(static_cast<int>(lines.size()), !grouped && !author.empty());
-    // The first row of a page always carries its heading: without it a page can
-    // open on books whose author was named on the page before.
-    const bool startsGroup = grouped && !author.empty() && (drawn == 0 || author != previousAuthor);
-    previousAuthor = author;
-    if (drawn > 0 && y + height + (startsGroup ? groupH : 0) > listTop + listHeight) break;
-
-    if (startsGroup) {
-      // Written surname-first, as a catalogue does. The shelf is ORDERED by
-      // surname, and printing "Anton Chekhov" above a run that sits between
-      // Chateaubriand and Crane makes the order look arbitrary — the eye reads
-      // F, A, S while the sort follows Ch, Ch, Cr. Inverting it here makes the ordering
-      // visible in the column that carries it. Only in author order: elsewhere
-      // the natural spelling reads better.
-      // Into a local, NOT back into `author`. Overwriting it cost the first row of
-      // every group its separator: the comparison below reads the next row's
-      // author straight from the index, so "Xun, Lu" never matched
-      // "Lu Xun" and the rows read as separate groups.
-      std::string inverted = author;
-      const size_t lastSpace = inverted.find_last_of(' ');
-      if (lastSpace != std::string::npos && lastSpace + 1 < inverted.size()) {
-        inverted = inverted.substr(lastSpace + 1) + ", " + inverted.substr(0, lastSpace);
-      }
-      // The first heading on a page needs no gap above it: the strip already
-      // bounds the list there.
-      const int gap = drawn == 0 ? 2 : groupGapAbove;
-      const std::string heading = renderer.truncatedText(SMALL_FONT_ID, inverted.c_str(), textW);
-      renderer.drawText(SMALL_FONT_ID, LIBRARY_SIDE_PADDING, y + gap, heading.c_str(), true);
-      y += authorLineH + gap + groupGapBelow;
+  for (int i = 0; i < 2; i++) {
+    // Focused, the active choice inverts — the strongest signal this panel has
+    // that Left/Right are about to change it. Unfocused it keeps an underline,
+    // so the line stays quiet while the grid holds attention.
+    const bool on = i == active;
+    fui::ButtonProps mode;
+    mode.label = labels[i];
+    mode.action = ACTION_LETTER_MODE;
+    mode.value = static_cast<int16_t>(i);
+    mode.text = modeText;
+    mode.styles.explicitlySet = true;
+    mode.styles.normal.foreground = fui::Paint::solid(fui::Color::Black);
+    if (on && letterCursor < 0) {
+      mode.styles.normal.background = fui::Paint::solid(fui::Color::Black);
+      mode.styles.normal.foreground = fui::Paint::solid(fui::Color::White);
+      mode.styles.normal.radius = 4;
     }
-
-    if (entry == selectedIndex) {
-      renderer.fillRoundedRect(LIBRARY_SIDE_PADDING / 2 + groupIndent, y, width - LIBRARY_SIDE_PADDING - groupIndent,
-                               height - 2, 6, Color::LightGray);
+    const fui::Rect slot{static_cast<int16_t>(mx - 5), static_cast<int16_t>(modeY - 2),
+                         static_cast<int16_t>(labelW[i] + 10), static_cast<int16_t>(modeH + 4)};
+    screen.button(mode, slot);
+    if (on && letterCursor >= 0) {
+      target.fill(fui::Rect{mx, static_cast<int16_t>(modeY + modeH + 1), labelW[i], 1},
+                  fui::Paint::solid(fui::Color::Black));
     }
-    if (isFavorite && !sFavoritesView) {
-      // The mark replaces the row's book icon outright: the icon is decoration
-      // every row shares, the star is information, and reusing the slot moves
-      // no text. Skipped in the ★ view itself, where every row would carry it
-      // and it would say nothing.
-      renderer.drawIcon(icon_star_24_bits, LIBRARY_SIDE_PADDING + groupIndent, y + (height - LIBRARY_ICON_SIZE) / 2,
-                        LIBRARY_ICON_SIZE);
-    } else {
-      // The pre-rotated copy, not listIcons' book: the raw blit shows that one
-      // lying on its side (see gen_star_icon.py).
-      renderer.drawIcon(icon_book_upright_24_bits, LIBRARY_SIDE_PADDING + groupIndent,
-                        y + (height - LIBRARY_ICON_SIZE) / 2, LIBRARY_ICON_SIZE);
-    }
-
-    int textY = y + LIBRARY_ROW_PADDING / 2;
-    for (const auto& line : lines) {
-      renderer.drawText(UI_10_FONT_ID, textX + groupIndent, textY, line.c_str(), true);
-      textY += titleLineH;
-    }
-    if (!grouped && !author.empty()) {
-      const std::string fitted = renderer.truncatedText(SMALL_FONT_ID, author.c_str(), textW);
-      renderer.drawText(SMALL_FONT_ID, textX, textY, fitted.c_str(), true);
-    }
-
-    y += height;
-    drawn++;
-
-    // Dotted, not solid: on a 1-bit panel every-other-pixel is how a rule reads
-    // grey. A solid line would outweigh the text it separates.
-    // Within a group only. Across a boundary the whitespace and the next heading
-    // already separate, and a rule there would compete with them.
-    std::string nextAuthor;
-    bool sameGroup = true;
-    if (grouped && entry + 1 < count) {
-      std::string nextTitle;
-      rowTextFor(entry + 1, nextTitle, nextAuthor);
-      sameGroup = nextAuthor == author;
-    }
-    if (entry + 1 < count && sameGroup && y + LIBRARY_ROW_PADDING < listTop + listHeight) {
-      for (int x = LIBRARY_SIDE_PADDING + groupIndent; x < width - LIBRARY_SIDE_PADDING; x += 2) {
-        renderer.drawPixel(x, y - 1, true);
-      }
-    }
+    mx = static_cast<int16_t>(mx + labelW[i] + kModeGap);
   }
 
-  // Report how much this screen held, for the next input pass to page by. Do NOT
-  // adjust topIndex here: loop() already scrolled it to contain the selection
-  // before asking for this frame, and correcting it afterwards meant the frame
-  // just drawn could omit the selected row — which is what made Up/Down followed
-  // by Left/Right jump somewhere unrelated.
-  visibleRows = drawn > 0 ? drawn : 1;
-  // previousPage() aims past the end because a page's size is only known once it
-  // has been measured; clamp now that it has been.
-  if (selectedIndex >= topIndex + visibleRows) selectedIndex = topIndex + visibleRows - 1;
-  if (selectedIndex >= count) selectedIndex = count - 1;
+  // Centre the block itself: 26 letters do not fill 5 columns evenly, and laid
+  // out from the left margin the remainder all landed on one side.
+  const int16_t top = static_cast<int16_t>(body.y + cellH / 2);
+  const int16_t originX = static_cast<int16_t>(body.x + (body.width - kLetterCols * cell) / 2);
+  char letterLabels[kLetterCount][2];
+
+  for (int i = 0; i < kLetterCount; i++) {
+    // A letter no book starts with is simply not drawn. Three attempts at
+    // showing an unavailable letter failed on a 1-bit panel: a smaller font
+    // read as inconsistent typography, dithering the glyph erased it, and an
+    // outlined cursor said nothing legible. Not drawing it says it plainly.
+    if (!(lettersPresent & (1u << i))) continue;
+    const int16_t cx = static_cast<int16_t>(originX + (i % kLetterCols) * cell);
+    const int16_t cy = static_cast<int16_t>(top + (i / kLetterCols) * cellH);
+    const int16_t pillW = static_cast<int16_t>(cell - 6);
+    const int16_t pillH = static_cast<int16_t>(cellH - 6);
+    letterLabels[i][0] = static_cast<char>('A' + i);
+    letterLabels[i][1] = '\0';
+    fui::ButtonProps key;
+    key.label = letterLabels[i];
+    key.action = ACTION_LETTER;
+    key.value = static_cast<int16_t>(i);
+    key.text = screen.theme().bodyText;
+    key.styles.explicitlySet = true;
+    key.styles.normal.foreground = fui::Paint::solid(fui::Color::Black);
+    if (i == letterCursor) {
+      key.styles.normal.background = fui::Paint::solid(fui::Color::Black);
+      key.styles.normal.foreground = fui::Paint::solid(fui::Color::White);
+      key.styles.normal.radius = 4;
+    }
+    screen.button(key, fui::Rect{static_cast<int16_t>(cx + (cell - pillW) / 2), cy, pillW, pillH});
+  }
 }
 
-// "12/69" at the bottom right: which book is selected, out of how many.
+void LibraryListActivity::buildScreen(UiScreen& screen) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  // Content below the header band, above the button hints. The strip sits
+  // between the header and the list, and takes its height from the list
+  // rather than overlaying it.
+  screen.setContentMargin(
+      fui::Insets{static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput)), 0,
+                  static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
+
+  if (detailsView) {
+    screen.spacer(static_cast<int16_t>(LIBRARY_TABS_HEIGHT + metrics.verticalSpacing));
+    buildDetails(screen);
+    return;
+  }
+  if (letterGrid) {
+    screen.spacer(static_cast<int16_t>(LIBRARY_TABS_HEIGHT + metrics.verticalSpacing));
+    buildLetterGrid(screen);
+    return;
+  }
+
+  // The strip stays visible over an empty FILTERED view — it is the way out.
+  // Only a card with no books at all drops it: there is nothing to sort.
+  if (!degraded && index.bookCount() > 0) {
+    buildSortTabs(screen);
+    screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  }
+
+  if (rowCount() == 0) {
+    // The empty ★ view teaches the gesture that fills it.
+    screen.centeredText(sFavoritesView ? tr(STR_LIBRARY_FAVORITES_EMPTY) : tr(STR_LIBRARY_EMPTY),
+                        screen.theme().bodyText);
+    return;
+  }
+  buildRows(screen);
+}
+
+void LibraryListActivity::render(RenderLock&&) {
+  // The menu paints over the retained frame — no clear, no page redraw, the
+  // same overlay idiom Settings uses for its popups.
+  if (popup.processRender(renderer, mappedInput)) return;
+  renderer.clearScreen();
+  const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
+  const char* title = detailsView ? tr(STR_LIBRARY_MENU_DETAILS)
+                      // The ★ view announces itself: a list that changes under an unchanged
+                      // title reads as an indexing bug — it did, on the device.
+                      : sFavoritesView ? tr(STR_LIBRARY_SORT_FAVORITES)
+                      : degraded       ? tr(STR_LIBRARY_TITLE_UNSORTED)
+                                       : sortOrderLabel();
+  if (mappedInput.hasTouchHardware()) {
+    TouchHeaderBackButton::draw(renderer, uiTarget, header, title, true);
+  } else {
+    GUI.drawHeader(renderer, header, title);
+  }
+
+  renderUi();
+
+  if (!detailsView) drawPositionReadout();
+  // The bottom pair delivers Left/Right on this hardware, so labelling it
+  // "Up/Down" describes the wrong axis — it pages the list, switches tabs and
+  // steps letters, none of which is vertical. mapLabels takes previous/next
+  // precisely so the caller can say what they do here. On the details page the
+  // pair does nothing, and an empty label is how the hints bar says so.
+  const char* prevLabel =
+      detailsView ? "" : (letterGrid || tabsFocused() ? tr(STR_DIR_LEFT) : tr(STR_LIBRARY_PAGE_PREV));
+  const char* nextLabel =
+      detailsView ? "" : (letterGrid || tabsFocused() ? tr(STR_DIR_RIGHT) : tr(STR_LIBRARY_PAGE_NEXT));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), prevLabel, nextLabel);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  renderer.displayBuffer();
+}
+
+// "12/69 books" at the bottom right: which book is selected, out of how many.
 //
-// NOT a page count. Rows are variable height, so how many fit depends on the
-// titles currently on screen — a page total derived from that grows and shrinks
-// as you scroll, which is exactly the "6/6 then 8/8" the first version produced.
-// The book position is stable by construction, and it answers the question the
-// reader actually has: how far in am I, and how much is left.
+// NOT a page count. How many rows fit can vary with the view (author headings
+// consume band height), so a page total grows and shrinks as you scroll —
+// exactly the "6/6 then 8/8" the first version produced. The book position is
+// stable by construction, and it answers the question the reader actually
+// has: how far in am I, and how much is left.
 void LibraryListActivity::drawPositionReadout() {
   const int count = rowCount();
   if (count <= 0) return;
 
-  // "12/60 books", not "2/6". Rows are variable height, so how many fit depends
-  // on the titles currently on screen; a page total derived from that grows and
-  // shrinks as you scroll. Real pages would mean wrapping every title up front,
-  // once per sort order — the per-render cost this screen is built to avoid, for
-  // a number that answers a smaller question than "how far in am I".
   char buf[32];
-  snprintf(buf, sizeof(buf), tr(STR_LIBRARY_POSITION), selectedIndex + 1, count);
+  snprintf(buf, sizeof(buf), tr(STR_LIBRARY_POSITION), selectedEntry() + 1, count);
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int width = renderer.getTextWidth(SMALL_FONT_ID, buf);
   const int x = renderer.getScreenWidth() - width - LIBRARY_SIDE_PADDING;
@@ -1348,35 +1540,37 @@ void LibraryListActivity::drawPositionReadout() {
   renderer.drawText(SMALL_FONT_ID, x, y, buf, true);
 }
 
-// Page boundaries are content-dependent, so they cannot be computed from an
-// index — a page holds as many rows as its own titles allow. They are therefore
+// Page boundaries are content-dependent in author order (headings consume band
+// height), so they cannot be computed from an index. They are therefore
 // remembered as the reader moves forward, which makes going back exact rather
 // than an estimate that would drift on every turn.
 void LibraryListActivity::nextPage() {
   const int count = rowCount();
-  const int next = topIndex + visibleRows;
+  auto& n = activeNav();
+  const int next = n.top + n.visibleRows;
   if (next >= count) return;
   if (pageStarts.empty()) pageStarts.push_back(0);
-  pageStarts.push_back(next);
-  topIndex = next;
-  selectedIndex = topIndex;
+  pageStarts.push_back(static_cast<uint16_t>(next));
+  n.top = next;
+  n.selected = next + 1;
   requestUpdate();
 }
 
 void LibraryListActivity::previousPage(const bool selectLast) {
-  if (topIndex <= 0) return;
+  auto& n = activeNav();
+  if (n.top <= 0) return;
   if (pageStarts.size() > 1) {
     pageStarts.pop_back();
-    topIndex = pageStarts.back();
+    n.top = pageStarts.back();
   } else {
     // No recorded history — the reader jumped here by some other route. Fall back
     // to a screenful back; it may not land on a boundary this pass, but the next
     // render re-measures and nothing is lost.
-    topIndex = std::max(0, topIndex - visibleRows);
-    pageStarts.assign(1, topIndex);
+    n.top = std::max(0, n.top - n.visibleRows);
+    pageStarts.assign(1, static_cast<uint16_t>(n.top));
   }
-  // selectLast is only known to be right after the render that measures this
-  // page, so aim past the end and let drawRows clamp it.
-  selectedIndex = selectLast ? topIndex + visibleRows - 1 : topIndex;
+  // selectLast is only known to be right after the build that measures this
+  // page, so aim past the end and let buildRows clamp it.
+  n.selected = (selectLast ? n.top + n.visibleRows - 1 : n.top) + 1;
   requestUpdate();
 }
