@@ -18,10 +18,9 @@
 //
 // Rows render through fui::list on a UiTabListActivity ring (0 = the sort
 // strip, 1..N = the books), which is what brings touch: rows, tabs, the A-Z
-// grid and the search strip all register FreeInkUI hit rects. Titles are
-// truncated to one line by the widget — accepted upstream ("more books in the
-// screen, even if half the name is hidden"); per-item heights come back with
-// the SDK-side follow-up.
+// grid and the search strip all register FreeInkUI hit rects. Titles wrap
+// over up to three lines with per-item row heights, measured by the widget —
+// a short title costs a short row, as the pre-conversion renderer did.
 //
 // Only the visible window of rows is materialized per render (title/author
 // strings and ListItems), so nothing proportional to the library is held: the

@@ -1153,10 +1153,11 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch | fui::InputLongPress;
   props.labelText = screen.theme().bodyText;
-  // One line per title, truncated by the widget. Decided with upstream: "more
-  // books in the screen, even if half the name is hidden" — the SDK-side
-  // per-item height follow-up brings the wrapped titles back.
-  props.labelText.maxLines = 1;
+  // Up to three lines per title, each row taking exactly the lines its title
+  // uses — the pre-conversion shelf's render, carried by the widget's
+  // measured per-item heights. No setting, as before: a short title costs a
+  // short row, so density is only paid where a title needs it.
+  props.labelText.maxLines = 3;
   // Author headings never carried a rule; whitespace and proximity group.
   props.headerUnderline = false;
   // The position readout carries "where am I"; a scroll track beside it would
@@ -1174,6 +1175,14 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
   // small line + 4, sectionGap above every non-first header.
   const int16_t headerLh = screen.target().lineHeight(screen.theme().smallText.font);
   const int16_t headerH = static_cast<int16_t>(headerLh + 4);
+  // Label geometry for the widget's per-item growth, same arithmetic as its
+  // height pre-pass: the rows sit inside the theme's row inset, lose the side
+  // padding, the 24px icon and the text gap — what remains is the width a
+  // title wraps against.
+  const int16_t wrapLh = screen.target().lineHeight(props.labelText.font);
+  const int16_t sidePad = screen.theme().listSidePadding;
+  const int16_t labelAvail =
+      static_cast<int16_t>(band.width - 2 * screen.theme().listInset - 2 * sidePad - 24 - props.textGap);
 
   if (n.top < 0) n.top = 0;
   if (n.top > count - 1) n.top = count - 1;
@@ -1207,11 +1216,26 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
     const bool startsGroup =
         grouped && !author.empty() && (books == 0 || author != winAuthors[static_cast<size_t>(books - 1)]);
 
+    // This row's height, mirroring the widget's own pre-pass: a title that
+    // wraps grows the row by exactly the lines it uses. Subtitle rows grow on
+    // any wrap (their base height is sized for one title line); label-only
+    // rows (author order) keep the "would maxLines already fit rowH" gate.
+    int16_t itemH = rowH;
+    const bool hasSubtitle = !grouped && !author.empty();
+    if (labelAvail > 0 && (hasSubtitle || static_cast<int16_t>(wrapLh * props.labelText.maxLines) > rowH)) {
+      const auto& target = screen.target();
+      if (target.measureText(props.labelText.font, title.c_str(), props.labelText).width > labelAvail) {
+        const fui::Size wrapped = fui::measureWrappedText(target, title.c_str(), props.labelText, labelAvail);
+        const int16_t lines = wrapLh > 0 ? static_cast<int16_t>(wrapped.height / wrapLh) : 1;
+        if (lines > 1) itemH = static_cast<int16_t>(rowH + wrapLh * (lines - 1));
+      }
+    }
+
     // Fit check, mirroring the widget's own accumulation — a heading is never
     // emitted without the book it names (the widget's height break would
     // strand it as a trailing orphan).
     const int itemIdx = static_cast<int>(winItems.size());
-    int16_t needed = static_cast<int16_t>(rowH);
+    int16_t needed = static_cast<int16_t>(itemH);
     if (startsGroup) {
       const int16_t pad = itemIdx != 0 ? props.sectionGap : 0;
       needed = static_cast<int16_t>(needed + pad + headerH + rowGap);
@@ -1257,7 +1281,7 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
     if (entry == displayEntry) selItem = static_cast<int>(winItems.size());
     lastBookItem = static_cast<int>(winItems.size());
     winItems.push_back(item);
-    cursorY = static_cast<int16_t>(cursorY + rowH + rowGap);
+    cursorY = static_cast<int16_t>(cursorY + itemH + rowGap);
     books++;
   }
 
