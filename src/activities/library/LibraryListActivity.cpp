@@ -1421,7 +1421,13 @@ void LibraryListActivity::buildLetterGrid(UiScreen& screen) {
   const char* labels[2] = {titleOrder ? "A-Z" : tr(STR_LIBRARY_JUMP_GIVEN),
                            titleOrder ? "Z-A" : tr(STR_LIBRARY_JUMP_SURNAME)};
   const int active = titleOrder ? (sTitleDescending ? 1 : 0) : (jumpByGivenName ? 0 : 1);
-  const fui::TextStyle modeText = screen.theme().smallText;
+  // Centered — and deliberately NOT all-default: screen.button() substitutes
+  // the body font for any style that fails textStyleUnset, which is how these
+  // labels once rendered a size up from their measured width and ellipsized
+  // ("By first …"). Centering both marks the style caller-owned and is what
+  // the button does with it anyway.
+  fui::TextStyle modeText = screen.theme().smallText;
+  modeText.align = fui::TextAlign::Center;
   const int16_t modeH = target.lineHeight(modeText.font);
   constexpr int16_t kModeGap = 20;
   int16_t labelW[2];
