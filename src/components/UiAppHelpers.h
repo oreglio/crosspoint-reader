@@ -3,9 +3,12 @@
 #include <FreeInkUIGfxRenderer.h>
 #include <FreeInkUIIcon.h>
 
+#include <atomic>
+
 #include "MappedInputManager.h"
 #include "components/UIScale.h"
 #include "components/UITheme.h"
+#include "components/UIThemeTokens.h"
 #include "components/icons/listIcons.h"
 
 // Shared glue for activities hosting a FreeInkApp: the font-bound render
@@ -16,6 +19,45 @@
 // convention but shorter, since a finger hold has no button travel to absorb.
 // Rows must opt in via InputLongPress to receive it.
 inline constexpr unsigned long UI_TOUCH_LONG_PRESS_MS = 500;
+
+// One app-wide ThemeTokens instance shared by every FreeInkApp via
+// setThemeRef, so per-app copies (~1.5KB each, and one per stacked activity)
+// aren't pure heap waste. Refreshed on every screen entry, so theme or font
+// changes between activities re-derive it.
+//
+// Backed by a small pool + an atomic cell (FreeInkApp::setThemeRef() takes a
+// pointer to the cell, not to a ThemeTokens instance directly) rather than a
+// single instance overwritten in place: refreshSharedUiThemeTokens() below
+// always builds the new tokens into whichever pool slot the cell does NOT
+// currently reference, then does one atomic store. Every app sharing the
+// cell picks up the change on its next theme() call, and nothing ever
+// dereferences an instance mid-overwrite — a plain in-place assignment could
+// be observed by the render task as a torn mix of old and new fields.
+inline std::atomic<const freeink::ui::ThemeTokens*>& sharedUiThemeCell() {
+  static std::atomic<const freeink::ui::ThemeTokens*> cell{nullptr};
+  return cell;
+}
+
+// Rebuilds the shared tokens for `target` and atomically publishes them via
+// sharedUiThemeCell().
+inline const freeink::ui::ThemeTokens& refreshSharedUiThemeTokens(const freeink::ui::GfxRendererTarget& target) {
+  static freeink::ui::ThemeTokens pool[2];
+  auto& cell = sharedUiThemeCell();
+  const auto* current = cell.load(std::memory_order_relaxed);
+  freeink::ui::ThemeTokens* next = (current == &pool[0]) ? &pool[1] : &pool[0];
+  *next = uiThemeTokens(target);
+  cell.store(next, std::memory_order_release);
+  return *next;
+}
+
+// Refresh the shared tokens from the active UITheme + this target's fonts and
+// point the app at them. Replaces the per-app `app.setTheme(...)` copies for
+// screens hosted through UiAppHost.
+template <typename App>
+inline void applySharedUiTheme(App& app, const freeink::ui::GfxRendererTarget& target) {
+  refreshSharedUiThemeTokens(target);
+  app.setThemeRef(&sharedUiThemeCell());
+}
 
 // Bind the uiScale fonts before FreeInkApp's constructor derives its theme
 // metrics from the body font's line height.
@@ -151,7 +193,15 @@ inline void drawUiTabBar(freeink::ui::Screen<MaxInteractions>& screen, freeink::
   }
 }
 
-inline freeink::ui::InputSnapshot touchSnapshotFrom(const MappedInputManager& mappedInput) {
+// withLongPress gates the ≥UI_TOUCH_LONG_PRESS_MS release classification.
+// Upstream defaults it to false; here it defaults to TRUE because the
+// existing single-argument callers were written against the always-classify
+// behavior and their rows carry InputTouch only. Screens hosted through
+// UiAppHost opt in per-activity instead (wantsTouchLongPress) and must give
+// every interactive element an InputLongPress mask, or a slow tap on it is
+// dropped by routing (findTouch has no InputTouch fallback for long-press).
+inline freeink::ui::InputSnapshot touchSnapshotFrom(const MappedInputManager& mappedInput,
+                                                    const bool withLongPress = true) {
   freeink::ui::InputSnapshot snap{};
   int tx = 0;
   int ty = 0;
