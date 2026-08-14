@@ -584,6 +584,12 @@ bool handleGlobalPowerButtonAction(const CrossPointSettings::SHORT_PWRBTN action
         return false;
       }
       return startGlobalSyncProgress();
+    case CrossPointSettings::SHORT_PWRBTN::SHORTCUT_LIBRARY:
+      if (activityManager.canSnapshotForSleepOverlay()) {
+        return false;
+      }
+      activityManager.goToLibrary();
+      return true;
     case CrossPointSettings::SHORT_PWRBTN::FILE_TRANSFER:
       if (activityManager.canSnapshotForSleepOverlay()) {
         return false;
