@@ -26,7 +26,6 @@
 // Only the visible window of rows is materialized per render (title/author
 // strings and ListItems), so nothing proportional to the library is held: the
 // index streams from SD and the screen keeps at most a page of strings.
-inline constexpr int LIBRARY_TABS_HEIGHT = 24;
 inline constexpr int LIBRARY_SIDE_PADDING = 12;
 
 class LibraryListActivity final : public UiTabListActivity {
@@ -150,6 +149,7 @@ class LibraryListActivity final : public UiTabListActivity {
   // triangle and the Search "filtered" dot), drawn on the band through the
   // same FreeInkUI target.
   void buildSortTabs(UiScreen& screen);
+  int16_t sortStripHeight(UiScreen& screen) const;
   // The list itself. Materializes ListItems and their strings for the visible
   // window only, mirroring the widget's own layout math (heights, section
   // headers in author order) so the page the reader sees is exactly the page

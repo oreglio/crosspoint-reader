@@ -54,7 +54,16 @@ constexpr unsigned long kHoldMs = 800;
 LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     // Long-press opt-in: rows and tabs carry InputLongPress, so a held tap is
     // the row menu / the tab's secondary action, mirroring the button holds.
-    : UiTabListActivity("Library", renderer, mappedInput, /*wantsTouchLongPress=*/true) {}
+    : UiTabListActivity("Library", renderer, mappedInput, /*wantsTouchLongPress=*/true) {
+  // The uiScale spec binds the SMALL slot to the body font so settings rows
+  // read label and value at one size — which on this screen erases the
+  // title/author hierarchy the shelf exists for. Rebind THIS activity's small
+  // slot to the real small font: author lines, strip labels, group headings
+  // and the grid's mode line keep their pre-conversion size. Scoped to the
+  // shelf — each activity owns its target, and the shared theme tokens carry
+  // slot numbers, not sizes.
+  uiTarget.setFont(fui::GfxRendererTarget::FONT_SMALL, SMALL_FONT_ID);
+}
 
 // The strip's tab order, which is also the cycle order: the ★ first, then
 // Recent, Titles, Author, Search. The star sits at the edge because a glyph
@@ -1025,6 +1034,14 @@ void LibraryListActivity::routeModalTouch() {
   if (route.routed && app.invalidated()) requestUpdate();
 }
 
+// The strip takes its height from its own label line, exactly as the manual
+// renderer did (lineH + 8): a fixed band clipped the labels as soon as the UI
+// scale grew the small font. Details and the grid consume the same height so
+// every mode's content starts at the same y.
+int16_t LibraryListActivity::sortStripHeight(UiScreen& screen) const {
+  return static_cast<int16_t>(screen.target().lineHeight(screen.theme().smallText.font) + 8);
+}
+
 // The sort strip: every mode visible at once, the active one underlined. On a
 // panel that refreshes whole, showing the alternatives costs nothing per frame
 // and saves a menu round-trip to discover them.
@@ -1078,7 +1095,7 @@ void LibraryListActivity::buildSortTabs(UiScreen& screen) {
   styles.active = styles.selected;
   props.tabStyles = styles;
 
-  const fui::Rect band = screen.takeTop(LIBRARY_TABS_HEIGHT);
+  const fui::Rect band = screen.takeTop(sortStripHeight(screen));
   fui::tabBar(screen.frame(), band, props);
 
   // The two state decorations no component slot carries, drawn on the band
@@ -1459,12 +1476,12 @@ void LibraryListActivity::buildScreen(UiScreen& screen) {
                   static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
 
   if (detailsView) {
-    screen.spacer(static_cast<int16_t>(LIBRARY_TABS_HEIGHT + metrics.verticalSpacing));
+    screen.spacer(static_cast<int16_t>(sortStripHeight(screen) + metrics.verticalSpacing));
     buildDetails(screen);
     return;
   }
   if (letterGrid) {
-    screen.spacer(static_cast<int16_t>(LIBRARY_TABS_HEIGHT + metrics.verticalSpacing));
+    screen.spacer(static_cast<int16_t>(sortStripHeight(screen) + metrics.verticalSpacing));
     buildLetterGrid(screen);
     return;
   }
