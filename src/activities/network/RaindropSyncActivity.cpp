@@ -5,6 +5,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <LibraryState.h>
+#include <Memory.h>
 #include <WiFi.h>
 
 #include <cstring>
@@ -172,8 +173,22 @@ bool RaindropSyncActivity::syncOnePage(std::string& cursor, bool& morePages) {
     return false;
   }
 
-  // Own scope so the parsed page never coexists with an article download
-  // buffer. One page is at most a few KB (MANIFEST_PAGE_LIMIT small items).
+  // Parse the page into a compact array and free the JsonDocument BEFORE any
+  // download: each article opens a fresh TLS handshake whose RSA-4096 bignum
+  // verify needs contiguous heap the resident doc was starving (0x4290 =
+  // RSA_PUBLIC_FAILED + MPI_ALLOC_FAILED, seen on device).
+  struct PageItem {
+    char name[96];
+    uint32_t bytes;
+  };
+  // ~2.5 KB, too big for the task stack; freed when the page ends.
+  auto items = makeUniqueNoThrow<PageItem[]>(MANIFEST_PAGE_LIMIT);
+  if (!items) {
+    LOG_ERR("RDROP", "OOM: %d page items", MANIFEST_PAGE_LIMIT);
+    errorMessage_ = tr(STR_RAINDROP_SYNC_FAILED);
+    return false;
+  }
+  int itemCount = 0;
   {
     JsonDocument doc;
     const DeserializationError err = deserializeJson(doc, manifestFile);
@@ -191,9 +206,6 @@ bool RaindropSyncActivity::syncOnePage(std::string& cursor, bool& morePages) {
     }
 
     for (JsonVariantConst item : doc["items"].as<JsonArrayConst>()) {
-      if (pollCancel()) {
-        return false;
-      }
       const char* status = item["status"] | "";
       const char* fileName = item["file"] | "";
       // Tombstones are ignored in this first version: the sync only ever adds.
@@ -205,17 +217,35 @@ bool RaindropSyncActivity::syncOnePage(std::string& cursor, bool& morePages) {
         failedCount_++;
         continue;
       }
-      downloadArticle(fileName, item["bytes"] | 0);
-
-      const unsigned long now = millis();
-      if (now - lastProgressDrawMs_ > 1500) {
-        lastProgressDrawMs_ = now;
-        requestUpdate(true);
+      if (itemCount >= MANIFEST_PAGE_LIMIT) {
+        break;
       }
+      strlcpy(items[itemCount].name, fileName, sizeof(items[itemCount].name));
+      items[itemCount].bytes = item["bytes"] | 0;
+      itemCount++;
     }
 
     cursor = (doc["cursor"] | "");
     morePages = (doc["more"] | false);
+  }
+
+  for (int i = 0; i < itemCount; i++) {
+    if (pollCancel()) {
+      return false;
+    }
+    currentArticle_ = items[i].name;
+    const unsigned long now = millis();
+    if (now - lastProgressDrawMs_ > 1000) {
+      lastProgressDrawMs_ = now;
+      requestUpdate(true);
+    }
+    downloadArticle(items[i].name, items[i].bytes);
+    // A server or TLS problem fails every item the same way: stop burning the
+    // battery after ten straight failures with nothing fetched.
+    if (failedCount_ >= 10 && newCount_ == 0 && keptCount_ == 0) {
+      errorMessage_ = tr(STR_RAINDROP_SYNC_FAILED);
+      return false;
+    }
   }
   return true;
 }
@@ -268,6 +298,7 @@ void RaindropSyncActivity::runSync() {
     pageCount_++;
   }
 
+  currentArticle_.clear();
   state_ = State::COMPLETE;
   requestUpdate();
 }
@@ -291,6 +322,8 @@ void RaindropSyncActivity::loop() {
 }
 
 void RaindropSyncActivity::render(RenderLock&&) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
   renderer.clearScreen();
 
@@ -298,10 +331,12 @@ void RaindropSyncActivity::render(RenderLock&&) {
   GUI.drawHeader(renderer, header, tr(STR_RAINDROP_SYNC));
 
   const auto lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  const auto smallLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
   const auto centerY = (pageHeight - lineHeight) / 2;
+  const int contentWidth = pageWidth - 2 * metrics.contentSidePadding;
 
   char counts[96];
-  snprintf(counts, sizeof(counts), "%d %s · %d %s · %d %s", newCount_, tr(STR_RAINDROP_COUNT_NEW), keptCount_,
+  snprintf(counts, sizeof(counts), "%d %s   %d %s   %d %s", newCount_, tr(STR_RAINDROP_COUNT_NEW), keptCount_,
            tr(STR_RAINDROP_COUNT_KEPT), failedCount_, tr(STR_RAINDROP_COUNT_FAILED));
 
   switch (state_) {
@@ -309,21 +344,40 @@ void RaindropSyncActivity::render(RenderLock&&) {
       break;
     case State::CONNECTED:
     case State::SYNCING: {
-      renderer.drawCenteredText(UI_10_FONT_ID, centerY - lineHeight, tr(STR_RAINDROP_SYNCING));
-      renderer.drawCenteredText(SMALL_FONT_ID, centerY + lineHeight / 2, counts);
+      renderer.drawCenteredText(UI_10_FONT_ID, centerY - 2 * lineHeight, tr(STR_RAINDROP_SYNCING));
+      if (!currentArticle_.empty()) {
+        const auto shown = renderer.truncatedText(SMALL_FONT_ID, currentArticle_.c_str(), contentWidth);
+        renderer.drawCenteredText(SMALL_FONT_ID, centerY - smallLineHeight / 2, shown.c_str());
+      }
+      renderer.drawCenteredText(UI_10_FONT_ID, centerY + lineHeight, counts);
       const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), "", "", "");
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
       break;
     }
     case State::COMPLETE: {
-      renderer.drawCenteredText(UI_10_FONT_ID, centerY - lineHeight, tr(STR_RAINDROP_SYNC_DONE));
-      renderer.drawCenteredText(SMALL_FONT_ID, centerY + lineHeight / 2, counts);
+      // A cancelled or partly-failed run still lands here: the summary tells
+      // the truth through the counters rather than pretending all-or-nothing.
+      const char* title = cancelRequested_   ? tr(STR_CANCEL)
+                          : failedCount_ > 0 ? tr(STR_RAINDROP_SYNC_DONE_PARTIAL)
+                                             : tr(STR_RAINDROP_SYNC_DONE);
+      renderer.drawCenteredText(UI_10_FONT_ID, centerY - 2 * lineHeight, title);
+      renderer.drawCenteredText(UI_10_FONT_ID, centerY, counts);
+      if (newCount_ > 0) {
+        renderer.drawCenteredText(SMALL_FONT_ID, centerY + 2 * lineHeight, tr(STR_RAINDROP_SEE_LIBRARY));
+      }
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OK), "", "");
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
       break;
     }
     case State::ERROR: {
-      renderer.drawCenteredText(UI_10_FONT_ID, centerY - lineHeight, errorMessage_.c_str());
+      renderer.drawCenteredText(UI_10_FONT_ID, centerY - 2 * lineHeight, tr(STR_RAINDROP_SYNC_FAILED));
+      if (!errorMessage_.empty()) {
+        const auto shown = renderer.truncatedText(SMALL_FONT_ID, errorMessage_.c_str(), contentWidth);
+        renderer.drawCenteredText(SMALL_FONT_ID, centerY - smallLineHeight / 2, shown.c_str());
+      }
+      if (newCount_ + keptCount_ + failedCount_ > 0) {
+        renderer.drawCenteredText(SMALL_FONT_ID, centerY + lineHeight, counts);
+      }
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OK), "", "");
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
       break;

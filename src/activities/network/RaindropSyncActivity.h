@@ -52,4 +52,6 @@ class RaindropSyncActivity : public Activity {
   bool cancelRequested_ = false;
   unsigned long lastProgressDrawMs_ = 0;
   std::string errorMessage_;
+  // Article being fetched right now, drawn on the download screen.
+  std::string currentArticle_;
 };
