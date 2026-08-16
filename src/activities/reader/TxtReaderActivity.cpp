@@ -82,19 +82,34 @@ size_t parseAndWrapLines(const uint8_t* buffer, size_t chunkSize, size_t fileOff
         line.clear();
         break;
       }
-      size_t breakPos = line.length();
-      while (breakPos > 0 && renderer.getTextWidth(fontId, line.substr(0, breakPos).c_str()) > vw) {
-        size_t spacePos = line.rfind(' ', breakPos - 1);
-        if (spacePos != std::string::npos && spacePos > 0) {
-          breakPos = spacePos;
-        } else {
-          breakPos--;
-          while (breakPos > 0 && (line[breakPos] & 0xC0) == 0x80) breakPos--;
-        }
+      // Forward word accumulation: measure growing prefixes up to the first
+      // word that overflows. Cost is bounded by the screen width, not the
+      // paragraph length — the old back-from-the-end scan re-measured near
+      // full-line prefixes per step, which never finished on the single-line
+      // multi-thousand-character paragraphs Markdown articles are made of.
+      size_t breakPos = 0;
+      size_t candidate = 0;
+      while (true) {
+        const size_t nextSpace = line.find(' ', candidate);
+        const size_t end = (nextSpace == std::string::npos) ? line.length() : nextSpace;
+        if (renderer.getTextWidth(fontId, line.substr(0, end).c_str()) > vw) break;
+        breakPos = end;
+        if (nextSpace == std::string::npos) break;
+        candidate = nextSpace + 1;
       }
       if (breakPos == 0) {
-        breakPos = 1;
-        while (breakPos < line.length() && (line[breakPos] & 0xC0) == 0x80) breakPos++;
+        // First word alone is wider than the screen: cut at the last
+        // codepoint boundary that still fits.
+        size_t end = 1;
+        while (end < line.length() && (line[end] & 0xC0) == 0x80) end++;
+        size_t lastFit = end;
+        while (end <= line.length()) {
+          if (renderer.getTextWidth(fontId, line.substr(0, end).c_str()) > vw) break;
+          lastFit = end;
+          end++;
+          while (end < line.length() && (line[end] & 0xC0) == 0x80) end++;
+        }
+        breakPos = lastFit;
       }
       outLines.push_back(line.substr(0, breakPos));
       size_t skipChars = breakPos;
