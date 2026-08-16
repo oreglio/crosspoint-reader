@@ -6,13 +6,14 @@
 
 struct Rect;
 
-// Downloads the article shelf published by a CrossDrop companion server
-// (Raindrop.io sync) into /Articles as .md files the Library indexes.
+// Syncs the article shelf published by a CrossDrop companion server
+// (Raindrop.io) into /Articles as .md files the Library indexes.
 //
-// Runs only from a minimal network boot (NetworkBootTarget::RAINDROP_SYNC):
-// connect wifi, walk the paginated manifest, fetch what is missing or changed,
-// then reboot back to the full app. Nothing here survives the sync session, so
-// the whole activity stays out of the steady-state RAM budget.
+// One request does the whole sync: the server packs every article newer than
+// the device's stored cursor into a STORED zip (single TLS handshake — the
+// per-article scheme died of repeated-handshake OOM on the C3), which is then
+// unpacked with the EPUB zip reader. Runs only from a minimal network boot
+// (NetworkBootTarget::RAINDROP_SYNC) and reboots back to the full app.
 class RaindropSyncActivity : public Activity {
  public:
   explicit RaindropSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
@@ -21,15 +22,13 @@ class RaindropSyncActivity : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
-  // The sync is synchronous and blocks the main loop until it completes, so
-  // the manager never polls this mid-transfer; it matters for the end screens.
-  bool preventAutoSleep() override { return state_ != State::COMPLETE && state_ != State::ERROR; }
-  bool skipLoopDelay() override { return state_ == State::CONNECTED; }
+  // The sync runs synchronously inside the wifi callback, so the manager only
+  // polls this on the end screens, where staying awake keeps the summary up.
+  bool preventAutoSleep() override { return state_ == State::SYNCING; }
 
  private:
   enum class State {
     WIFI_SELECTION,
-    CONNECTED,  // wifi up, sync not started yet: next loop() runs it
     SYNCING,
     COMPLETE,
     ERROR,
@@ -37,21 +36,20 @@ class RaindropSyncActivity : public Activity {
 
   void onWifiSelectionComplete(bool connected);
   void runSync();
-  // One manifest page: download, parse, fetch its articles. Returns false when
-  // the walk must stop (error or last page); `cursor` carries the pagination.
-  bool syncOnePage(std::string& cursor, bool& morePages);
-  bool downloadArticle(const std::string& fileName, size_t expectedBytes);
+  bool downloadBundle();
+  bool unpackBundle();
+  std::string readStoredCursor();
+  void storeCursor(const std::string& cursor);
   bool pollCancel();
 
   State state_ = State::WIFI_SELECTION;
-  // Counters drawn on the progress and summary screens.
   int newCount_ = 0;
-  int keptCount_ = 0;
   int failedCount_ = 0;
-  int pageCount_ = 0;
   bool cancelRequested_ = false;
-  unsigned long lastProgressDrawMs_ = 0;
+  bool unpacking_ = false;
+  size_t downloadedBytes_ = 0;
+  size_t totalBytes_ = 0;
   std::string errorMessage_;
-  // Article being fetched right now, drawn on the download screen.
+  // Article being extracted right now, drawn on the sync screen.
   std::string currentArticle_;
 };

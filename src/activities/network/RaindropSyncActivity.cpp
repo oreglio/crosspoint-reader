@@ -1,14 +1,14 @@
 #include "RaindropSyncActivity.h"
 
-#include <ArduinoJson.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <LibraryState.h>
-#include <Memory.h>
 #include <WiFi.h>
+#include <ZipFile.h>
 
 #include <cstring>
+#include <vector>
 
 #include "CrossPointSettings.h"
 #include "SilentRestart.h"
@@ -21,39 +21,15 @@
 namespace {
 
 constexpr char ARTICLES_DIR[] = "/Articles";
-constexpr char MANIFEST_TMP[] = "/.crosspoint/rdmanifest.tmp";
-// Items per manifest page. Small keeps the transient JsonDocument a few KB —
-// the walk never holds more than one page.
-constexpr int MANIFEST_PAGE_LIMIT = 25;
-// Guards against a cursor bug looping forever: 40 pages x 25 = 1000 articles,
-// matching the server's own first-sync cap.
-constexpr int MANIFEST_MAX_PAGES = 40;
+constexpr char BUNDLE_TMP[] = "/.crosspoint/rdbundle.tmp";
+constexpr char CURSOR_FILE[] = "/.crosspoint/raindrop-cursor.txt";
+constexpr char MANIFEST_ENTRY[] = "manifest.json";
+constexpr size_t EXTRACT_CHUNK = 2048;
 // Same contiguous-block gate the KOReader sync client applies before TLS.
 constexpr uint32_t MIN_FREE_HEAP_FOR_TLS = 35000;
 constexpr uint32_t MIN_MAX_ALLOC_HEAP_FOR_TLS = 20000;
 
-// Article filenames carry spaces and accents; the manifest sends them raw and
-// the URL path needs them percent-encoded. Unreserved characters pass through.
-std::string percentEncodePathSegment(const std::string& raw) {
-  static constexpr char kHexDigits[] = "0123456789ABCDEF";
-  std::string out;
-  out.reserve(raw.size() * 3);
-  for (const char c : raw) {
-    const bool unreserved = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' ||
-                            c == '.' || c == '_' || c == '~';
-    if (unreserved) {
-      out.push_back(c);
-    } else {
-      const auto byte = static_cast<uint8_t>(c);
-      out.push_back('%');
-      out.push_back(kHexDigits[byte >> 4]);
-      out.push_back(kHexDigits[byte & 0x0F]);
-    }
-  }
-  return out;
-}
-
-// The manifest is remote input: even with TLS verified, a compromised server
+// The bundle is remote input: even with TLS verified, a compromised server
 // must not be able to steer writes outside /Articles. Flat names only.
 bool isSafeArticleFileName(const char* name) {
   if (name[0] == '\0' || name[0] == '.') return false;
@@ -63,11 +39,50 @@ bool isSafeArticleFileName(const char* name) {
   return true;
 }
 
+// The cursor is base64url from the server, opaque to us: allow only its
+// alphabet so a corrupted file cannot inject query-string syntax.
+bool isSafeCursor(const std::string& cursor) {
+  if (cursor.empty() || cursor.size() > 32) return false;
+  for (const char c : cursor) {
+    const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+    if (!ok) return false;
+  }
+  return true;
+}
+
 std::string serverBaseUrl() {
   std::string base = SETTINGS.raindropServerUrl;
   while (!base.empty() && base.back() == '/') base.pop_back();
   return base;
 }
+
+// Captures the head of manifest.json — the server writes `cursor` in the
+// first bytes, so this never scales with the article count. Short-writes once
+// full, which lets readFileToStream stop early.
+class ManifestHeadSink final : public Print {
+ public:
+  size_t write(uint8_t c) override { return write(&c, 1); }
+  size_t write(const uint8_t* buffer, size_t size) override {
+    const size_t room = sizeof(head_) - 1 - used_;
+    const size_t take = size < room ? size : room;
+    memcpy(head_ + used_, buffer, take);
+    used_ += take;
+    head_[used_] = '\0';
+    return take;
+  }
+  std::string cursor() const {
+    const char* at = strstr(head_, "\"cursor\":\"");
+    if (at == nullptr) return {};
+    at += 10;
+    const char* end = strchr(at, '"');
+    if (end == nullptr) return {};
+    return std::string(at, end - at);
+  }
+
+ private:
+  char head_[256] = {};
+  size_t used_ = 0;
+};
 
 }  // namespace
 
@@ -76,17 +91,14 @@ RaindropSyncActivity::RaindropSyncActivity(GfxRenderer& renderer, MappedInputMan
 
 void RaindropSyncActivity::onEnter() {
   Activity::onEnter();
-  // No WiFi.mode() here: forcing STA before WifiSelectionActivity races its
-  // saved-network auto-connect (the OPDS flow, which works, lets the child
-  // own the radio state entirely).
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
 }
 
 void RaindropSyncActivity::onExit() {
   Activity::onExit();
-  if (Storage.exists(MANIFEST_TMP)) {
-    Storage.remove(MANIFEST_TMP);
+  if (Storage.exists(BUNDLE_TMP)) {
+    Storage.remove(BUNDLE_TMP);
   }
 #ifndef SIMULATOR
   if (WiFi.getMode() != WIFI_MODE_NULL) {
@@ -100,13 +112,22 @@ void RaindropSyncActivity::onExit() {
 }
 
 void RaindropSyncActivity::onWifiSelectionComplete(const bool connected) {
-  if (connected) {
-    state_ = State::CONNECTED;
-  } else {
+  if (!connected) {
     state_ = State::ERROR;
     errorMessage_ = tr(STR_WIFI_CONN_FAILED);
+    requestUpdate();
+    return;
   }
-  requestUpdate();
+  // The whole sync runs synchronously inside this callback, exactly like the
+  // OPDS browser's feed fetch: the render ritual below puts our own screen up
+  // before the blocking work. Deferring the work to loop() left the wifi
+  // child's last frame on screen with dead buttons (seen on device).
+  state_ = State::SYNCING;
+  if (requestUpdateAndWait() != RequestUpdateResult::Rendered) {
+    LOG_ERR("RDROP", "Sync screen could not be rendered before download");
+    requestUpdate(true);
+  }
+  runSync();
 }
 
 bool RaindropSyncActivity::pollCancel() {
@@ -117,143 +138,142 @@ bool RaindropSyncActivity::pollCancel() {
   return cancelRequested_;
 }
 
-bool RaindropSyncActivity::downloadArticle(const std::string& fileName, const size_t expectedBytes) {
-  const std::string localPath = std::string(ARTICLES_DIR) + "/" + fileName;
+std::string RaindropSyncActivity::readStoredCursor() {
+  HalFile file;
+  if (!Storage.openFileForRead("RDROP", CURSOR_FILE, file)) {
+    return {};
+  }
+  char buffer[40] = {};
+  const int got = file.read(reinterpret_cast<uint8_t*>(buffer), sizeof(buffer) - 1);
+  if (got <= 0) {
+    return {};
+  }
+  buffer[got] = '\0';
+  std::string cursor(buffer);
+  while (!cursor.empty() && (cursor.back() == '\n' || cursor.back() == '\r' || cursor.back() == ' ')) {
+    cursor.pop_back();
+  }
+  return isSafeCursor(cursor) ? cursor : std::string();
+}
 
-  // The manifest's byte size doubles as the change detector: the server
-  // rewrites an article (summary backfill) by growing it, so a matching size
-  // means the local copy is current. No sidecar state file needed.
-  if (Storage.exists(localPath.c_str())) {
-    HalFile existing;
-    if (Storage.openFileForRead("RDROP", localPath.c_str(), existing)) {
-      const size_t localSize = existing.size();
-      if (localSize == expectedBytes) {
-        keptCount_++;
-        return true;
-      }
-    }
+void RaindropSyncActivity::storeCursor(const std::string& cursor) {
+  if (!isSafeCursor(cursor)) {
+    return;
+  }
+  HalFile file;
+  if (!Storage.openFileForWrite("RDROP", CURSOR_FILE, file)) {
+    LOG_ERR("RDROP", "Could not persist sync cursor");
+    return;
+  }
+  file.write(reinterpret_cast<const uint8_t*>(cursor.c_str()), cursor.size());
+}
+
+bool RaindropSyncActivity::downloadBundle() {
+  std::string url = serverBaseUrl() + "/api/v1/bundle";
+  const std::string cursor = readStoredCursor();
+  if (!cursor.empty()) {
+    url += "?cursor=" + cursor;
   }
 
-  const std::string url = serverBaseUrl() + "/api/v1/articles/" + percentEncodePathSegment(fileName);
   HttpDownloader::DownloadOptions options;
   options.bearerToken = SETTINGS.raindropToken;
   options.shouldCancel = [this] { return pollCancel(); };
-  const auto result = HttpDownloader::downloadToFile(url, localPath, nullptr, &cancelRequested_, "", "", options);
+  unsigned long lastDrawMs = 0;
+  const auto result = HttpDownloader::downloadToFile(
+      url, BUNDLE_TMP,
+      [this, &lastDrawMs](const size_t downloaded, const size_t total) {
+        downloadedBytes_ = downloaded;
+        totalBytes_ = total;
+        mappedInput.update();
+        if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+          cancelRequested_ = true;
+        }
+        const unsigned long now = millis();
+        if (now - lastDrawMs > 1000) {
+          lastDrawMs = now;
+          requestUpdate(true);
+        }
+      },
+      &cancelRequested_, "", "", options);
   if (result != HttpDownloader::OK) {
-    LOG_ERR("RDROP", "Article download failed (%d): %s", static_cast<int>(result), fileName.c_str());
-    failedCount_++;
+    LOG_ERR("RDROP", "Bundle download failed (%d)", static_cast<int>(result));
+    errorMessage_ = tr(STR_RAINDROP_MANIFEST_FAILED);
     return false;
   }
-  newCount_++;
-  library::markShelfStaleIfBook(localPath.c_str());
   return true;
 }
 
-bool RaindropSyncActivity::syncOnePage(std::string& cursor, bool& morePages) {
-  morePages = false;
-
-  std::string manifestUrl = serverBaseUrl() + "/api/v1/manifest?limit=" + std::to_string(MANIFEST_PAGE_LIMIT);
-  if (!cursor.empty()) {
-    manifestUrl += "&cursor=" + percentEncodePathSegment(cursor);
-  }
-
-  HttpDownloader::DownloadOptions options;
-  options.bearerToken = SETTINGS.raindropToken;
-  options.shouldCancel = [this] { return pollCancel(); };
-  const auto result =
-      HttpDownloader::downloadToFile(manifestUrl, MANIFEST_TMP, nullptr, &cancelRequested_, "", "", options);
-  if (result != HttpDownloader::OK) {
+bool RaindropSyncActivity::unpackBundle() {
+  ZipFile zip{std::string(BUNDLE_TMP)};
+  if (!zip.open() || !zip.loadAllFileStatSlims()) {
+    LOG_ERR("RDROP", "Bundle is not a readable zip");
     errorMessage_ = tr(STR_RAINDROP_MANIFEST_FAILED);
     return false;
   }
 
-  HalFile manifestFile;
-  if (!Storage.openFileForRead("RDROP", MANIFEST_TMP, manifestFile)) {
-    errorMessage_ = tr(STR_RAINDROP_MANIFEST_FAILED);
-    return false;
-  }
-
-  // Parse the page into a compact array and free the JsonDocument BEFORE any
-  // download: each article opens a fresh TLS handshake whose RSA-4096 bignum
-  // verify needs contiguous heap the resident doc was starving (0x4290 =
-  // RSA_PUBLIC_FAILED + MPI_ALLOC_FAILED, seen on device).
-  struct PageItem {
-    char name[96];
-    uint32_t bytes;
-  };
-  // ~2.5 KB, too big for the task stack; freed when the page ends.
-  auto items = makeUniqueNoThrow<PageItem[]>(MANIFEST_PAGE_LIMIT);
-  if (!items) {
-    LOG_ERR("RDROP", "OOM: %d page items", MANIFEST_PAGE_LIMIT);
-    errorMessage_ = tr(STR_RAINDROP_SYNC_FAILED);
-    return false;
-  }
-  int itemCount = 0;
-  {
-    JsonDocument doc;
-    const DeserializationError err = deserializeJson(doc, manifestFile);
-    manifestFile.close();
-    Storage.remove(MANIFEST_TMP);
-    if (err) {
-      LOG_ERR("RDROP", "Manifest parse error: %s", err.c_str());
-      errorMessage_ = tr(STR_RAINDROP_MANIFEST_FAILED);
-      return false;
+  // Names are copied out: extraction reuses the zip handle per entry, and the
+  // enumeration's string_views borrow cache internals. ~100 bytes per article,
+  // freed when the sync ends.
+  std::vector<std::string> names;
+  names.reserve(64);
+  zip.enumerateFilePaths([&names](const std::string_view path) {
+    if (path != MANIFEST_ENTRY) {
+      names.emplace_back(path);
     }
-    if ((doc["schema"] | 0) != 1) {
-      LOG_ERR("RDROP", "Unsupported manifest schema %d", doc["schema"] | 0);
-      errorMessage_ = tr(STR_RAINDROP_MANIFEST_FAILED);
-      return false;
-    }
+  });
 
-    for (JsonVariantConst item : doc["items"].as<JsonArrayConst>()) {
-      const char* status = item["status"] | "";
-      const char* fileName = item["file"] | "";
-      // Tombstones are ignored in this first version: the sync only ever adds.
-      if (strcmp(status, "active") != 0 || fileName[0] == '\0') {
-        continue;
-      }
-      if (!isSafeArticleFileName(fileName)) {
-        LOG_ERR("RDROP", "Rejected unsafe article name from manifest");
-        failedCount_++;
-        continue;
-      }
-      if (itemCount >= MANIFEST_PAGE_LIMIT) {
-        break;
-      }
-      strlcpy(items[itemCount].name, fileName, sizeof(items[itemCount].name));
-      items[itemCount].bytes = item["bytes"] | 0;
-      itemCount++;
-    }
-
-    cursor = (doc["cursor"] | "");
-    morePages = (doc["more"] | false);
-  }
-
-  for (int i = 0; i < itemCount; i++) {
+  unsigned long lastDrawMs = 0;
+  for (const auto& name : names) {
     if (pollCancel()) {
+      zip.close();
       return false;
     }
-    currentArticle_ = items[i].name;
+    if (!isSafeArticleFileName(name.c_str())) {
+      LOG_ERR("RDROP", "Rejected unsafe bundle entry name");
+      failedCount_++;
+      continue;
+    }
+    currentArticle_ = name;
     const unsigned long now = millis();
-    if (now - lastProgressDrawMs_ > 1000) {
-      lastProgressDrawMs_ = now;
+    if (now - lastDrawMs > 1000) {
+      lastDrawMs = now;
       requestUpdate(true);
     }
-    downloadArticle(items[i].name, items[i].bytes);
-    // A server or TLS problem fails every item the same way: stop burning the
-    // battery after ten straight failures with nothing fetched.
-    if (failedCount_ >= 10 && newCount_ == 0 && keptCount_ == 0) {
-      errorMessage_ = tr(STR_RAINDROP_SYNC_FAILED);
-      return false;
+
+    const std::string destPath = std::string(ARTICLES_DIR) + "/" + name;
+    HalFile out;
+    if (!Storage.openFileForWrite("RDROP", destPath.c_str(), out)) {
+      LOG_ERR("RDROP", "Could not open %s for write", destPath.c_str());
+      failedCount_++;
+      continue;
+    }
+    const bool ok = zip.readFileToStream(name.c_str(), out, EXTRACT_CHUNK);
+    out.close();
+    if (!ok) {
+      LOG_ERR("RDROP", "Extraction failed: %s", name.c_str());
+      Storage.remove(destPath.c_str());
+      failedCount_++;
+      continue;
+    }
+    newCount_++;
+    library::markShelfStaleIfBook(destPath.c_str());
+  }
+
+  // The new cursor lives in the first bytes of manifest.json; persist it only
+  // when every entry landed, so a partial run retries from the old cursor.
+  if (failedCount_ == 0 && !cancelRequested_) {
+    ManifestHeadSink head;
+    zip.readFileToStream(MANIFEST_ENTRY, head, 128, /*allowEarlyStop=*/true);
+    const std::string cursor = head.cursor();
+    if (!cursor.empty()) {
+      storeCursor(cursor);
     }
   }
+  zip.close();
   return true;
 }
 
 void RaindropSyncActivity::runSync() {
-  state_ = State::SYNCING;
-  requestUpdate(true);
-
   if (serverBaseUrl().empty() || SETTINGS.raindropToken[0] == '\0') {
     state_ = State::ERROR;
     errorMessage_ = tr(STR_RAINDROP_NOT_CONFIGURED);
@@ -279,35 +299,30 @@ void RaindropSyncActivity::runSync() {
     return;
   }
 
-  std::string cursor;
-  bool morePages = true;
-  while (morePages && pageCount_ < MANIFEST_MAX_PAGES && !cancelRequested_) {
-    if (!syncOnePage(cursor, morePages)) {
-      if (!cancelRequested_ && errorMessage_.empty()) {
-        errorMessage_ = tr(STR_RAINDROP_SYNC_FAILED);
-      }
-      // Keep what already landed: a partial sync is still articles on the
-      // shelf. Only a manifest failure with nothing fetched reads as an error.
-      if (newCount_ == 0 && keptCount_ == 0 && !cancelRequested_) {
-        state_ = State::ERROR;
-        requestUpdate();
-        return;
-      }
-      break;
-    }
-    pageCount_++;
+  const bool downloaded = downloadBundle();
+  bool unpacked = false;
+  if (downloaded && !cancelRequested_) {
+    unpacking_ = true;
+    requestUpdate(true);
+    unpacked = unpackBundle();
   }
-
+  if (Storage.exists(BUNDLE_TMP)) {
+    Storage.remove(BUNDLE_TMP);
+  }
   currentArticle_.clear();
-  state_ = State::COMPLETE;
+
+  if (cancelRequested_ || (downloaded && unpacked) || newCount_ > 0) {
+    state_ = State::COMPLETE;
+  } else {
+    state_ = State::ERROR;
+    if (errorMessage_.empty()) {
+      errorMessage_ = tr(STR_RAINDROP_SYNC_FAILED);
+    }
+  }
   requestUpdate();
 }
 
 void RaindropSyncActivity::loop() {
-  if (state_ == State::CONNECTED) {
-    runSync();
-    return;
-  }
   if (state_ == State::COMPLETE || state_ == State::ERROR) {
     mappedInput.update();
     if (TouchHeaderBackButton::wasTapped(mappedInput, renderer) ||
@@ -335,28 +350,37 @@ void RaindropSyncActivity::render(RenderLock&&) {
   const auto centerY = (pageHeight - lineHeight) / 2;
   const int contentWidth = pageWidth - 2 * metrics.contentSidePadding;
 
-  char counts[96];
-  snprintf(counts, sizeof(counts), "%d %s   %d %s   %d %s", newCount_, tr(STR_RAINDROP_COUNT_NEW), keptCount_,
-           tr(STR_RAINDROP_COUNT_KEPT), failedCount_, tr(STR_RAINDROP_COUNT_FAILED));
+  char counts[64];
+  snprintf(counts, sizeof(counts), "%d %s   %d %s", newCount_, tr(STR_RAINDROP_COUNT_NEW), failedCount_,
+           tr(STR_RAINDROP_COUNT_FAILED));
 
   switch (state_) {
     case State::WIFI_SELECTION:
       break;
-    case State::CONNECTED:
     case State::SYNCING: {
       renderer.drawCenteredText(UI_10_FONT_ID, centerY - 2 * lineHeight, tr(STR_RAINDROP_SYNCING));
-      if (!currentArticle_.empty()) {
-        const auto shown = renderer.truncatedText(SMALL_FONT_ID, currentArticle_.c_str(), contentWidth);
-        renderer.drawCenteredText(SMALL_FONT_ID, centerY - smallLineHeight / 2, shown.c_str());
+      if (!unpacking_) {
+        char progress[48];
+        if (totalBytes_ > 0) {
+          snprintf(progress, sizeof(progress), "%u%%  (%u / %u Ko)",
+                   static_cast<unsigned>(downloadedBytes_ * 100 / totalBytes_),
+                   static_cast<unsigned>(downloadedBytes_ / 1024), static_cast<unsigned>(totalBytes_ / 1024));
+        } else {
+          snprintf(progress, sizeof(progress), "%u Ko", static_cast<unsigned>(downloadedBytes_ / 1024));
+        }
+        renderer.drawCenteredText(UI_10_FONT_ID, centerY, progress);
+      } else {
+        if (!currentArticle_.empty()) {
+          const auto shown = renderer.truncatedText(SMALL_FONT_ID, currentArticle_.c_str(), contentWidth);
+          renderer.drawCenteredText(SMALL_FONT_ID, centerY - smallLineHeight / 2, shown.c_str());
+        }
+        renderer.drawCenteredText(UI_10_FONT_ID, centerY + lineHeight, counts);
       }
-      renderer.drawCenteredText(UI_10_FONT_ID, centerY + lineHeight, counts);
       const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), "", "", "");
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
       break;
     }
     case State::COMPLETE: {
-      // A cancelled or partly-failed run still lands here: the summary tells
-      // the truth through the counters rather than pretending all-or-nothing.
       const char* title = cancelRequested_   ? tr(STR_CANCEL)
                           : failedCount_ > 0 ? tr(STR_RAINDROP_SYNC_DONE_PARTIAL)
                                              : tr(STR_RAINDROP_SYNC_DONE);
@@ -375,7 +399,7 @@ void RaindropSyncActivity::render(RenderLock&&) {
         const auto shown = renderer.truncatedText(SMALL_FONT_ID, errorMessage_.c_str(), contentWidth);
         renderer.drawCenteredText(SMALL_FONT_ID, centerY - smallLineHeight / 2, shown.c_str());
       }
-      if (newCount_ + keptCount_ + failedCount_ > 0) {
+      if (newCount_ + failedCount_ > 0) {
         renderer.drawCenteredText(SMALL_FONT_ID, centerY + lineHeight, counts);
       }
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OK), "", "");
