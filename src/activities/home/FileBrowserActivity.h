@@ -66,6 +66,11 @@ class FileBrowserActivity final : public Activity {
   std::unique_ptr<FileIndex::Entry> indexEntry;
   std::array<std::string, INDEX_ROW_CACHE_SIZE> indexCachedNames;
   std::array<size_t, INDEX_ROW_CACHE_SIZE> indexCachedRows{};
+  // Tailles des articles par ligne affichee : le stat par nom rebalaie le
+  // repertoire FAT sur SPI (~440 entrees), trop cher pour le refaire a
+  // chaque deplacement de selection. Meme schema de slots que les noms.
+  std::array<uint32_t, INDEX_ROW_CACHE_SIZE> rowSizeCache{};
+  std::array<size_t, INDEX_ROW_CACHE_SIZE> rowSizeCacheRows{};
   bool usingIndex = false;
   bool fileListMemoryLimited = false;
 
