@@ -25,18 +25,21 @@ class RaindropSyncActivity : public Activity {
   void render(RenderLock&&) override;
   // The sync runs synchronously inside the wifi callback, so the manager only
   // polls this on the end screens, where staying awake keeps the summary up.
-  bool preventAutoSleep() override { return state_ == State::SYNCING; }
+  bool preventAutoSleep() override { return state_ == State::SYNCING || state_ == State::CONFIRM; }
 
  private:
   enum class State {
     WIFI_SELECTION,
     SYNCING,
+    CONFIRM,
     COMPLETE,
     ERROR,
   };
 
   void onWifiSelectionComplete(bool connected);
   void runSync();
+  void runDownloadPhase();
+  bool fetchBundleInfo();
   bool downloadBundle();
   bool unpackBundle();
   void relayDoneQueue();
@@ -48,6 +51,9 @@ class RaindropSyncActivity : public Activity {
   ScreenTransitionRefresh screenTransitionRefresh_;
   int newCount_ = 0;
   int failedCount_ = 0;
+  // Annonce du serveur (bundle/info) affichee sur l'ecran de confirmation.
+  int pendingCount_ = 0;
+  uint32_t pendingBytes_ = 0;
   bool cancelRequested_ = false;
   bool unpacking_ = false;
   size_t downloadedBytes_ = 0;

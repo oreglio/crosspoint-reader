@@ -172,13 +172,12 @@ void RaindropSyncActivity::storeCursor(const std::string& cursor) {
 }
 
 bool RaindropSyncActivity::downloadBundle() {
-  // refresh=1 : le tap Synchroniser demande au serveur une passe Raindrop
-  // immediate (bornee a ~20 s, sous les 30 s d'inactivite tolerees ici) avant
-  // de construire le zip — l'article sauve a l'instant arrive dans ce tap.
-  std::string url = serverBaseUrl() + "/api/v1/bundle?refresh=1";
+  // Le repull Raindrop (refresh=1) est porte par la requete bundle/info qui
+  // precede : ici on ne fait plus que recuperer le zip deja annonce.
+  std::string url = serverBaseUrl() + "/api/v1/bundle";
   const std::string cursor = readStoredCursor();
   if (!cursor.empty()) {
-    url += "&cursor=" + cursor;
+    url += "?cursor=" + cursor;
   }
 
   HttpDownloader::DownloadOptions options;
@@ -456,6 +455,62 @@ void RaindropSyncActivity::runSync() {
     return;
   }
 
+  // La file des lus part d'abord : la passe refresh du serveur (bundle/info)
+  // archive alors ces articles dans la meme foulee.
+  relayDoneQueue();
+
+  // Demande legere avant d'engager le telechargement : le serveur repull
+  // Raindrop puis annonce combien d'articles et d'octets attendent. Zero
+  // nouveaute = pas de telechargement du tout. Si l'annonce echoue, on
+  // retombe sur le comportement historique : telecharger directement.
+  if (fetchBundleInfo()) {
+    if (pendingCount_ == 0) {
+      state_ = State::COMPLETE;
+      requestUpdate();
+      return;
+    }
+    state_ = State::CONFIRM;
+    requestUpdate();
+    return;
+  }
+  runDownloadPhase();
+}
+
+// Le corps de bundle/info tient en ~40 octets : {"count":N,"bytes":M}.
+bool RaindropSyncActivity::fetchBundleInfo() {
+  freeink::SecureHttpClient http;
+  http.setCACert(ISRG_ROOT_X1_PEM);
+  std::string url = serverBaseUrl() + "/api/v1/bundle/info?refresh=1";
+  const std::string cursor = readStoredCursor();
+  if (!cursor.empty()) {
+    url += "&cursor=" + cursor;
+  }
+  if (!http.begin(url)) {
+    LOG_ERR("RDROP", "Bad bundle info URL");
+    return false;
+  }
+  http.addHeader("Authorization", std::string("Bearer ") + SETTINGS.raindropToken);
+  const int code = http.sendRequest("GET", std::string());
+  if (code < 200 || code >= 300) {
+    LOG_ERR("RDROP", "Bundle info failed: %d", code);
+    http.end();
+    return false;
+  }
+  const std::string& body = http.getString();
+  const char* countAt = strstr(body.c_str(), "\"count\":");
+  const char* bytesAt = strstr(body.c_str(), "\"bytes\":");
+  http.end();
+  if (countAt == nullptr || bytesAt == nullptr) {
+    LOG_ERR("RDROP", "Bundle info: unexpected body");
+    return false;
+  }
+  pendingCount_ = atoi(countAt + 8);
+  pendingBytes_ = static_cast<uint32_t>(strtoul(bytesAt + 8, nullptr, 10));
+  LOG_INF("RDROP", "Server announces %d article(s), ~%u bytes", pendingCount_, pendingBytes_);
+  return true;
+}
+
+void RaindropSyncActivity::runDownloadPhase() {
   const bool downloaded = downloadBundle();
   bool unpacked = false;
   if (downloaded && !cancelRequested_) {
@@ -484,6 +539,24 @@ void RaindropSyncActivity::runSync() {
 }
 
 void RaindropSyncActivity::loop() {
+  if (state_ == State::CONFIRM) {
+    mappedInput.update();
+    if (TouchHeaderBackButton::wasTapped(mappedInput, renderer) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      finishAfterBackPress();
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      // Meme rituel que le callback wifi : notre ecran d'abord, puis le
+      // travail bloquant — sinon la dalle resterait figee sur la question.
+      state_ = State::SYNCING;
+      if (requestUpdateAndWait() != RequestUpdateResult::Rendered) {
+        requestUpdate(true);
+      }
+      runDownloadPhase();
+    }
+    return;
+  }
   if (state_ == State::COMPLETE || state_ == State::ERROR) {
     mappedInput.update();
     if (TouchHeaderBackButton::wasTapped(mappedInput, renderer) ||
@@ -518,6 +591,22 @@ void RaindropSyncActivity::render(RenderLock&&) {
   switch (state_) {
     case State::WIFI_SELECTION:
       break;
+    case State::CONFIRM: {
+      char announce[80];
+      if (pendingBytes_ >= 1024 * 1024) {
+        const uint32_t tenthsMb = pendingBytes_ / (1024 * 102);  // dixiemes de Mo
+        snprintf(announce, sizeof(announce), "%d %s  (~%u,%u Mo)", pendingCount_, tr(STR_RAINDROP_COUNT_NEW),
+                 static_cast<unsigned>(tenthsMb / 10), static_cast<unsigned>(tenthsMb % 10));
+      } else {
+        snprintf(announce, sizeof(announce), "%d %s  (~%u Ko)", pendingCount_, tr(STR_RAINDROP_COUNT_NEW),
+                 static_cast<unsigned>(pendingBytes_ / 1024));
+      }
+      renderer.drawCenteredText(UI_10_FONT_ID, centerY - 2 * lineHeight, announce);
+      renderer.drawCenteredText(SMALL_FONT_ID, centerY, tr(STR_RAINDROP_CONFIRM_DL));
+      const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_DOWNLOAD), "", "");
+      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+      break;
+    }
     case State::SYNCING: {
       renderer.drawCenteredText(UI_10_FONT_ID, centerY - 2 * lineHeight, tr(STR_RAINDROP_SYNCING));
       if (!unpacking_) {
