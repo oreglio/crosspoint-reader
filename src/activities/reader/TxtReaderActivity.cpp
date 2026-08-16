@@ -251,10 +251,17 @@ void TxtReaderActivity::loop() {
     return;
   }
 
-  // Short press BACK goes directly to home
+  // Short press BACK goes directly to home. Articles instead return to their
+  // list: the browser extracts the folder from the full path and selects the
+  // article that was just read. (goHome() clears returnToArticlesOnReaderExit,
+  // so routing must happen here, not in the ActivityManager pop path.)
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) &&
       mappedInput.getHeldTime() < ReaderUtils::GO_HOME_MS) {
-    onGoHome();
+    if (txt && txt->getPath().rfind("/Articles/", 0) == 0) {
+      activityManager.goToFileBrowser(txt->getPath());
+    } else {
+      onGoHome();
+    }
     return;
   }
 
