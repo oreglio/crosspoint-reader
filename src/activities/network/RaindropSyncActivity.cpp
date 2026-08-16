@@ -172,10 +172,13 @@ void RaindropSyncActivity::storeCursor(const std::string& cursor) {
 }
 
 bool RaindropSyncActivity::downloadBundle() {
-  std::string url = serverBaseUrl() + "/api/v1/bundle";
+  // refresh=1 : le tap Synchroniser demande au serveur une passe Raindrop
+  // immediate (bornee a ~20 s, sous les 30 s d'inactivite tolerees ici) avant
+  // de construire le zip — l'article sauve a l'instant arrive dans ce tap.
+  std::string url = serverBaseUrl() + "/api/v1/bundle?refresh=1";
   const std::string cursor = readStoredCursor();
   if (!cursor.empty()) {
-    url += "?cursor=" + cursor;
+    url += "&cursor=" + cursor;
   }
 
   HttpDownloader::DownloadOptions options;
