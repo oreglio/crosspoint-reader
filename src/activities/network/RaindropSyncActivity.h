@@ -3,6 +3,7 @@
 #include <string>
 
 #include "activities/Activity.h"
+#include "activities/ScreenTransitionRefresh.h"
 
 struct Rect;
 
@@ -43,6 +44,7 @@ class RaindropSyncActivity : public Activity {
   bool pollCancel();
 
   State state_ = State::WIFI_SELECTION;
+  ScreenTransitionRefresh screenTransitionRefresh_;
   int newCount_ = 0;
   int failedCount_ = 0;
   bool cancelRequested_ = false;

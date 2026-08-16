@@ -17,6 +17,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
+#include "network/IsrgRootX1.h"
 
 namespace {
 
@@ -178,6 +179,11 @@ bool RaindropSyncActivity::downloadBundle() {
   }
 
   HttpDownloader::DownloadOptions options;
+  // wolfSSL comme les téléchargements OPDS : esp_http rampe à ~500 o/s sur les
+  // gros corps HTTPS en C3 (bug documenté par le manifeste des polices). La
+  // racine ISRG X1 garde la vérification du certificat que le bundle assurait.
+  options.transport = HttpDownloader::Transport::WOLFSSL;
+  options.caCertPem = ISRG_ROOT_X1_PEM;
   options.bearerToken = SETTINGS.raindropToken;
   options.shouldCancel = [this] { return pollCancel(); };
   unsigned long lastDrawMs = 0;
@@ -412,4 +418,8 @@ void RaindropSyncActivity::render(RenderLock&&) {
       break;
     }
   }
+
+  // Sans ce flush, tout ce qui précède reste dans le framebuffer : la dalle
+  // continuait d'afficher la dernière image de l'écran WiFi (vu sur X3).
+  renderer.displayBuffer(screenTransitionRefresh_.modeFor(static_cast<uint8_t>(state_)));
 }

@@ -50,6 +50,10 @@ class HttpDownloader {
     // mirroring the Basic-auth redirect rule. Takes precedence over
     // username/password when both are provided.
     std::string bearerToken;
+    // WOLFSSL transport only: PEM root CA to verify the server against,
+    // instead of the transport's default setInsecure(). ESP_HTTP ignores it
+    // (that path already verifies via the ESP-IDF bundle).
+    const char* caCertPem = nullptr;
   };
 
   /**

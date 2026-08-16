@@ -202,8 +202,8 @@ void logTlsError(esp_http_client_handle_t client, const char* phase) {
 
 #if defined(FREEINK_NET_WOLFSSL)
 HttpDownloader::DownloadError runGetWolfSsl(const std::string& url, const std::string& username,
-                                            const std::string& password, const std::string& bearerToken, Sink& sink,
-                                            const size_t bufferSize) {
+                                            const std::string& password, const std::string& bearerToken,
+                                            const char* caCertPem, Sink& sink, const size_t bufferSize) {
   (void)bufferSize;  // SecureHttpClient owns one fixed 1024-byte streaming buffer.
   std::string currentUrl = url;
 
@@ -219,9 +219,13 @@ HttpDownloader::DownloadError runGetWolfSsl(const std::string& url, const std::s
 
     freeink::SecureHttpClient http;
     http.setTimeout(HTTP_TIMEOUT_MS);
-    // SecureNet does not yet expose ESP-IDF's CA bundle. This matches the
-    // existing KOSync transport; credentialed redirects remain same-origin.
-    http.setInsecure();
+    if (caCertPem != nullptr) {
+      http.setCACert(caCertPem);
+    } else {
+      // SecureNet does not expose ESP-IDF's CA bundle. This matches the
+      // existing KOSync transport; credentialed redirects remain same-origin.
+      http.setInsecure();
+    }
     if (!http.begin(currentUrl)) {
       LOG_ERR("HTTP", "wolfSSL rejected URL: %s", currentUrl.c_str());
       return HttpDownloader::HTTP_ERROR;
@@ -524,11 +528,11 @@ HttpDownloader::DownloadError runGetDefault(const std::string& url, const std::s
 }
 
 HttpDownloader::DownloadError runGet(const std::string& url, const std::string& username, const std::string& password,
-                                     const std::string& bearerToken, Sink& sink, const size_t bufferSize,
-                                     const HttpDownloader::Transport transport) {
+                                     const std::string& bearerToken, const char* caCertPem, Sink& sink,
+                                     const size_t bufferSize, const HttpDownloader::Transport transport) {
 #if defined(FREEINK_NET_WOLFSSL)
   if (transport == HttpDownloader::Transport::WOLFSSL) {
-    return runGetWolfSsl(url, username, password, bearerToken, sink, bufferSize);
+    return runGetWolfSsl(url, username, password, bearerToken, caCertPem, sink, bufferSize);
   }
 #else
   (void)transport;
@@ -577,7 +581,7 @@ HttpDownloader::DownloadError HttpDownloader::streamUrl(const std::string& url, 
   sink.progress = std::move(progress);
   sink.shouldCancel = std::move(options.shouldCancel);
   const size_t bufferSize = options.bufferSize > 0 ? options.bufferSize : DEFAULT_DOWNLOAD_BUFFER_SIZE;
-  return runGet(url, username, password, options.bearerToken, sink, bufferSize, options.transport);
+  return runGet(url, username, password, options.bearerToken, options.caCertPem, sink, bufferSize, options.transport);
 }
 
 HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& url, const std::string& destPath,
@@ -629,7 +633,8 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
 
   sink.write = [&](const uint8_t* data, size_t len) { return openOutputFile() && file.write(data, len) == len; };
 
-  DownloadError result = runGet(url, username, password, options.bearerToken, sink, bufferSize, options.transport);
+  DownloadError result =
+      runGet(url, username, password, options.bearerToken, options.caCertPem, sink, bufferSize, options.transport);
   if (sink.rangeIgnored) {
     if (fileOpen) {
       file.close();
@@ -641,7 +646,8 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
     sink.downloaded = 0;
     sink.total = 0;
     sink.write = [&](const uint8_t* data, size_t len) { return openOutputFile() && file.write(data, len) == len; };
-    result = runGet(url, username, password, options.bearerToken, sink, bufferSize, options.transport);
+    result =
+        runGet(url, username, password, options.bearerToken, options.caCertPem, sink, bufferSize, options.transport);
   }
 
   if (fileOpen) {
