@@ -59,6 +59,12 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
 
 void RecentBooksStore::addOrUpdateBook(const std::string& path, const std::string& title, const std::string& author,
                                        const std::string& coverBmpPath, const RecentBook::CoverState coverState) {
+  // Synced Raindrop articles are self-contained: they read from their own
+  // browser and never enter the recents carousel (guarded here centrally so
+  // every reader entry point agrees).
+  if (path.rfind("/Articles/", 0) == 0) {
+    return;
+  }
   // Never write against a store that was never read: the lean network boot
   // skips it, and every mutator here persists. Loading first is what keeps
   // a single book from replacing the whole list on disk.
