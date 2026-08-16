@@ -75,7 +75,9 @@ RaindropSyncActivity::RaindropSyncActivity(GfxRenderer& renderer, MappedInputMan
 
 void RaindropSyncActivity::onEnter() {
   Activity::onEnter();
-  WiFi.mode(WIFI_STA);
+  // No WiFi.mode() here: forcing STA before WifiSelectionActivity races its
+  // saved-network auto-connect (the OPDS flow, which works, lets the child
+  // own the radio state entirely).
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
 }

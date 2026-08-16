@@ -289,7 +289,7 @@ void appendHomeMenuItems(HomeMenuEntries& items, bool hasOpdsServers, bool hasRe
   }
 
   if (SETTINGS.raindropEnabled) {
-    items.push({tr(STR_RAINDROP_SYNC), Transfer, HomeMenuAction::RaindropSync});
+    items.push({tr(STR_RAINDROP_SYNC), Cloud, HomeMenuAction::RaindropSync});
   }
   items.push({tr(STR_FILE_TRANSFER), Transfer, HomeMenuAction::FileTransfer});
   items.push({tr(STR_COUNTDOWN_TITLE), Recent, HomeMenuAction::Countdown});

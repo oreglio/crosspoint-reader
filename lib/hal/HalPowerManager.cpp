@@ -150,6 +150,10 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
     return _batteryCachedPercent;
   }
 
+  // TEMP battery-gauge diagnosis (#3020): log the raw millivolts next to the
+  // percent so a full charge (true 4.20 V) exposes any divider over-read.
+  LOG_INF("BATT", "adc=%u mV -> notch=%u%%", battery.readMillivolts(), battery.readPercentage());
+
   // smooth the battery %.
   if (_batteryCachedPercent == 0) {
     _batteryCachedPercent = 10 * battery.readPercentage();

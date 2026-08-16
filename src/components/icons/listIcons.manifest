@@ -1,33 +1,32 @@
-# Manifest for src/components/icons/listIcons.h — regenerate with:
-#   python3 <freeink-sdk>/libs/assets/Icons/tools/gen_icons.py \
-#     --manifest src/components/icons/listIcons.manifest \
-#     --svgdir <freeink-sdk>/libs/assets/Icons/lucide/icons \
-#     --sizes 24,32 --out src/components/icons/listIcons.h
-# then clang-format -i the output.
-folder = folder
-file-text = file-text
-image = image
-book-open = book-open
-book = book
-book-marked = book-marked
-file = file
-wifi = wifi
-library = library
+# Icônes du fork (régénérer : python3 freeink-sdk/libs/assets/Icons/tools/gen_icons.py
+#   --manifest src/components/icons/listIcons.manifest
+#   --svgdir freeink-sdk/libs/assets/Icons/lucide/icons --sizes 24,32
+#   --out src/components/icons/listIcons.h)
+folder
+file-text
+image
+book-open
+book
+book-marked
+file
+wifi
+library
 lyra-library = library-big
-radio-tower = radio-tower
-history = history
-settings = settings
+radio-tower
+history
+settings
 lyra-settings = settings-2
-cog = cog
+cog
 transfer = arrow-left-right
-usb = usb
+usb
 lyra-transfer = send-horizontal
-chevrons-left-right-ellipsis = chevrons-left-right-ellipsis
-menu = menu
+chevrons-left-right-ellipsis
+menu
 home = house
-search = search
-pointer = pointer
-pointer-off = pointer-off
-chevron-up = chevron-up
-chevron-down = chevron-down
-sliders-horizontal = sliders-horizontal
+search
+pointer
+pointer-off
+chevron-up
+chevron-down
+sliders-horizontal
+cloud

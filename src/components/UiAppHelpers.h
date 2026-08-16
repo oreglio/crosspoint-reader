@@ -108,6 +108,8 @@ inline freeink::ui::BitmapRef listIconFor(const UIIcon icon, const int size = 24
         return freeink::ui::bitmapFromIcon(icon_lyra_library_32);
       case UIIcon::Hotspot:
         return freeink::ui::bitmapFromIcon(icon_radio_tower_32);
+      case UIIcon::Cloud:
+        return freeink::ui::bitmapFromIcon(icon_cloud_32);
       default:
         return {};
     }
