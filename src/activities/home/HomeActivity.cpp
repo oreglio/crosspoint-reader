@@ -1487,7 +1487,7 @@ void HomeActivity::loop() {
             onCountdownOpen();
             break;
           case HomeMenuAction::RaindropSync:
-            silentRestartToNetwork(NetworkBootTarget::RAINDROP_SYNC);
+            openRaindropMenu();
             break;
           case HomeMenuAction::ContinueReading:
           case HomeMenuAction::Settings:
@@ -1731,7 +1731,7 @@ void HomeActivity::loop() {
         onCountdownOpen();
         break;
       case HomeMenuAction::RaindropSync:
-        silentRestartToNetwork(NetworkBootTarget::RAINDROP_SYNC);
+        openRaindropMenu();
         break;
       case HomeMenuAction::Settings:
         onSettingsOpen();
@@ -2240,6 +2240,27 @@ void HomeActivity::onSelectBook(const std::string& path) {
 }
 
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
+
+void HomeActivity::openRaindropMenu() {
+  std::vector<std::string> options;
+  options.reserve(2);
+  options.emplace_back(tr(STR_RAINDROP_MENU_SYNC));
+  options.emplace_back(tr(STR_RAINDROP_MENU_ARTICLES));
+  startActivityForResult(std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "RaindropMenu",
+                                                                   StrId::STR_RAINDROP_SYNC, std::move(options), 0),
+                         [this](const ActivityResult& result) {
+                           const auto* choice = std::get_if<OptionSelectionResult>(&result.data);
+                           if (result.isCancelled || !choice) {
+                             requestUpdate();
+                             return;
+                           }
+                           if (choice->index == 0) {
+                             silentRestartToNetwork(NetworkBootTarget::RAINDROP_SYNC);
+                           } else {
+                             activityManager.goToFileBrowser("/Articles");
+                           }
+                         });
+}
 
 void HomeActivity::onLibraryOpen() { activityManager.goToLibrary(); }
 

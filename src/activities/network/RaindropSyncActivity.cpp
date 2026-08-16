@@ -1,13 +1,15 @@
 #include "RaindropSyncActivity.h"
 
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <HalStorage.h>
 #include <I18n.h>
-#include <LibraryState.h>
+#include <Memory.h>
 #include <WiFi.h>
-#include <ZipFile.h>
+#include <sys/time.h>
 
 #include <cstring>
+#include <ctime>
 #include <vector>
 
 #include "CrossPointSettings.h"
@@ -51,39 +53,37 @@ bool isSafeCursor(const std::string& cursor) {
   return true;
 }
 
+// wolfSSL valide les dates des certificats contre l'horloge SYSTEME (time()),
+// que personne n'initialise dans le boot reseau minimal : elle demarre a
+// l'epoch 1970 et le chargement de l'ancre echoue en ASN_BEFORE_DATE_E (-150,
+// vu sur X3). Le RTC, lui, est a l'heure (UTC) : on le pousse vers time().
+void syncSystemClockFromRtc() {
+  uint16_t year = 0;
+  uint8_t month = 0, day = 0, hour = 0, minute = 0;
+  if (!halClock.isAvailable() || !halClock.getDateTime(year, month, day, hour, minute)) {
+    LOG_ERR("RDROP", "RTC unavailable; TLS certificate date checks may fail");
+    return;
+  }
+  struct tm utc = {};
+  utc.tm_year = year - 1900;
+  utc.tm_mon = month - 1;
+  utc.tm_mday = day;
+  utc.tm_hour = hour;
+  utc.tm_min = minute;
+  const time_t epoch = mktime(&utc);  // TZ jamais definie sur l'appareil : mktime == UTC
+  if (epoch <= 0) {
+    return;
+  }
+  const timeval tv = {epoch, 0};
+  settimeofday(&tv, nullptr);
+  LOG_INF("RDROP", "System clock set from RTC: %04u-%02u-%02u %02u:%02u UTC", year, month, day, hour, minute);
+}
+
 std::string serverBaseUrl() {
   std::string base = SETTINGS.raindropServerUrl;
   while (!base.empty() && base.back() == '/') base.pop_back();
   return base;
 }
-
-// Captures the head of manifest.json — the server writes `cursor` in the
-// first bytes, so this never scales with the article count. Short-writes once
-// full, which lets readFileToStream stop early.
-class ManifestHeadSink final : public Print {
- public:
-  size_t write(uint8_t c) override { return write(&c, 1); }
-  size_t write(const uint8_t* buffer, size_t size) override {
-    const size_t room = sizeof(head_) - 1 - used_;
-    const size_t take = size < room ? size : room;
-    memcpy(head_ + used_, buffer, take);
-    used_ += take;
-    head_[used_] = '\0';
-    return take;
-  }
-  std::string cursor() const {
-    const char* at = strstr(head_, "\"cursor\":\"");
-    if (at == nullptr) return {};
-    at += 10;
-    const char* end = strchr(at, '"');
-    if (end == nullptr) return {};
-    return std::string(at, end - at);
-  }
-
- private:
-  char head_[256] = {};
-  size_t used_ = 0;
-};
 
 }  // namespace
 
@@ -186,20 +186,21 @@ bool RaindropSyncActivity::downloadBundle() {
   options.caCertPem = ISRG_ROOT_X1_PEM;
   options.bearerToken = SETTINGS.raindropToken;
   options.shouldCancel = [this] { return pollCancel(); };
-  unsigned long lastDrawMs = 0;
+  unsigned lastDrawnPercent = 0;
   const auto result = HttpDownloader::downloadToFile(
       url, BUNDLE_TMP,
-      [this, &lastDrawMs](const size_t downloaded, const size_t total) {
+      [this, &lastDrawnPercent](const size_t downloaded, const size_t total) {
         downloadedBytes_ = downloaded;
         totalBytes_ = total;
         mappedInput.update();
         if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
           cancelRequested_ = true;
         }
-        const unsigned long now = millis();
-        if (now - lastDrawMs > 1000) {
-          lastDrawMs = now;
-          LOG_INF("RDROP", "bundle progress %u/%u", static_cast<unsigned>(downloaded), static_cast<unsigned>(total));
+        const unsigned percent = total > 0 ? static_cast<unsigned>(downloaded * 100ULL / total) : 0;
+        if (percent >= lastDrawnPercent + 5 || (total > 0 && downloaded == total)) {
+          lastDrawnPercent = percent;
+          LOG_INF("RDROP", "bundle progress %u%% (%u/%u)", percent, static_cast<unsigned>(downloaded),
+                  static_cast<unsigned>(total));
           requestUpdate(true);
         }
       },
@@ -212,39 +213,107 @@ bool RaindropSyncActivity::downloadBundle() {
   return true;
 }
 
+// Lecteur de zip minimal, STORED uniquement, memoire constante : le lecteur
+// EPUB (ZipFile) cache le repertoire central entier dans une unordered_map de
+// std::string — ~150 octets par entree, soit ~60 Ko pour un bundle de 400
+// articles, un abort() OOM assure sur C3 (vu sur X3). Ici : un seul buffer de
+// 2 Ko reutilise, une passe sur le repertoire central, seek + copie par entree.
 bool RaindropSyncActivity::unpackBundle() {
-  ZipFile zip{std::string(BUNDLE_TMP)};
-  if (!zip.open() || !zip.loadAllFileStatSlims()) {
-    LOG_ERR("RDROP", "Bundle is not a readable zip");
+  HalFile zip;
+  if (!Storage.openFileForRead("RDROP", BUNDLE_TMP, zip)) {
     errorMessage_ = tr(STR_RAINDROP_MANIFEST_FAILED);
     return false;
   }
+  const size_t zipSize = zip.size();
+  // EOCD fixe en fin de fichier (le serveur n'ecrit pas de commentaire).
+  uint8_t eocd[22];
+  if (zipSize < sizeof(eocd) || !zip.seekSet(zipSize - sizeof(eocd)) ||
+      zip.read(eocd, sizeof(eocd)) != static_cast<int>(sizeof(eocd)) || eocd[0] != 0x50 || eocd[1] != 0x4b ||
+      eocd[2] != 0x05 || eocd[3] != 0x06) {
+    LOG_ERR("RDROP", "Bundle: EOCD introuvable");
+    errorMessage_ = tr(STR_RAINDROP_MANIFEST_FAILED);
+    return false;
+  }
+  auto u16 = [](const uint8_t* d) { return static_cast<uint16_t>(d[0] | (d[1] << 8)); };
+  auto u32 = [](const uint8_t* d) {
+    return static_cast<uint32_t>(d[0]) | (static_cast<uint32_t>(d[1]) << 8) | (static_cast<uint32_t>(d[2]) << 16) |
+           (static_cast<uint32_t>(d[3]) << 24);
+  };
+  const uint16_t entryCount = u16(eocd + 10);
+  uint32_t cdOffset = u32(eocd + 16);
 
-  // Names are copied out: extraction reuses the zip handle per entry, and the
-  // enumeration's string_views borrow cache internals. ~100 bytes per article,
-  // freed when the sync ends.
-  std::vector<std::string> names;
-  names.reserve(64);
-  zip.enumerateFilePaths([&names](const std::string_view path) {
-    if (path != MANIFEST_ENTRY) {
-      names.emplace_back(path);
-    }
-  });
+  // 2 Ko partages entre lecture d'entetes et copie de donnees ; trop gros pour
+  // la pile de la tache (8 Ko), liberes en sortie.
+  auto buffer = makeUniqueNoThrow<uint8_t[]>(EXTRACT_CHUNK);
+  if (!buffer) {
+    LOG_ERR("RDROP", "OOM: extract buffer (%u)", static_cast<unsigned>(EXTRACT_CHUNK));
+    errorMessage_ = tr(STR_RAINDROP_SYNC_FAILED);
+    return false;
+  }
 
+  std::string pendingCursor;
   unsigned long lastDrawMs = 0;
-  for (const auto& name : names) {
+  for (uint16_t i = 0; i < entryCount; i++) {
     if (pollCancel()) {
-      zip.close();
       return false;
     }
-    if (!isSafeArticleFileName(name.c_str())) {
+    uint8_t cd[46];
+    if (!zip.seekSet(cdOffset) || zip.read(cd, sizeof(cd)) != static_cast<int>(sizeof(cd)) || u32(cd) != 0x02014b50) {
+      LOG_ERR("RDROP", "Bundle: entree centrale %u illisible", i);
+      failedCount_++;
+      break;
+    }
+    const uint16_t method = u16(cd + 10);
+    const uint32_t dataSize = u32(cd + 20);
+    const uint16_t nameLen = u16(cd + 28);
+    const uint16_t extraLen = u16(cd + 30);
+    const uint16_t commentLen = u16(cd + 32);
+    const uint32_t localOffset = u32(cd + 42);
+    char name[128] = {};
+    const uint16_t readLen = nameLen < sizeof(name) - 1 ? nameLen : sizeof(name) - 1;
+    if (zip.read(reinterpret_cast<uint8_t*>(name), readLen) != readLen) {
+      failedCount_++;
+      break;
+    }
+    cdOffset += 46 + nameLen + extraLen + commentLen;
+
+    // En-tete local : ses champs name/extra peuvent differer du central.
+    uint8_t local[30];
+    if (!zip.seekSet(localOffset) || zip.read(local, sizeof(local)) != static_cast<int>(sizeof(local)) ||
+        u32(local) != 0x04034b50 || method != 0) {
+      LOG_ERR("RDROP", "Bundle: en-tete local invalide pour %s", name);
+      failedCount_++;
+      continue;
+    }
+    const uint32_t dataStart = localOffset + 30 + u16(local + 26) + u16(local + 28);
+
+    const bool isManifest = strcmp(name, MANIFEST_ENTRY) == 0;
+    if (!isManifest && !isSafeArticleFileName(name)) {
       LOG_ERR("RDROP", "Rejected unsafe bundle entry name");
       failedCount_++;
       continue;
     }
+
+    if (isManifest) {
+      // Le curseur vit dans les premiers octets du manifest.json.
+      char head[256] = {};
+      const size_t take = dataSize < sizeof(head) - 1 ? dataSize : sizeof(head) - 1;
+      if (zip.seekSet(dataStart) && zip.read(reinterpret_cast<uint8_t*>(head), take) == static_cast<int>(take)) {
+        const char* at = strstr(head, "\"cursor\":\"");
+        if (at != nullptr) {
+          at += 10;
+          const char* end = strchr(at, '"');
+          if (end != nullptr) {
+            pendingCursor.assign(at, end - at);
+          }
+        }
+      }
+      continue;
+    }
+
     currentArticle_ = name;
     const unsigned long now = millis();
-    if (now - lastDrawMs > 1000) {
+    if (now - lastDrawMs > 1500) {
       lastDrawMs = now;
       requestUpdate(true);
     }
@@ -256,33 +325,37 @@ bool RaindropSyncActivity::unpackBundle() {
       failedCount_++;
       continue;
     }
-    const bool ok = zip.readFileToStream(name.c_str(), out, EXTRACT_CHUNK);
+    bool ok = zip.seekSet(dataStart);
+    uint32_t remaining = dataSize;
+    while (ok && remaining > 0) {
+      const size_t take = remaining < EXTRACT_CHUNK ? remaining : EXTRACT_CHUNK;
+      if (zip.read(buffer.get(), take) != static_cast<int>(take) || out.write(buffer.get(), take) != take) {
+        ok = false;
+        break;
+      }
+      remaining -= take;
+    }
     out.close();
     if (!ok) {
-      LOG_ERR("RDROP", "Extraction failed: %s", name.c_str());
+      LOG_ERR("RDROP", "Extraction failed: %s", name);
       Storage.remove(destPath.c_str());
       failedCount_++;
       continue;
     }
     newCount_++;
-    library::markShelfStaleIfBook(destPath.c_str());
   }
 
-  // The new cursor lives in the first bytes of manifest.json; persist it only
-  // when every entry landed, so a partial run retries from the old cursor.
-  if (failedCount_ == 0 && !cancelRequested_) {
-    ManifestHeadSink head;
-    zip.readFileToStream(MANIFEST_ENTRY, head, 128, /*allowEarlyStop=*/true);
-    const std::string cursor = head.cursor();
-    if (!cursor.empty()) {
-      storeCursor(cursor);
-    }
+  // Curseur avance des que la passe s'est terminee : re-telecharger 5,5 Mo
+  // pour un article rate serait absurde — les echecs sont logges et un article
+  // manque revient de lui-meme a sa prochaine modification cote serveur.
+  if (!cancelRequested_ && !pendingCursor.empty()) {
+    storeCursor(pendingCursor);
   }
-  zip.close();
   return true;
 }
 
 void RaindropSyncActivity::runSync() {
+  syncSystemClockFromRtc();
   if (serverBaseUrl().empty() || SETTINGS.raindropToken[0] == '\0') {
     state_ = State::ERROR;
     errorMessage_ = tr(STR_RAINDROP_NOT_CONFIGURED);

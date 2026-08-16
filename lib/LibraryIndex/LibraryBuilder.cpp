@@ -329,6 +329,9 @@ void walk(WalkState& st, const std::string& path, const int depth) {
     const std::string name(st.nameBuf);
 
     if (isDir) {
+      // Synced Raindrop articles live in /Articles with their own viewer; the
+      // book shelf never indexes them (394 articles would drown the Library).
+      if ((path.empty() || path == "/") && name == "Articles") continue;
       // Bounded for the same reason `seen` holds hashes: a pathological level
       // with thousands of directories must degrade, not abort the device.
       // Skipped ones are counted so the build can say the walk was partial.
