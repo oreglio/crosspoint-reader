@@ -376,6 +376,15 @@ void FileBrowserActivity::clearIndexNameCache() {
   }
 }
 
+// L'index SD trie ascendant ; la vue articles veut les recents en tete (les
+// noms portent leur date en prefixe). Miroir involutif des lignes aux deux
+// points de contact (affichage, recherche) plutot qu'un re-tri de l'index.
+size_t FileBrowserActivity::displayToIndexRow(size_t row) const {
+  if (!usingIndex || !fileIndex || basepath.rfind("/Articles", 0) != 0) return row;
+  const size_t total = fileIndex->totalCount();
+  return row < total ? total - 1 - row : row;
+}
+
 const char* FileBrowserActivity::entryNameAt(size_t row) {
   if (!usingIndex) {
     return files[row].c_str();
@@ -383,7 +392,7 @@ const char* FileBrowserActivity::entryNameAt(size_t row) {
 
   const size_t cacheSlot = row % INDEX_ROW_CACHE_SIZE;
   if (indexCachedRows[cacheSlot] != row) {
-    if (!fileIndex || !indexEntry || !fileIndex->entryAt(row, *indexEntry)) {
+    if (!fileIndex || !indexEntry || !fileIndex->entryAt(displayToIndexRow(row), *indexEntry)) {
       LOG_ERR("FileBrowser", "index read failed at row %u", static_cast<unsigned>(row));
       indexCachedRows[cacheSlot] = SIZE_MAX;
       indexCachedNames[cacheSlot] = "?";
@@ -1287,7 +1296,7 @@ size_t FileBrowserActivity::findEntry(const std::string& name) {
     std::string raw = name;
     if (!raw.empty() && raw.back() == '/') raw.pop_back();
     const size_t row = fileIndex->findRowByName(raw.c_str());
-    return row == SIZE_MAX ? 0 : row;
+    return row == SIZE_MAX ? 0 : displayToIndexRow(row);
   }
 
   for (size_t i = 0; i < files.size(); i++)

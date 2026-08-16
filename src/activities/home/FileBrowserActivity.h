@@ -88,6 +88,7 @@ class FileBrowserActivity final : public Activity {
   void loadFiles();
   bool loadFilesIntoVector(size_t cap, bool& overflow);
   size_t entryCount() const;
+  size_t displayToIndexRow(size_t row) const;
   const char* entryNameAt(size_t row);
   void toggleHiddenFiles();
   size_t findEntry(const std::string& name);
