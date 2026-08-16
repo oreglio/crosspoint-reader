@@ -124,9 +124,7 @@ void RaindropSyncActivity::onWifiSelectionComplete(const bool connected) {
   // before the blocking work. Deferring the work to loop() left the wifi
   // child's last frame on screen with dead buttons (seen on device).
   state_ = State::SYNCING;
-  const auto renderResult = requestUpdateAndWait();
-  LOG_INF("RDROP", "pre-sync render result=%d", static_cast<int>(renderResult));
-  if (renderResult != RequestUpdateResult::Rendered) {
+  if (requestUpdateAndWait() != RequestUpdateResult::Rendered) {
     requestUpdate(true);
   }
   runSync();
@@ -171,7 +169,6 @@ void RaindropSyncActivity::storeCursor(const std::string& cursor) {
 }
 
 bool RaindropSyncActivity::downloadBundle() {
-  LOG_INF("RDROP", "bundle download start free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   std::string url = serverBaseUrl() + "/api/v1/bundle";
   const std::string cursor = readStoredCursor();
   if (!cursor.empty()) {
@@ -199,8 +196,6 @@ bool RaindropSyncActivity::downloadBundle() {
         const unsigned percent = total > 0 ? static_cast<unsigned>(downloaded * 100ULL / total) : 0;
         if (percent >= lastDrawnPercent + 5 || (total > 0 && downloaded == total)) {
           lastDrawnPercent = percent;
-          LOG_INF("RDROP", "bundle progress %u%% (%u/%u)", percent, static_cast<unsigned>(downloaded),
-                  static_cast<unsigned>(total));
           requestUpdate(true);
         }
       },
@@ -419,8 +414,6 @@ void RaindropSyncActivity::loop() {
 }
 
 void RaindropSyncActivity::render(RenderLock&&) {
-  LOG_INF("RDROP", "render state=%d unpack=%d dl=%u/%u new=%d fail=%d", static_cast<int>(state_), unpacking_ ? 1 : 0,
-          static_cast<unsigned>(downloadedBytes_), static_cast<unsigned>(totalBytes_), newCount_, failedCount_);
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
