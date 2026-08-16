@@ -322,6 +322,11 @@ void FileBrowserActivity::loadFiles() {
 
   if (!overflow || fileListMemoryLimited) {
     FsHelpers::sortFileList(files);
+    // Les articles synchronises portent leur date en prefixe de nom : l'ordre
+    // descendant met les plus recents en tete, comme un flux de lecture.
+    if (basepath.rfind("/Articles", 0) == 0) {
+      std::reverse(files.begin(), files.end());
+    }
     return;
   }
 
@@ -352,6 +357,11 @@ void FileBrowserActivity::loadFiles() {
   overflow = false;
   loadFilesIntoVector(INDEX_THRESHOLD, overflow);
   FsHelpers::sortFileList(files);
+  // Les articles synchronises portent leur date en prefixe de nom : l'ordre
+  // descendant met les plus recents en tete, comme un flux de lecture.
+  if (basepath.rfind("/Articles", 0) == 0) {
+    std::reverse(files.begin(), files.end());
+  }
   requestUpdate(true);
 }
 

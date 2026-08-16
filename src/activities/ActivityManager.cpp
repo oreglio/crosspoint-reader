@@ -166,6 +166,13 @@ void ActivityManager::loop() {
 
       if (stackActivities.empty()) {
         lock.unlock();  // goHome may acquire its own lock
+        if (returnToArticlesOnReaderExit) {
+          // Le geste Home passe par goHome() directement et garde son sens ;
+          // seul le Back du lecteur revient ici.
+          returnToArticlesOnReaderExit = false;
+          goToFileBrowser("/Articles");
+          continue;
+        }
         goHome(exitedItem);
         continue;  // Will launch goHome immediately
 
@@ -488,6 +495,7 @@ void ActivityManager::goToReader(std::string path, const bool suppressBackReleas
   // OPDS credentials are unrelated to local reading and may contain several
   // heap-backed strings. Home reloads them lazily when it becomes active.
   OPDS_STORE.release();
+  returnToArticlesOnReaderExit = path.rfind("/Articles/", 0) == 0;
   replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path), suppressBackRelease,
                                                    allowFastInitialRefresh, cleanImageBaseOnEntry));
 }
@@ -507,6 +515,8 @@ void ActivityManager::goToFullScreenMessage(std::string message, EpdFontFamily::
 }
 
 void ActivityManager::goHome(HomeMenuItem initialMenuItem, const bool initialFullRefresh) {
+  // Tout retour explicite au Home annule le renvoi vers la liste d'articles.
+  returnToArticlesOnReaderExit = false;
   if (initialMenuItem == HomeMenuItem::NONE && currentActivity) {
     initialMenuItem = homeMenuItemForActivityName(currentActivity->name);
   }

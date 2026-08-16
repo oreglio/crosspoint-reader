@@ -105,6 +105,8 @@ class ActivityManager {
   bool resumeFileTransferFromNetworkBoot(uint32_t payload);
   void goToNearbyStatsSync();
   void goToNearbyBookSend(std::string path, bool returnToReader);
+  // Back depuis un article lu via /Articles retourne a la liste, pas au Home.
+  bool returnToArticlesOnReaderExit = false;
   void goToNearbyBookReceive();
   void goToSettings(bool dismissOnUpSwipe = false);
   void goToFileBrowser(std::string path = {});
