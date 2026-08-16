@@ -36,6 +36,7 @@
 #include "RecentBookProgress.h"
 #include "RecentBooksStore.h"
 #include "SavedItemsHomeActivity.h"
+#include "SilentRestart.h"
 #include "components/UITheme.h"
 #include "components/themes/dashboard/DashboardTheme.h"
 #include "components/themes/lyra/LyraCarouselTheme.h"
@@ -64,6 +65,7 @@ enum class HomeMenuAction {
   Bookmarks,
   FileTransfer,
   Countdown,
+  RaindropSync,
   Settings,
 };
 
@@ -75,10 +77,11 @@ struct HomeMenuEntry {
 
 struct HomeMenuEntries {
   // Continue Reading, Browse Files, Library, Recent Books, OPDS, Reading Stats,
-  // Bookmarks, File Transfer, Countdown, Settings — ten when every optional entry
-  // is present, plus one spare. Overflow silently drops the LAST item pushed,
-  // which is Settings, so this has to lead the list rather than trail it.
-  static constexpr int kCapacity = 11;
+  // Bookmarks, Raindrop Sync, File Transfer, Countdown, Settings — eleven when
+  // every optional entry is present, plus one spare. Overflow silently drops the
+  // LAST item pushed, which is Settings, so this has to lead the list rather
+  // than trail it — and this capacity has to grow with every new entry.
+  static constexpr int kCapacity = 12;
   std::array<HomeMenuEntry, kCapacity> entries{};
   int count = 0;
 
@@ -285,6 +288,9 @@ void appendHomeMenuItems(HomeMenuEntries& items, bool hasOpdsServers, bool hasRe
     items.push({savedItemsLabel(hasBookmarks, hasClippings), BookmarkIcon, HomeMenuAction::Bookmarks});
   }
 
+  if (SETTINGS.raindropEnabled) {
+    items.push({tr(STR_RAINDROP_SYNC), Transfer, HomeMenuAction::RaindropSync});
+  }
   items.push({tr(STR_FILE_TRANSFER), Transfer, HomeMenuAction::FileTransfer});
   items.push({tr(STR_COUNTDOWN_TITLE), Recent, HomeMenuAction::Countdown});
   items.push({tr(STR_SETTINGS_TITLE), Settings, HomeMenuAction::Settings});
@@ -1480,6 +1486,9 @@ void HomeActivity::loop() {
           case HomeMenuAction::Countdown:
             onCountdownOpen();
             break;
+          case HomeMenuAction::RaindropSync:
+            silentRestartToNetwork(NetworkBootTarget::RAINDROP_SYNC);
+            break;
           case HomeMenuAction::ContinueReading:
           case HomeMenuAction::Settings:
             break;
@@ -1720,6 +1729,9 @@ void HomeActivity::loop() {
         break;
       case HomeMenuAction::Countdown:
         onCountdownOpen();
+        break;
+      case HomeMenuAction::RaindropSync:
+        silentRestartToNetwork(NetworkBootTarget::RAINDROP_SYNC);
         break;
       case HomeMenuAction::Settings:
         onSettingsOpen();

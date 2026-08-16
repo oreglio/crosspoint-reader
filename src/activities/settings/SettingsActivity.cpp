@@ -1031,6 +1031,9 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::CheckForUpdates:
         silentRestartToNetwork(NetworkBootTarget::OTA);
         break;
+      case SettingAction::RaindropSync:
+        silentRestartToNetwork(NetworkBootTarget::RAINDROP_SYNC);
+        break;
       case SettingAction::SdFirmwareUpdate:
         startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput), resultHandler);
         break;

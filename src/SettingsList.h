@@ -576,7 +576,7 @@ inline SettingInfo buildHomeButtonActionSetting(const StrId nameId, uint8_t Cros
 inline const std::vector<SettingInfo>& getBaseSettingsList() {
   static const std::vector<SettingInfo> baseList = [] {
     std::vector<SettingInfo> v;
-    v.reserve(72);
+    v.reserve(76);
     auto add = [&v](SettingInfo setting) { v.push_back(std::move(setting)); };
 
     // --- Display ---
@@ -799,6 +799,16 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                            "frontlightBrightness"));
     add(SettingInfo::Value(StrId::STR_WARMTH, &CrossPointSettings::frontlightWarmth, {0, 100, 5}, "frontlightWarmth"));
     add(SettingInfo::Toggle(StrId::STR_FRONTLIGHT, &CrossPointSettings::frontlightOn, "frontlightOn"));
+
+    // --- Raindrop Sync (web card; the token is pasted from a browser rather
+    // than typed on e-ink. The on-device entry point is the Settings action
+    // row + Home menu item, both gated on raindropEnabled.) ---
+    add(SettingInfo::Toggle(StrId::STR_RAINDROP_ENABLED, &CrossPointSettings::raindropEnabled, "raindropEnabled",
+                            StrId::STR_RAINDROP_SYNC));
+    add(SettingInfo::String(StrId::STR_RAINDROP_SERVER_URL, SETTINGS.raindropServerUrl,
+                            sizeof(SETTINGS.raindropServerUrl), "raindropServerUrl", StrId::STR_RAINDROP_SYNC));
+    add(SettingInfo::String(StrId::STR_RAINDROP_TOKEN, SETTINGS.raindropToken, sizeof(SETTINGS.raindropToken),
+                            "raindropToken", StrId::STR_RAINDROP_SYNC));
 
     // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
     add(SettingInfo::DynamicString(
@@ -1261,13 +1271,14 @@ inline std::vector<SettingInfo> buildDisplaySleepSettingsList(const std::vector<
 
 inline std::vector<SettingInfo> buildSystemSettingsParentList(const std::vector<SettingInfo>& allSettings) {
   std::vector<SettingInfo> systemSettings;
-  systemSettings.reserve(8);
+  systemSettings.reserve(10);
   systemSettings.push_back(SettingInfo::Submenu(StrId::STR_SYSTEM_DEVICE, SettingAction::SystemDevice));
   systemSettings.push_back(SettingInfo::Submenu(StrId::STR_SYSTEM_FILES_CACHE, SettingAction::SystemFilesCache));
   systemSettings.push_back(SettingInfo::Submenu(StrId::STR_LIBRARY, SettingAction::SystemLibrary));
   systemSettings.push_back(SettingInfo::Submenu(StrId::STR_READING_STATS, SettingAction::SystemReadingStats));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_RAINDROP_SYNC, SettingAction::RaindropSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));

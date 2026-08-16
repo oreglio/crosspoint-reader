@@ -169,7 +169,7 @@ struct Sink {
 };
 
 void setRequestHeaders(esp_http_client_handle_t client, const std::string& username, const std::string& password,
-                       size_t resumeOffset, bool sendAuthorization) {
+                       const std::string& bearerToken, size_t resumeOffset, bool sendAuthorization) {
   esp_http_client_set_header(client, "User-Agent", "CrossInk-ESP32-" CROSSINK_VERSION);
   esp_http_client_set_header(client, "Connection", "close");
   if (resumeOffset > 0) {
@@ -179,9 +179,14 @@ void setRequestHeaders(esp_http_client_handle_t client, const std::string& usern
     LOG_DBG("HTTP", "Resuming download at byte %zu", resumeOffset);
   }
   if (sendAuthorization) {
-    const std::string credentials = username + ":" + password;
-    const String header = "Basic " + base64::encode(credentials.c_str());
-    esp_http_client_set_header(client, "Authorization", header.c_str());
+    if (!bearerToken.empty()) {
+      const std::string header = "Bearer " + bearerToken;
+      esp_http_client_set_header(client, "Authorization", header.c_str());
+    } else {
+      const std::string credentials = username + ":" + password;
+      const String header = "Basic " + base64::encode(credentials.c_str());
+      esp_http_client_set_header(client, "Authorization", header.c_str());
+    }
   }
 }
 
@@ -197,12 +202,14 @@ void logTlsError(esp_http_client_handle_t client, const char* phase) {
 
 #if defined(FREEINK_NET_WOLFSSL)
 HttpDownloader::DownloadError runGetWolfSsl(const std::string& url, const std::string& username,
-                                            const std::string& password, Sink& sink, const size_t bufferSize) {
+                                            const std::string& password, const std::string& bearerToken, Sink& sink,
+                                            const size_t bufferSize) {
   (void)bufferSize;  // SecureHttpClient owns one fixed 1024-byte streaming buffer.
   std::string currentUrl = url;
 
   ParsedUrl credentialOrigin;
-  const bool hasCredentials = !username.empty() && !password.empty() && parseUrl(url, credentialOrigin);
+  const bool hasCredentials =
+      ((!username.empty() && !password.empty()) || !bearerToken.empty()) && parseUrl(url, credentialOrigin);
   ProgressNotifier progressNotifier(sink.progress);
 
   for (uint8_t hop = 0; hop < MAX_REDIRECTS; ++hop) {
@@ -229,9 +236,13 @@ HttpDownloader::DownloadError runGetWolfSsl(const std::string& url, const std::s
       LOG_DBG("HTTP", "Resuming download at byte %zu", sink.resumeOffset);
     }
     if (sendAuthorization) {
-      const std::string credentials = username + ":" + password;
-      const String encoded = base64::encode(credentials.c_str());
-      http.addHeader("Authorization", std::string("Basic ") + encoded.c_str());
+      if (!bearerToken.empty()) {
+        http.addHeader("Authorization", std::string("Bearer ") + bearerToken);
+      } else {
+        const std::string credentials = username + ":" + password;
+        const String encoded = base64::encode(credentials.c_str());
+        http.addHeader("Authorization", std::string("Basic ") + encoded.c_str());
+      }
     }
 
     LOG_DBG("HTTP", "wolfSSL GET: %s", currentUrl.c_str());
@@ -324,11 +335,13 @@ HttpDownloader::DownloadError runGetWolfSsl(const std::string& url, const std::s
 #endif
 
 HttpDownloader::DownloadError runGetDefault(const std::string& url, const std::string& username,
-                                            const std::string& password, Sink& sink, const size_t bufferSize) {
+                                            const std::string& password, const std::string& bearerToken, Sink& sink,
+                                            const size_t bufferSize) {
   std::string currentUrl = url;
 
   ParsedUrl credentialOrigin;
-  const bool hasCredentials = !username.empty() && !password.empty() && parseUrl(url, credentialOrigin);
+  const bool hasCredentials =
+      ((!username.empty() && !password.empty()) || !bearerToken.empty()) && parseUrl(url, credentialOrigin);
 
   for (uint8_t hop = 0; hop < MAX_REDIRECTS; ++hop) {
     ParsedUrl currentOrigin;
@@ -353,7 +366,7 @@ HttpDownloader::DownloadError runGetDefault(const std::string& url, const std::s
       return HttpDownloader::HTTP_ERROR;
     }
 
-    setRequestHeaders(client, username, password, sink.resumeOffset, sendAuthorization);
+    setRequestHeaders(client, username, password, bearerToken, sink.resumeOffset, sendAuthorization);
 
     esp_err_t err = esp_http_client_open(client, 0);
     if (err != ESP_OK) {
@@ -511,15 +524,16 @@ HttpDownloader::DownloadError runGetDefault(const std::string& url, const std::s
 }
 
 HttpDownloader::DownloadError runGet(const std::string& url, const std::string& username, const std::string& password,
-                                     Sink& sink, const size_t bufferSize, const HttpDownloader::Transport transport) {
+                                     const std::string& bearerToken, Sink& sink, const size_t bufferSize,
+                                     const HttpDownloader::Transport transport) {
 #if defined(FREEINK_NET_WOLFSSL)
   if (transport == HttpDownloader::Transport::WOLFSSL) {
-    return runGetWolfSsl(url, username, password, sink, bufferSize);
+    return runGetWolfSsl(url, username, password, bearerToken, sink, bufferSize);
   }
 #else
   (void)transport;
 #endif
-  return runGetDefault(url, username, password, sink, bufferSize);
+  return runGetDefault(url, username, password, bearerToken, sink, bufferSize);
 }
 }  // namespace
 
@@ -563,7 +577,7 @@ HttpDownloader::DownloadError HttpDownloader::streamUrl(const std::string& url, 
   sink.progress = std::move(progress);
   sink.shouldCancel = std::move(options.shouldCancel);
   const size_t bufferSize = options.bufferSize > 0 ? options.bufferSize : DEFAULT_DOWNLOAD_BUFFER_SIZE;
-  return runGet(url, username, password, sink, bufferSize, options.transport);
+  return runGet(url, username, password, options.bearerToken, sink, bufferSize, options.transport);
 }
 
 HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& url, const std::string& destPath,
@@ -615,7 +629,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
 
   sink.write = [&](const uint8_t* data, size_t len) { return openOutputFile() && file.write(data, len) == len; };
 
-  DownloadError result = runGet(url, username, password, sink, bufferSize, options.transport);
+  DownloadError result = runGet(url, username, password, options.bearerToken, sink, bufferSize, options.transport);
   if (sink.rangeIgnored) {
     if (fileOpen) {
       file.close();
@@ -627,7 +641,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
     sink.downloaded = 0;
     sink.total = 0;
     sink.write = [&](const uint8_t* data, size_t len) { return openOutputFile() && file.write(data, len) == len; };
-    result = runGet(url, username, password, sink, bufferSize, options.transport);
+    result = runGet(url, username, password, options.bearerToken, sink, bufferSize, options.transport);
   }
 
   if (fileOpen) {

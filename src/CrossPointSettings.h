@@ -540,6 +540,12 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   char opdsDownloadFolder[64] = "";
   // Nearby file receive destination (empty = SD root).
   char nearbyReceiveFolder[64] = "";
+  // Raindrop article sync (CrossDrop companion server). The URL and token are
+  // meant to be pasted from the web portal settings page rather than typed on
+  // the device. Articles land in /Articles as .md files the Library indexes.
+  uint8_t raindropEnabled = 0;
+  char raindropServerUrl[96] = "";
+  char raindropToken[64] = "";
   // Hide battery percentage
   uint8_t hideBatteryPercentage = HIDE_NEVER;
   // Long-press page turn button behavior

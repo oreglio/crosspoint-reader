@@ -2,6 +2,13 @@
 
 ### Added
 
+- Raindrop Sync (beta): syncs the article shelf published by a personal CrossDrop
+  companion server into `/Articles` as Markdown files the Library indexes.
+  Enable it and paste the server URL + device token from the web portal
+  settings; launch from the Home menu or Settings > System.
+
+### Added
+
 - The pomodoro lengths list gains a `Chaining` row. `Automatic`, the default, starts the next step on the press that acknowledges the previous one. `Manual` makes that next step wait for its own press, so you can finish the work, notice it, and start the break when you are actually ready. The choice is remembered between sessions.
 - The figure blinks once when a step begins. It used to drop a step within a second of starting, which read as "it is running"; now that it correctly holds, the blink says so deliberately.
 

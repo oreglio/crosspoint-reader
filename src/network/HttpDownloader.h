@@ -46,6 +46,10 @@ class HttpDownloader {
     CancelCallback shouldCancel;
     size_t bufferSize;
     Transport transport;
+    // Sent as "Authorization: Bearer <token>" on same-origin requests only,
+    // mirroring the Basic-auth redirect rule. Takes precedence over
+    // username/password when both are provided.
+    std::string bearerToken;
   };
 
   /**

@@ -47,6 +47,7 @@ enum class SettingAction {
   Language,
   DownloadFonts,
   ClockSync,
+  RaindropSync,
 };
 
 struct SettingInfo {
