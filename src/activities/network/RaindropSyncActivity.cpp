@@ -52,6 +52,16 @@ std::string percentEncodePathSegment(const std::string& raw) {
   return out;
 }
 
+// The manifest is remote input: even with TLS verified, a compromised server
+// must not be able to steer writes outside /Articles. Flat names only.
+bool isSafeArticleFileName(const char* name) {
+  if (name[0] == '\0' || name[0] == '.') return false;
+  const size_t len = strlen(name);
+  if (len < 4 || strcmp(name + len - 3, ".md") != 0) return false;
+  if (strchr(name, '/') != nullptr || strchr(name, '\\') != nullptr || strstr(name, "..") != nullptr) return false;
+  return true;
+}
+
 std::string serverBaseUrl() {
   std::string base = SETTINGS.raindropServerUrl;
   while (!base.empty() && base.back() == '/') base.pop_back();
@@ -186,6 +196,11 @@ bool RaindropSyncActivity::syncOnePage(std::string& cursor, bool& morePages) {
       const char* fileName = item["file"] | "";
       // Tombstones are ignored in this first version: the sync only ever adds.
       if (strcmp(status, "active") != 0 || fileName[0] == '\0') {
+        continue;
+      }
+      if (!isSafeArticleFileName(fileName)) {
+        LOG_ERR("RDROP", "Rejected unsafe article name from manifest");
+        failedCount_++;
         continue;
       }
       downloadArticle(fileName, item["bytes"] | 0);
