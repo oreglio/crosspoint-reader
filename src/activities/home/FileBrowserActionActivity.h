@@ -25,6 +25,7 @@ enum class FileBrowserAction : int {
   EpubRenderMode = 13,
   ResetReaderSettings = 14,
   SendNearby = 15,
+  MarkArticleDone = 16,
 };
 
 class FileBrowserActionActivity final : public Activity {

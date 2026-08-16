@@ -541,6 +541,8 @@ void RecentBooksGridActivity::showBookActionMenu(const int bookIndex, const bool
         }
 
         switch (static_cast<FileBrowserAction>(actionResult->action)) {
+          case FileBrowserAction::MarkArticleDone:  // les articles ne sont jamais dans les récents
+            return;
           case FileBrowserAction::Delete:
             promptDeleteBook(book);
             return;

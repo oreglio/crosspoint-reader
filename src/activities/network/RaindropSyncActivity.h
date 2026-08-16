@@ -39,6 +39,7 @@ class RaindropSyncActivity : public Activity {
   void runSync();
   bool downloadBundle();
   bool unpackBundle();
+  void relayDoneQueue();
   std::string readStoredCursor();
   void storeCursor(const std::string& cursor);
   bool pollCancel();

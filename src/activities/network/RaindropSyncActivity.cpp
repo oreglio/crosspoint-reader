@@ -5,6 +5,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
+#include <SecureHttpClient.h>
 #include <WiFi.h>
 #include <sys/time.h>
 
@@ -26,6 +27,8 @@ namespace {
 constexpr char ARTICLES_DIR[] = "/Articles";
 constexpr char BUNDLE_TMP[] = "/.crosspoint/rdbundle.tmp";
 constexpr char CURSOR_FILE[] = "/.crosspoint/raindrop-cursor.txt";
+constexpr char DONE_DIR[] = "/Articles/.done";
+constexpr char DONE_QUEUE[] = "/.crosspoint/raindrop-done.txt";
 constexpr char MANIFEST_ENTRY[] = "manifest.json";
 constexpr size_t EXTRACT_CHUNK = 2048;
 // Same contiguous-block gate the KOReader sync client applies before TLS.
@@ -288,6 +291,14 @@ bool RaindropSyncActivity::unpackBundle() {
       failedCount_++;
       continue;
     }
+    if (!isManifest) {
+      // Un article marque lu sur la liseuse ne ressuscite pas quand le serveur
+      // le reecrit (backfill de resume) : il attend son archivage Raindrop.
+      const std::string donePath = std::string(DONE_DIR) + "/" + name;
+      if (Storage.exists(donePath.c_str())) {
+        continue;
+      }
+    }
 
     if (isManifest) {
       // Le curseur vit dans les premiers octets du manifest.json.
@@ -349,6 +360,72 @@ bool RaindropSyncActivity::unpackBundle() {
   return true;
 }
 
+// Envoie au serveur les articles marques lus depuis la derniere sync : il les
+// archive cote Raindrop a sa prochaine passe. La file ne se vide que sur 200,
+// donc un echec reseau se rejoue a la sync suivante.
+void RaindropSyncActivity::relayDoneQueue() {
+  std::string queue;
+  {
+    HalFile in;
+    if (!Storage.openFileForRead("RDROP", DONE_QUEUE, in)) {
+      return;
+    }
+    const size_t size = in.size();
+    if (size == 0 || size > 16384) {
+      return;
+    }
+    queue.resize(size);
+    if (in.read(reinterpret_cast<uint8_t*>(queue.data()), size) != static_cast<int>(size)) {
+      return;
+    }
+  }
+
+  std::string body = "{\"files\":[";
+  bool first = true;
+  int names = 0;
+  size_t lineStart = 0;
+  while (lineStart < queue.size() && names < 200) {
+    size_t lineEnd = queue.find('\n', lineStart);
+    if (lineEnd == std::string::npos) lineEnd = queue.size();
+    const std::string name = queue.substr(lineStart, lineEnd - lineStart);
+    lineStart = lineEnd + 1;
+    // Les noms sont deja sans guillemets ni antislash (sanitisation serveur) ;
+    // un nom qui en porterait casserait le JSON : ignore.
+    if (name.empty() || name.find('"') != std::string::npos || name.find('\\') != std::string::npos) {
+      continue;
+    }
+    if (!first) body += ',';
+    body += '"';
+    body += name;
+    body += '"';
+    first = false;
+    names++;
+  }
+  body += "]}";
+  if (names == 0) {
+    Storage.remove(DONE_QUEUE);
+    return;
+  }
+
+  freeink::SecureHttpClient http;
+  http.setCACert(ISRG_ROOT_X1_PEM);
+  const std::string url = serverBaseUrl() + "/api/v1/archived-files";
+  if (!http.begin(url)) {
+    LOG_ERR("RDROP", "Bad archive URL");
+    return;
+  }
+  http.addHeader("Authorization", std::string("Bearer ") + SETTINGS.raindropToken);
+  http.addHeader("Content-Type", "application/json");
+  const int httpCode = http.sendRequest("POST", body);
+  http.end();
+  if (httpCode >= 200 && httpCode < 300) {
+    LOG_INF("RDROP", "Archived %d read article(s) server-side", names);
+    Storage.remove(DONE_QUEUE);
+  } else {
+    LOG_ERR("RDROP", "Archive relay failed: %d", httpCode);
+  }
+}
+
 void RaindropSyncActivity::runSync() {
   syncSystemClockFromRtc();
   if (serverBaseUrl().empty() || SETTINGS.raindropToken[0] == '\0') {
@@ -387,6 +464,10 @@ void RaindropSyncActivity::runSync() {
     Storage.remove(BUNDLE_TMP);
   }
   currentArticle_.clear();
+
+  if (!cancelRequested_) {
+    relayDoneQueue();
+  }
 
   if (cancelRequested_ || (downloaded && unpacked) || newCount_ > 0) {
     state_ = State::COMPLETE;

@@ -543,6 +543,8 @@ void FileBrowserActivity::showDirectoryActionMenu(const std::string& entry, bool
                            const auto action =
                                static_cast<FileBrowserAction>(std::get<FileBrowserActionResult>(result.data).action);
                            switch (action) {
+                             case FileBrowserAction::MarkArticleDone:  // jamais proposé sur un dossier
+                               return;
                              case FileBrowserAction::Delete:
                                promptDeleteDirectory(fullPath, entry);
                                return;
@@ -643,9 +645,53 @@ bool FileBrowserActivity::isSleepFavoriteFolder(const std::string& fullPath) con
   return isDefaultSleepFolderPath(normalizedPath) || isPreferredSleepFolder(normalizedPath);
 }
 
+void FileBrowserActivity::markArticleDone(const std::string& fullPath, const std::string& entry) {
+  constexpr char DONE_DIR[] = "/Articles/.done";
+  constexpr char DONE_QUEUE[] = "/.crosspoint/raindrop-done.txt";
+  if (!Storage.exists(DONE_DIR) && !Storage.mkdir(DONE_DIR)) {
+    LOG_ERR("FileBrowser", "Could not create %s", DONE_DIR);
+    return;
+  }
+  const std::string fileName = getFileName(entry);
+  const std::string donePath = std::string(DONE_DIR) + "/" + fileName;
+  if (!Storage.rename(fullPath.c_str(), donePath.c_str())) {
+    LOG_ERR("FileBrowser", "Could not move %s to done", fullPath.c_str());
+    return;
+  }
+  // File d'attente pour la sync (pas d'append dans le HAL : relecture + reecriture,
+  // le fichier reste petit et se vide a chaque sync).
+  std::string queue;
+  {
+    HalFile in;
+    if (Storage.openFileForRead("FB", DONE_QUEUE, in)) {
+      const size_t size = in.size();
+      if (size > 0 && size < 16384) {
+        queue.resize(size);
+        in.read(reinterpret_cast<uint8_t*>(queue.data()), size);
+      }
+    }
+  }
+  queue += fileName;
+  queue += '\n';
+  HalFile out;
+  if (Storage.openFileForWrite("FB", DONE_QUEUE, out)) {
+    out.write(reinterpret_cast<const uint8_t*>(queue.c_str()), queue.size());
+  }
+  BookActions::drawToast(renderer, tr(STR_RAINDROP_MARKED_DONE));
+  delay(800);
+  loadFiles();
+  requestUpdate();
+}
+
 void FileBrowserActivity::showFileActionMenu(const std::string& entry, bool ignoreInitialConfirmRelease) {
   const std::string fullPath = buildFullPath(basepath, entry);
   std::vector<FileBrowserActionActivity::MenuItem> items = BookActions::buildBookActionItems(fullPath, false);
+
+  // Article synchronise : marquer lu le range dans /Articles/.done (invisible
+  // ici) et l'inscrit dans la file que la prochaine sync archive cote Raindrop.
+  if (fullPath.rfind("/Articles/", 0) == 0) {
+    items.insert(items.begin(), {FileBrowserAction::MarkArticleDone, StrId::STR_RAINDROP_MARK_DONE});
+  }
 
   if (BookActions::canSendNearby(fullPath)) {
     items.push_back({FileBrowserAction::SendNearby, StrId::STR_SEND_NEARBY_BOOK});
@@ -669,6 +715,9 @@ void FileBrowserActivity::showFileActionMenu(const std::string& entry, bool igno
 
         const auto action = static_cast<FileBrowserAction>(std::get<FileBrowserActionResult>(result.data).action);
         switch (action) {
+          case FileBrowserAction::MarkArticleDone:
+            markArticleDone(fullPath, entry);
+            return;
           case FileBrowserAction::SendNearby:
             activityManager.goToNearbyBookSend(fullPath, false);
             return;

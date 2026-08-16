@@ -37,6 +37,7 @@ class FileBrowserActivity final : public Activity {
   void clearPreferredSleepFolder();
   bool isPreferredSleepFolder(const std::string& fullPath) const;
   bool isSleepFavoriteFolder(const std::string& fullPath) const;
+  void markArticleDone(const std::string& fullPath, const std::string& entry);
   void showFileActionMenu(const std::string& entry, bool ignoreInitialConfirmRelease = false);
 
   ButtonNavigator buttonNavigator;
