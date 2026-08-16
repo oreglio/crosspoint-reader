@@ -1123,6 +1123,18 @@ void FileBrowserActivity::buildListScreen(UiApp::ScreenType& screen) {
     names[i] = getFileName(entry);
     if (SETTINGS.hideFileExtension == 0) values[i] = getFileExtension(entry);
     const std::string fullPath = buildFullPath(basepath, entry);
+    // Les articles synchronises affichent une longueur estimee plutot que
+    // l'extension : ~1800 caracteres par page e-ink a la taille par defaut.
+    // Le stat SD par ligne visible est serialise par le mutex du HAL.
+    if (basepath.rfind("/Articles", 0) == 0 && FsHelpers::checkFileExtension(entry, ".md")) {
+      HalFile articleFile;
+      if (Storage.openFileForRead("FB", fullPath.c_str(), articleFile)) {
+        const uint32_t pages = (static_cast<uint32_t>(articleFile.size()) + 1799) / 1800;
+        char pageBuf[16];
+        snprintf(pageBuf, sizeof(pageBuf), "~%u p.", pages > 0 ? pages : 1);
+        values[i] = pageBuf;
+      }
+    }
     if ((entry.back() == '/' && isPreferredSleepFolder(fullPath)) || isPinnedSleepFavorite(fullPath)) {
       values[i] = values[i].empty() ? "*" : "* " + values[i];
     }
