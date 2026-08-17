@@ -50,8 +50,9 @@ class ArticlesActivity final : public Activity {
   bool lockNextConfirmRelease = false;
   bool longPressConfirmHandled = false;
   // L'e-ink est lent : un second appui pendant la transition d'activite
-  // arriverait comme un clic valide. Fenetre morte apres l'entree.
-  unsigned long enteredAtMs = 0;
+  // arriverait comme un clic valide. Les entrees sont absorbees tant que le
+  // premier rendu n'est pas a l'ecran, plus une marge.
+  std::atomic<unsigned long> firstRenderDoneMs{0};
 
   freeink::ui::GfxRendererTarget uiTarget;  // doit preceder `app`
   UiApp app;

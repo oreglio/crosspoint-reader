@@ -71,7 +71,6 @@ void ArticlesActivity::clearRowCache() {
 
 void ArticlesActivity::onEnter() {
   Activity::onEnter();
-  enteredAtMs = millis();
   lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
   clearRowCache();
   loadHiddenNames();
@@ -550,9 +549,16 @@ void ArticlesActivity::loop() {
     }
   }
 
-  // Fenetre morte apres l'entree : un appui fait pendant la transition (ecran
-  // pas encore rafraichi) serait sinon interprete comme Ouvrir/Retour.
-  const bool entryGuard = millis() - enteredAtMs < ENTRY_GUARD_MS;
+  // Fenetre morte : tant que la liste n'est pas reellement a l'ecran (plus
+  // une marge), un appui fait pendant la transition serait sinon interprete
+  // comme Ouvrir/Retour — la ligne 1 s'ouvrait toute seule (vu sur X3).
+  const unsigned long renderedAt = firstRenderDoneMs.load();
+  const bool entryGuard = renderedAt == 0 || millis() - renderedAt < ENTRY_GUARD_MS;
+  if (entryGuard && (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
+                     mappedInput.wasReleased(MappedInputManager::Button::Back))) {
+    LOG_INF("ART", "input swallowed by entry guard (renderedAt=%lu)", renderedAt);
+    return;
+  }
 
   // Le menu d'actions s'ouvre au RELACHEMENT de l'appui long, jamais pendant :
   // OptionSelectionActivity valide sur wasReleased, un bouton encore tenu y
@@ -566,14 +572,18 @@ void ArticlesActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (longPressConfirmHandled) {
       longPressConfirmHandled = false;
+      LOG_INF("ART", "long confirm released -> actions menu");
       openActionsMenu();
       return;
     }
-    if (!entryGuard) activateSelected();
+    LOG_INF("ART", "confirm released -> open row %u (held=%lu)", static_cast<unsigned>(selectorIndex),
+            mappedInput.getHeldTime());
+    activateSelected();
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    if (!entryGuard) onGoHome(HomeMenuItem::RAINDROP);
+    LOG_INF("ART", "back released -> home");
+    onGoHome(HomeMenuItem::RAINDROP);
     return;
   }
 
@@ -621,4 +631,8 @@ void ArticlesActivity::render(RenderLock&&) {
   uiReady = true;
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), visible.empty() ? "" : tr(STR_OPEN), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  if (firstRenderDoneMs.load() == 0) {
+    firstRenderDoneMs = millis();
+    LOG_INF("ART", "first render done: %u rows visible", static_cast<unsigned>(visible.size()));
+  }
 }
