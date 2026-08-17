@@ -2,6 +2,7 @@
 
 #include <BidiUtils.h>
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -10,6 +11,7 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <cctype>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -50,13 +52,162 @@ bool handlesSideLongPress(const CrossPointSettings::SIDE_LONG_PRESS action) {
 
 // Cache file magic and version
 constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
-constexpr uint8_t CACHE_VERSION = 3;          // Increment when cache format changes
+constexpr uint8_t CACHE_VERSION = 4;          // Increment when cache format changes
 constexpr uint32_t MAX_CACHE_PAGES = 65535;   // Sanity cap to prevent unbounded reserve()
+
+// --- Markdown-lite ----------------------------------------------------------
+// Les .md affiches ici sortent du turndown du serveur CrossDrop : titres ATX,
+// puces '-', citations '> ', fences ```, liens [libelle](url), gras **,
+// italique _, ponctuation significative echappee par '\'. Cette grammaire est
+// strictement par LIGNE source, donc la classification et le nettoyage se font
+// pendant le wrap, sans parseur global ni etat entre pages. Seules les fences
+// demanderaient un etat inter-page : elles sont rendues comme des filets et
+// leur contenu comme du texte, compromis assume.
+// Le style d'une ligne visuelle voyage en bande : premier octet dans
+// [0x01,0x07] (jamais present dans du texte — la tabulation est 0x09).
+enum MdStyle : uint8_t {
+  MD_BODY = 0,
+  MD_HEADING = 0x01,    // gras, pleine largeur
+  MD_QUOTE = 0x02,      // italique, indente
+  MD_LIST_CONT = 0x03,  // continuation d'un item de liste : indente
+  MD_RULE = 0x04,       // filet horizontal, aucun texte
+};
+
+struct MdBlock {
+  MdStyle first = MD_BODY;  // premiere ligne visuelle du bloc
+  MdStyle cont = MD_BODY;   // lignes de continuation apres cesure
+  size_t prefixLen = 0;     // octets du marqueur bloc a retirer
+  bool isRule = false;
+};
+
+// hr : '---' (nos en-tetes serveur) ou '* * *' (defaut turndown), tolerant.
+bool mdIsRuleLine(const std::string& s) {
+  char marker = 0;
+  int count = 0;
+  for (const char c : s) {
+    if (c == ' ' || c == '\t') continue;
+    if (c != '-' && c != '*' && c != '_') return false;
+    if (marker == 0) marker = c;
+    if (c != marker) return false;
+    count++;
+  }
+  return count >= 3;
+}
+
+MdBlock mdClassify(const std::string& line) {
+  MdBlock b;
+  if (line.empty()) return b;
+  if (line[0] == '#') {
+    size_t n = 0;
+    while (n < line.size() && line[n] == '#') n++;
+    if (n <= 6 && n < line.size() && line[n] == ' ') {
+      b.first = b.cont = MD_HEADING;
+      b.prefixLen = n + 1;
+      return b;
+    }
+  }
+  if (line[0] == '>') {
+    b.first = b.cont = MD_QUOTE;
+    b.prefixLen = (line.size() > 1 && line[1] == ' ') ? 2 : 1;
+    return b;
+  }
+  if (mdIsRuleLine(line) || line.rfind("```", 0) == 0 || line.rfind("~~~", 0) == 0) {
+    b.isRule = true;
+    return b;
+  }
+  // Puces et listes numerotees : le marqueur reste affiche tel quel, seules
+  // les lignes de continuation s'indentent sous le texte.
+  if (line.size() >= 2 && (line[0] == '-' || line[0] == '*' || line[0] == '+') && line[1] == ' ') {
+    b.cont = MD_LIST_CONT;
+    return b;
+  }
+  size_t d = 0;
+  while (d < line.size() && line[d] >= '0' && line[d] <= '9') d++;
+  if (d > 0 && d + 1 < line.size() && line[d] == '.' && line[d + 1] == ' ') {
+    b.cont = MD_LIST_CONT;
+    return b;
+  }
+  return b;
+}
+
+// Retire les marqueurs inline (liens -> libelle, **, _, `, ~~, echappements)
+// en gardant la correspondance transformee -> source : une coupure de page en
+// plein paragraphe doit retomber sur un octet SOURCE. anchors = debuts de runs
+// (position transformee, position source relative au debut de ligne source).
+std::string mdStripInline(const std::string& src, size_t prefixLen,
+                          std::vector<std::pair<uint32_t, uint32_t>>& anchors) {
+  std::string out;
+  out.reserve(src.size());
+  anchors.clear();
+  anchors.emplace_back(0, static_cast<uint32_t>(prefixLen));
+  const auto anchorAt = [&](size_t srcPos) {
+    anchors.emplace_back(static_cast<uint32_t>(out.size()), static_cast<uint32_t>(prefixLen + srcPos));
+  };
+  size_t i = 0;
+  while (i < src.size()) {
+    const char c = src[i];
+    const char next = (i + 1 < src.size()) ? src[i + 1] : '\0';
+    if (c == '\\' && next != '\0' && next > 0x20 && next < 0x7F && !isalnum(static_cast<unsigned char>(next))) {
+      out += next;  // turndown echappe la ponctuation significative du texte
+      i += 2;
+      anchorAt(i);
+      continue;
+    }
+    if (c == '*' || c == '_' || c == '`') {
+      i++;  // marqueur d'emphase/code : les litteraux arrivent echappes
+      anchorAt(i);
+      continue;
+    }
+    if (c == '~' && next == '~') {
+      i += 2;  // ~~barre~~ (gfm) ; un '~' isole ("~30 min") reste litteral
+      anchorAt(i);
+      continue;
+    }
+    if (c == '[') {
+      // Ouverture de lien seulement si "](" puis ')' suivent sur la ligne ;
+      // sinon litteral (ex. "[alt]" des images aplaties par le serveur).
+      const size_t close = src.find("](", i + 1);
+      if (close != std::string::npos && src.find(')', close + 2) != std::string::npos) {
+        i++;
+        anchorAt(i);
+        continue;
+      }
+    }
+    if (c == ']' && next == '(') {
+      const size_t paren = src.find(')', i + 2);
+      if (paren != std::string::npos) {
+        i = paren + 1;  // saute "](url)"
+        anchorAt(i);
+        continue;
+      }
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+size_t mdMapToSource(const size_t tpos, const std::vector<std::pair<uint32_t, uint32_t>>& anchors) {
+  for (auto it = anchors.rbegin(); it != anchors.rend(); ++it) {
+    if (it->first <= tpos) return it->second + (tpos - it->first);
+  }
+  return tpos;
+}
+
+// Prefixe le style en bande ; MD_BODY reste une chaine nue.
+std::string mdStyled(const MdStyle style, std::string text) {
+  if (style == MD_BODY) return text;
+  text.insert(text.begin(), static_cast<char>(style));
+  return text;
+}
 
 // Parses and word-wraps lines from a file chunk into outLines.
 // Returns the number of bytes consumed from the start of buffer.
+// En mode markdown, chaque ligne visuelle peut porter un octet de style en
+// bande (voir MdStyle) et mdIndent retrecit les lignes indentees.
 size_t parseAndWrapLines(const uint8_t* buffer, size_t chunkSize, size_t fileOffset, size_t fileSize, int linesPerPage,
-                         GfxRenderer& renderer, int fontId, int vw, std::vector<std::string>& outLines) {
+                         GfxRenderer& renderer, int fontId, int vw, std::vector<std::string>& outLines,
+                         bool markdown = false, int mdIndent = 0) {
   size_t pos = 0;
   while (pos < chunkSize && static_cast<int>(outLines.size()) < linesPerPage) {
     size_t lineEnd = pos;
@@ -70,14 +221,37 @@ size_t parseAndWrapLines(const uint8_t* buffer, size_t chunkSize, size_t fileOff
     std::string line(reinterpret_cast<const char*>(buffer + pos), displayLen);
     size_t lineBytePos = 0;
 
+    MdBlock block;
+    std::vector<std::pair<uint32_t, uint32_t>> anchors;
+    bool firstVisualLine = true;
+    if (markdown) {
+      block = mdClassify(line);
+      if (block.isRule) {
+        outLines.push_back(mdStyled(MD_RULE, std::string()));
+        pos = lineEnd + 1;
+        continue;
+      }
+      line = mdStripInline(line.substr(block.prefixLen), block.prefixLen, anchors);
+    }
+    const auto styleOf = [&] { return firstVisualLine ? block.first : block.cont; };
+    const auto widthOf = [&] {
+      const MdStyle s = styleOf();
+      return (s == MD_QUOTE || s == MD_LIST_CONT) ? vw - mdIndent : vw;
+    };
+    const auto measure = [&](const std::string& s) {
+      return markdown ? renderer.getTextAdvanceX(fontId, s.c_str(),
+                                                 styleOf() == MD_HEADING ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR)
+                      : renderer.getTextWidth(fontId, s.c_str());
+    };
+
     do {
       if (line.empty()) {
         outLines.emplace_back();
         break;
       }
 
-      if (renderer.getTextWidth(fontId, line.c_str()) <= vw) {
-        outLines.push_back(line);
+      if (measure(line) <= widthOf()) {
+        outLines.push_back(markdown ? mdStyled(styleOf(), line) : line);
         lineBytePos = displayLen;
         line.clear();
         break;
@@ -92,7 +266,7 @@ size_t parseAndWrapLines(const uint8_t* buffer, size_t chunkSize, size_t fileOff
       while (true) {
         const size_t nextSpace = line.find(' ', candidate);
         const size_t end = (nextSpace == std::string::npos) ? line.length() : nextSpace;
-        if (renderer.getTextWidth(fontId, line.substr(0, end).c_str()) > vw) break;
+        if (measure(line.substr(0, end)) > widthOf()) break;
         breakPos = end;
         if (nextSpace == std::string::npos) break;
         candidate = nextSpace + 1;
@@ -104,14 +278,15 @@ size_t parseAndWrapLines(const uint8_t* buffer, size_t chunkSize, size_t fileOff
         while (end < line.length() && (line[end] & 0xC0) == 0x80) end++;
         size_t lastFit = end;
         while (end <= line.length()) {
-          if (renderer.getTextWidth(fontId, line.substr(0, end).c_str()) > vw) break;
+          if (measure(line.substr(0, end)) > widthOf()) break;
           lastFit = end;
           end++;
           while (end < line.length() && (line[end] & 0xC0) == 0x80) end++;
         }
         breakPos = lastFit;
       }
-      outLines.push_back(line.substr(0, breakPos));
+      outLines.push_back(markdown ? mdStyled(styleOf(), line.substr(0, breakPos)) : line.substr(0, breakPos));
+      firstVisualLine = false;
       size_t skipChars = breakPos;
       if (breakPos < line.length() && line[breakPos] == ' ') skipChars++;
       lineBytePos += skipChars;
@@ -121,7 +296,9 @@ size_t parseAndWrapLines(const uint8_t* buffer, size_t chunkSize, size_t fileOff
     if (line.empty()) {
       pos = lineEnd + 1;
     } else {
-      pos = pos + lineBytePos;
+      // En markdown le wrap a couru sur le texte transforme : la coupure de
+      // page doit retomber sur l'octet SOURCE correspondant.
+      pos = pos + (markdown ? mdMapToSource(lineBytePos, anchors) : lineBytePos);
       break;
     }
   }
@@ -544,6 +721,8 @@ void TxtReaderActivity::initializeReader() {
   cachedFontId = SETTINGS.getReaderFontId();
   cachedScreenMargin = SETTINGS.screenMargin;
   cachedParagraphAlignment = SETTINGS.paragraphAlignment;
+  markdownMode = txt && FsHelpers::hasMarkdownExtension(txt->getPath());
+  markdownIndent = renderer.getTextAdvanceX(cachedFontId, "- ", EpdFontFamily::REGULAR);
 
   // Calculate viewport dimensions
   renderer.getOrientedViewableTRBL(&cachedOrientedMarginTop, &cachedOrientedMarginRight, &cachedOrientedMarginBottom,
@@ -644,11 +823,14 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
   // measuring strings. This avoids on-demand SD glyph lookups for every width
   // check while preserving the shared parseAndWrapLines() implementation.
   if (renderer.isSdCardFont(cachedFontId)) {
-    renderer.ensureSdCardFontReady(cachedFontId, reinterpret_cast<const char*>(buffer), /*styleMask=*/0x01);
+    // Markdown : les titres se mesurent en gras et les citations en italique,
+    // il faut donc primer tous les styles, pas seulement le regulier.
+    renderer.ensureSdCardFontReady(cachedFontId, reinterpret_cast<const char*>(buffer),
+                                   markdownMode ? 0x0F : 0x01);
   }
 
   size_t pos = parseAndWrapLines(buffer, chunkSize, offset, fileSize, linesPerPage, renderer, cachedFontId,
-                                 viewportWidth, outLines);
+                                 viewportWidth, outLines, markdownMode, markdownIndent);
   nextOffset = offset + pos;
   if (nextOffset > fileSize) {
     nextOffset = fileSize;
@@ -707,14 +889,43 @@ void TxtReaderActivity::renderPage() {
     int y = cachedOrientedMarginTop;
     for (const auto& line : currentPageLines) {
       if (!line.empty()) {
-        int x = cachedOrientedMarginLeft;
-        const bool lineIsRtl = BidiUtils::startsWithRtl(line.c_str(), BidiUtils::RTL_PARAGRAPH_PROBE_DEPTH);
+        // Style markdown en bande : premier octet dans [0x01,0x07].
+        const char* text = line.c_str();
+        auto style = EpdFontFamily::REGULAR;
+        int indent = 0;
+        if (markdownMode && static_cast<uint8_t>(line[0]) >= MD_HEADING &&
+            static_cast<uint8_t>(line[0]) <= MD_RULE) {
+          switch (static_cast<MdStyle>(line[0])) {
+            case MD_HEADING:
+              style = EpdFontFamily::BOLD;
+              break;
+            case MD_QUOTE:
+              style = EpdFontFamily::ITALIC;
+              indent = markdownIndent;
+              break;
+            case MD_LIST_CONT:
+              indent = markdownIndent;
+              break;
+            case MD_RULE: {
+              const int ruleWidth = contentWidth / 3;
+              renderer.fillRect(cachedOrientedMarginLeft + (contentWidth - ruleWidth) / 2, y + lineHeight / 2,
+                                ruleWidth, 2, ReaderUtils::readerForegroundBlack());
+              y += lineHeight;
+              continue;
+            }
+            case MD_BODY:
+              break;
+          }
+          text++;
+        }
+        int x = cachedOrientedMarginLeft + indent;
+        const bool lineIsRtl = BidiUtils::startsWithRtl(text, BidiUtils::RTL_PARAGRAPH_PROBE_DEPTH);
         uint8_t effectiveAlignment = cachedParagraphAlignment;
         if (lineIsRtl && (effectiveAlignment == CrossPointSettings::LEFT_ALIGN ||
                           effectiveAlignment == CrossPointSettings::JUSTIFIED)) {
           effectiveAlignment = CrossPointSettings::RIGHT_ALIGN;
         }
-        const int textWidth = renderer.getTextAdvanceX(cachedFontId, line.c_str(), EpdFontFamily::REGULAR);
+        const int textWidth = renderer.getTextAdvanceX(cachedFontId, text, style);
 
         // Apply text alignment
         switch (effectiveAlignment) {
@@ -736,7 +947,7 @@ void TxtReaderActivity::renderPage() {
             break;
         }
 
-        renderer.drawText(cachedFontId, x, y, line.c_str(), ReaderUtils::readerForegroundBlack());
+        renderer.drawText(cachedFontId, x, y, text, ReaderUtils::readerForegroundBlack(), style);
       }
       y += lineHeight;
     }
@@ -1098,7 +1309,10 @@ bool TxtReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gfx
   }
   buffer[chunkSize] = '\0';
 
-  parseAndWrapLines(buffer, chunkSize, offset, fileSize, linesPerPage, renderer, fontId, vw, pageLines);
+  const bool markdown = FsHelpers::hasMarkdownExtension(filePath);
+  const int mdIndent = markdown ? renderer.getTextAdvanceX(fontId, "- ", EpdFontFamily::REGULAR) : 0;
+  parseAndWrapLines(buffer, chunkSize, offset, fileSize, linesPerPage, renderer, fontId, vw, pageLines, markdown,
+                    mdIndent);
   free(buffer);
 
   if (pageLines.empty()) return false;
@@ -1108,18 +1322,45 @@ bool TxtReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gfx
   int y = marginTop;
   for (const auto& line : pageLines) {
     if (!line.empty()) {
-      int x = marginLeft;
+      const char* text = line.c_str();
+      auto style = EpdFontFamily::REGULAR;
+      int indent = 0;
+      if (markdown && static_cast<uint8_t>(line[0]) >= MD_HEADING && static_cast<uint8_t>(line[0]) <= MD_RULE) {
+        switch (static_cast<MdStyle>(line[0])) {
+          case MD_HEADING:
+            style = EpdFontFamily::BOLD;
+            break;
+          case MD_QUOTE:
+            style = EpdFontFamily::ITALIC;
+            indent = mdIndent;
+            break;
+          case MD_LIST_CONT:
+            indent = mdIndent;
+            break;
+          case MD_RULE: {
+            const int ruleWidth = vw / 3;
+            renderer.fillRect(marginLeft + (vw - ruleWidth) / 2, y + lineHeight / 2, ruleWidth, 2,
+                              ReaderUtils::readerForegroundBlack());
+            y += lineHeight;
+            continue;
+          }
+          case MD_BODY:
+            break;
+        }
+        text++;
+      }
+      int x = marginLeft + indent;
       switch (paragraphAlignment) {
         case CrossPointSettings::CENTER_ALIGN:
-          x = marginLeft + (vw - renderer.getTextWidth(fontId, line.c_str())) / 2;
+          x = marginLeft + indent + (vw - renderer.getTextAdvanceX(fontId, text, style)) / 2;
           break;
         case CrossPointSettings::RIGHT_ALIGN:
-          x = marginLeft + vw - renderer.getTextWidth(fontId, line.c_str());
+          x = marginLeft + vw - renderer.getTextAdvanceX(fontId, text, style);
           break;
         default:
           break;
       }
-      renderer.drawText(fontId, x, y, line.c_str(), ReaderUtils::readerForegroundBlack());
+      renderer.drawText(fontId, x, y, text, ReaderUtils::readerForegroundBlack(), style);
     }
     y += lineHeight;
   }

@@ -28,6 +28,10 @@ class TxtReaderActivity final : public Activity {
   int linesPerPage = 0;
   int viewportWidth = 0;
   bool initialized = false;
+  // .md : les marqueurs turndown sont interpretes (titres gras, citations en
+  // italique indentees, liens reduits au libelle) au lieu d'etre affiches.
+  bool markdownMode = false;
+  int markdownIndent = 0;  // retrait des citations et continuations de listes
 
   // Cached settings for cache validation (different fonts/margins require re-indexing)
   int cachedFontId = 0;
