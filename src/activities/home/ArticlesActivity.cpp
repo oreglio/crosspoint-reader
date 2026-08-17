@@ -591,6 +591,12 @@ void ArticlesActivity::loop() {
     onGoHome(HomeMenuItem::RAINDROP);
     return;
   }
+  // Troisieme bouton frontal : acces direct au menu, sans appui long.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    LOG_INF("ART", "menu button -> actions menu");
+    openActionsMenu();
+    return;
+  }
 
   const int listSize = static_cast<int>(visible.size());
   if (listSize <= 0) return;
@@ -606,19 +612,26 @@ void ArticlesActivity::loop() {
     return;
   }
 
+  // Left est pris par le menu : la navigation precedente reste sur le bouton
+  // lateral Haut, la suivante garde Bas + le quatrieme bouton frontal.
   const auto moveSelection = [this, listSize](const int index) {
     selectorIndex = static_cast<size_t>(index);
     topIndex = followListSelection(static_cast<int>(selectorIndex), topIndex, visibleRowCount, listSize);
     requestUpdate();
   };
-  buttonNavigator.onNextRelease(
-      [this, listSize, &moveSelection] { moveSelection(ButtonNavigator::nextIndex(static_cast<int>(selectorIndex), listSize)); });
-  buttonNavigator.onPreviousRelease(
-      [this, listSize, &moveSelection] { moveSelection(ButtonNavigator::previousIndex(static_cast<int>(selectorIndex), listSize)); });
-  buttonNavigator.onNextContinuous([this, listSize, &moveSelection] {
-    moveSelection(ButtonNavigator::nextPageIndex(static_cast<int>(selectorIndex), listSize, visibleRowCount));
+  buttonNavigator.onRelease({MappedInputManager::Button::Down, MappedInputManager::Button::Right},
+                            [this, listSize, &moveSelection] {
+                              moveSelection(ButtonNavigator::nextIndex(static_cast<int>(selectorIndex), listSize));
+                            });
+  buttonNavigator.onRelease({MappedInputManager::Button::Up}, [this, listSize, &moveSelection] {
+    moveSelection(ButtonNavigator::previousIndex(static_cast<int>(selectorIndex), listSize));
   });
-  buttonNavigator.onPreviousContinuous([this, listSize, &moveSelection] {
+  buttonNavigator.onContinuous({MappedInputManager::Button::Down, MappedInputManager::Button::Right},
+                               [this, listSize, &moveSelection] {
+                                 moveSelection(
+                                     ButtonNavigator::nextPageIndex(static_cast<int>(selectorIndex), listSize, visibleRowCount));
+                               });
+  buttonNavigator.onContinuous({MappedInputManager::Button::Up}, [this, listSize, &moveSelection] {
     moveSelection(ButtonNavigator::previousPageIndex(static_cast<int>(selectorIndex), listSize, visibleRowCount));
   });
 }
@@ -634,7 +647,8 @@ void ArticlesActivity::render(RenderLock&&) {
   uiReady = false;
   app.render();
   uiReady = true;
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), visible.empty() ? "" : tr(STR_OPEN), "", "");
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_BACK), visible.empty() ? "" : tr(STR_OPEN), tr(STR_MENU), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   // Sans ce flush le framebuffer se dessine mais la dalle ne bouge jamais :
   // ecran fige sur la frame precedente, boutons « morts » en apparence
