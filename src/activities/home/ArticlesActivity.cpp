@@ -350,7 +350,8 @@ void ArticlesActivity::markSelectedDone() {
 // Menu unique sur appui long : action sur l'article + entrees de filtre.
 void ArticlesActivity::openActionsMenu() {
   std::vector<std::string> options;
-  options.reserve(5);
+  options.reserve(6);
+  options.emplace_back(tr(STR_RAINDROP_MENU_SYNC));
   options.emplace_back(tr(STR_RAINDROP_MARK_DONE));
   options.emplace_back(tr(STR_ARTICLES_FILTER_TAG));
   options.emplace_back(tr(STR_ARTICLES_SEARCH));
@@ -367,20 +368,23 @@ void ArticlesActivity::openActionsMenu() {
         }
         switch (choice->index) {
           case 0:
+            silentRestartToNetwork(NetworkBootTarget::RAINDROP_SYNC);
+            return;
+          case 1:
             markSelectedDone();
             break;
-          case 1:
+          case 2:
             openTagFilterMenu();
             return;
-          case 2:
+          case 3:
             openSearch();
             return;
-          case 3:
+          case 4:
             filterTag.clear();
             searchQuery.clear();
             rebuildVisible();
             break;
-          case 4:
+          case 5:
             // Resynchronisation complete : oublier curseur et index, puis
             // repartir en sync — elle annoncera le bundle entier et ne
             // touchera rien tant que l'utilisateur n'a pas confirme.
@@ -530,16 +534,16 @@ void ArticlesActivity::buildListScreen(UiApp::ScreenType& screen) {
   fui::ListProps props;
   props.labelText = screen.theme().bodyText;
   props.labelText.maxLines = 2;
-  // Hauteur posee AVANT configureUiList, sinon il derive une rangee « 1 ligne
-  // + sous-titre » plus courte que nos rangees reelles (titre sur 2 lignes) :
-  // la fenetre croyait contenir ~3 rangees de plus et la selection sortait de
-  // l'ecran avant que le defilement suive (vu sur X3). Budget = sous-titre +
-  // deux lignes de titre : WithSubtitle plus un cran de ligne texte.
-  const int16_t oneLine = uiListRowHeight(screen.theme(), UiListRowType::SingleLine);
-  const int16_t withSubtitle = uiListRowHeight(screen.theme(), UiListRowType::WithSubtitle);
-  props.rowHeight = static_cast<int16_t>(withSubtitle + (withSubtitle - oneLine));
   const fui::Rect listRect = screen.body();
-  const auto rows = configureUiList(props, screen.theme(), listRect, UiListRowType::WithSubtitle);
+  configureUiList(props, screen.theme(), listRect, UiListRowType::WithSubtitle);
+  // Les rangees a sous-titre grandissent d'une ligne quand le titre wrappe
+  // (contrat du SDK, list.h : hauteur mesuree par item). Le rowHeight reste
+  // compact — pas de vide sous les titres courts — mais la FENETRE se compte
+  // avec la hauteur maximale, sinon la selection sort de l'ecran avant que la
+  // page suive (les « 3 clics morts » vus sur X3).
+  const int16_t labelLh = screen.target().lineHeight(props.labelText.font);
+  const auto rows =
+      fui::listVisibleRows(listRect, static_cast<int16_t>(props.rowHeight + labelLh), props.rowGap);
   visibleRowCount = rows > 0 ? rows : 1;
   topIndex = scrollListBy(topIndex, 0, visibleRowCount, static_cast<int>(visible.size()));
 
