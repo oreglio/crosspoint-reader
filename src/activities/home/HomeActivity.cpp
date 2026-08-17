@@ -345,6 +345,8 @@ HomeMenuAction homeActionForInitialMenuItem(HomeMenuItem item) {
       return HomeMenuAction::FileTransfer;
     case HomeMenuItem::SETTINGS_MENU:
       return HomeMenuAction::Settings;
+    case HomeMenuItem::RAINDROP:
+      return HomeMenuAction::RaindropSync;
     case HomeMenuItem::NONE:
     default:
       return HomeMenuAction::ContinueReading;

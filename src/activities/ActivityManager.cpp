@@ -52,6 +52,7 @@ void restartToFileTransfer(const NetworkMode mode, const std::string& returnBook
 // destroyed — it used to inspect a reset pointer there, so the repositioning
 // silently never ran for activities that replace Home (the Library).
 HomeMenuItem homeMenuItemForActivityName(const std::string& activityName) {
+  if (activityName == "Articles") return HomeMenuItem::RAINDROP;
   if (activityName == "FileBrowser") return HomeMenuItem::FILE_BROWSER;
   if (activityName == "Library") return HomeMenuItem::LIBRARY;
   if (activityName == "RecentBooks") return HomeMenuItem::RECENTS;

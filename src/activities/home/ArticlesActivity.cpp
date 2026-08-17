@@ -524,8 +524,9 @@ void ArticlesActivity::buildListScreen(UiApp::ScreenType& screen) {
 }
 
 void ArticlesActivity::loop() {
+  // Retour : Home avec la selection sur l'entree Raindrop Sync du menu.
   if (TouchHeaderBackButton::wasTapped(mappedInput, renderer)) {
-    onGoHome();
+    onGoHome(HomeMenuItem::RAINDROP);
     return;
   }
   // Le tactile passe par la FreeInkApp : render() a enregistre les rectangles
@@ -557,7 +558,7 @@ void ArticlesActivity::loop() {
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    onGoHome();
+    onGoHome(HomeMenuItem::RAINDROP);
     return;
   }
 
