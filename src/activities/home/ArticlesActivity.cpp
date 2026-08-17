@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "CrossPointSettings.h"
+#include "SilentRestart.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "activities/util/OptionSelectionActivity.h"
 #include "components/TouchHeaderBackButton.h"
@@ -349,11 +350,12 @@ void ArticlesActivity::markSelectedDone() {
 // Menu unique sur appui long : action sur l'article + entrees de filtre.
 void ArticlesActivity::openActionsMenu() {
   std::vector<std::string> options;
-  options.reserve(4);
+  options.reserve(5);
   options.emplace_back(tr(STR_RAINDROP_MARK_DONE));
   options.emplace_back(tr(STR_ARTICLES_FILTER_TAG));
   options.emplace_back(tr(STR_ARTICLES_SEARCH));
   options.emplace_back(tr(STR_ARTICLES_ALL));
+  options.emplace_back(tr(STR_ARTICLES_RESYNC));
   startActivityForResult(
       std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "ArticlesMenu", StrId::STR_ARTICLES_TITLE,
                                                 std::move(options), 0),
@@ -378,6 +380,14 @@ void ArticlesActivity::openActionsMenu() {
             searchQuery.clear();
             rebuildVisible();
             break;
+          case 4:
+            // Resynchronisation complete : oublier curseur et index, puis
+            // repartir en sync — elle annoncera le bundle entier et ne
+            // touchera rien tant que l'utilisateur n'a pas confirme.
+            Storage.remove("/.crosspoint/raindrop-cursor.txt");
+            Storage.remove("/Articles/.index");
+            silentRestartToNetwork(NetworkBootTarget::RAINDROP_SYNC);
+            return;
           default:
             break;
         }
