@@ -472,6 +472,11 @@ void ArticlesActivity::listScreen(UiApp::ScreenType& screen, void* user) {
 
 void ArticlesActivity::buildListScreen(UiApp::ScreenType& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
+  // Contenu sous la bande du header, au-dessus des hints de boutons.
+  screen.setContentMargin(
+      fui::Insets{static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput)), 0,
+                  static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   // Bande du bas : filtre/recherche actifs, sinon le compte d'articles.
   {
