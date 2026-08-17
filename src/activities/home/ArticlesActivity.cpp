@@ -530,6 +530,14 @@ void ArticlesActivity::buildListScreen(UiApp::ScreenType& screen) {
   fui::ListProps props;
   props.labelText = screen.theme().bodyText;
   props.labelText.maxLines = 2;
+  // Hauteur posee AVANT configureUiList, sinon il derive une rangee « 1 ligne
+  // + sous-titre » plus courte que nos rangees reelles (titre sur 2 lignes) :
+  // la fenetre croyait contenir ~3 rangees de plus et la selection sortait de
+  // l'ecran avant que le defilement suive (vu sur X3). Budget = sous-titre +
+  // deux lignes de titre : WithSubtitle plus un cran de ligne texte.
+  const int16_t oneLine = uiListRowHeight(screen.theme(), UiListRowType::SingleLine);
+  const int16_t withSubtitle = uiListRowHeight(screen.theme(), UiListRowType::WithSubtitle);
+  props.rowHeight = static_cast<int16_t>(withSubtitle + (withSubtitle - oneLine));
   const fui::Rect listRect = screen.body();
   const auto rows = configureUiList(props, screen.theme(), listRect, UiListRowType::WithSubtitle);
   visibleRowCount = rows > 0 ? rows : 1;
