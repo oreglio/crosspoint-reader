@@ -38,6 +38,10 @@ class ArticlesActivity final : public Activity {
   static constexpr size_t ROW_CACHE = 12;
   std::array<Row, ROW_CACHE> rowCache;
   std::array<uint32_t, ROW_CACHE> rowCacheKeys{};
+  // Handle garde ouvert entre les lignes affichees : ouvrir .index par nom
+  // rebalaie le repertoire FAT a chaque fois. Ferme dans onExit.
+  HalFile indexFile;
+  bool indexOpen = false;
 
   ButtonNavigator buttonNavigator;
   size_t selectorIndex = 0;
