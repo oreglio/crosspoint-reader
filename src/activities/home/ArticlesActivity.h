@@ -45,6 +45,9 @@ class ArticlesActivity final : public Activity {
   int visibleRowCount = 1;
   bool lockNextConfirmRelease = false;
   bool longPressConfirmHandled = false;
+  // L'e-ink est lent : un second appui pendant la transition d'activite
+  // arriverait comme un clic valide. Fenetre morte apres l'entree.
+  unsigned long enteredAtMs = 0;
 
   freeink::ui::GfxRendererTarget uiTarget;  // doit preceder `app`
   UiApp app;

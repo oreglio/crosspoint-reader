@@ -23,6 +23,7 @@ constexpr char INDEX_PATH[] = "/Articles/.index";
 constexpr char DONE_DIR[] = "/Articles/.done";
 constexpr char DONE_QUEUE[] = "/.crosspoint/raindrop-done.txt";
 constexpr unsigned long LONG_CONFIRM_MS = 700;
+constexpr unsigned long ENTRY_GUARD_MS = 600;
 // Ligne d'index : fichier\ttitre\ttags\toctets\tdate — bornee par les 120
 // caracteres de nom cote serveur plus titre/tags assainis.
 constexpr size_t INDEX_LINE_MAX = 384;
@@ -70,6 +71,7 @@ void ArticlesActivity::clearRowCache() {
 
 void ArticlesActivity::onEnter() {
   Activity::onEnter();
+  enteredAtMs = millis();
   lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
   clearRowCache();
   loadHiddenNames();
@@ -102,6 +104,10 @@ void ArticlesActivity::onEnter() {
 
 void ArticlesActivity::onExit() {
   Activity::onExit();
+  if (indexOpen) {
+    indexFile.close();
+    indexOpen = false;
+  }
   visible.clear();
   visible.shrink_to_fit();
   hiddenNames.clear();
@@ -255,9 +261,13 @@ const ArticlesActivity::Row& ArticlesActivity::rowAt(const size_t displayRow) {
   const size_t slot = displayRow % ROW_CACHE;
   const uint32_t key = visible[displayRow];
   if (rowCacheKeys[slot] != key) {
+    // Handle garde ouvert entre les lignes : ouvrir .index par nom rebalaie
+    // le repertoire FAT (~440 entrees) — a 12 lignes par ecran ca se sentait.
+    if (!indexOpen) {
+      indexOpen = Storage.openFileForRead("ART", INDEX_PATH, indexFile);
+    }
     Row& row = rowCache[slot];
-    HalFile file;
-    if (!Storage.openFileForRead("ART", INDEX_PATH, file) || !readIndexLine(file, key, row)) {
+    if (!indexOpen || !readIndexLine(indexFile, key, row)) {
       row.file.clear();
       row.title = "?";
       row.subtitle.clear();
@@ -540,25 +550,30 @@ void ArticlesActivity::loop() {
     }
   }
 
-  if (longPressConfirmHandled) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-        !mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
-      longPressConfirmHandled = false;
-    }
-    return;
-  }
-  if (!visible.empty() && mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
-      mappedInput.getHeldTime() >= LONG_CONFIRM_MS) {
+  // Fenetre morte apres l'entree : un appui fait pendant la transition (ecran
+  // pas encore rafraichi) serait sinon interprete comme Ouvrir/Retour.
+  const bool entryGuard = millis() - enteredAtMs < ENTRY_GUARD_MS;
+
+  // Le menu d'actions s'ouvre au RELACHEMENT de l'appui long, jamais pendant :
+  // OptionSelectionActivity valide sur wasReleased, un bouton encore tenu y
+  // auto-validerait la premiere entree (vu sur X3 : « Marquer comme lu »
+  // partait tout seul).
+  if (!longPressConfirmHandled && !entryGuard && !visible.empty() &&
+      mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= LONG_CONFIRM_MS) {
     longPressConfirmHandled = true;
-    openActionsMenu();
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    activateSelected();
+    if (longPressConfirmHandled) {
+      longPressConfirmHandled = false;
+      openActionsMenu();
+      return;
+    }
+    if (!entryGuard) activateSelected();
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    onGoHome(HomeMenuItem::RAINDROP);
+    if (!entryGuard) onGoHome(HomeMenuItem::RAINDROP);
     return;
   }
 
