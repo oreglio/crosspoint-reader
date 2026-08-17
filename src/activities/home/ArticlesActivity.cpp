@@ -631,6 +631,10 @@ void ArticlesActivity::render(RenderLock&&) {
   uiReady = true;
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), visible.empty() ? "" : tr(STR_OPEN), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  // Sans ce flush le framebuffer se dessine mais la dalle ne bouge jamais :
+  // ecran fige sur la frame precedente, boutons « morts » en apparence
+  // (vu sur X3 — c'est le contrat de fin de render()).
+  renderer.displayBuffer();
   if (firstRenderDoneMs.load() == 0) {
     firstRenderDoneMs = millis();
     LOG_INF("ART", "first render done: %u rows visible", static_cast<unsigned>(visible.size()));
