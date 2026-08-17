@@ -146,6 +146,10 @@ bool ArticlesActivity::ensureIndexFile() {
     LOG_ERR("ART", "Cannot write %s", INDEX_PATH);
     return false;
   }
+  // Marqueur « fabrique localement » : la sync remplace cet index par celui du
+  // serveur (vrais titres + tags) meme quand aucun article n'est nouveau.
+  // Les parseurs ignorent la ligne naturellement (pas de tabulations).
+  out.write(reinterpret_cast<const uint8_t*>("#local\n"), 7);
   for (const size_t i : order) {
     const std::string& n = names[i];
     const bool datePrefixed = n.size() > 11 && n[4] == '-' && n[7] == '-' && n[10] == ' ';
@@ -186,6 +190,14 @@ void ArticlesActivity::rebuildVisible() {
   clearRowCache();
   selectorIndex = 0;
   topIndex = 0;
+
+  // Un seul lecteur a la fois sur la carte : le handle de rowAt doit etre
+  // ferme avant d'ouvrir notre propre passe — sinon l'ouverture echoue et le
+  // filtre rendait une liste vide (vu sur X3).
+  if (indexOpen) {
+    indexFile.close();
+    indexOpen = false;
+  }
 
   HalFile file;
   if (!Storage.openFileForRead("ART", INDEX_PATH, file)) return;
@@ -379,6 +391,10 @@ void ArticlesActivity::openTagFilterMenu() {
   std::vector<std::string> tags;
   std::vector<uint16_t> counts;
 
+  if (indexOpen) {
+    indexFile.close();
+    indexOpen = false;
+  }
   HalFile file;
   if (Storage.openFileForRead("ART", INDEX_PATH, file)) {
     const size_t fileSize = file.size();

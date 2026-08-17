@@ -470,13 +470,29 @@ void RaindropSyncActivity::runSync() {
   // retombe sur le comportement historique : telecharger directement.
   if (fetchBundleInfo()) {
     if (pendingCount_ == 0) {
-      state_ = State::COMPLETE;
+      // Zero nouveaute, mais si la liseuse n'a pas encore l'index serveur
+      // (absent, ou fabrique localement : premiere ligne '#'), le bundle —
+      // minuscule dans ce cas — est telecharge quand meme pour l'obtenir
+      // (vrais titres + tags du viewer).
+      bool needIndex = !Storage.exists("/Articles/.index");
+      if (!needIndex) {
+        HalFile idx;
+        if (Storage.openFileForRead("RDROP", "/Articles/.index", idx)) {
+          uint8_t first = 0;
+          needIndex = idx.read(&first, 1) == 1 && first == '#';
+        }
+      }
+      if (!needIndex) {
+        state_ = State::COMPLETE;
+        requestUpdate();
+        return;
+      }
+      LOG_INF("RDROP", "Index serveur absent: bundle telecharge malgre 0 nouveaute");
+    } else {
+      state_ = State::CONFIRM;
       requestUpdate();
       return;
     }
-    state_ = State::CONFIRM;
-    requestUpdate();
-    return;
   }
   runDownloadPhase();
 }
