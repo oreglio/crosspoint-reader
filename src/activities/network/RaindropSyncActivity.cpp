@@ -539,8 +539,13 @@ void RaindropSyncActivity::runDownloadPhase() {
 }
 
 void RaindropSyncActivity::loop() {
+  // Pas de mappedInput.update() ici : la boucle principale fait deja
+  // gpio.update() a chaque passe, et un second update sous les 5 ms de
+  // debounce CONSOMME le front de relachement avant wasReleased() — les
+  // clics semblaient ignores un coup sur deux (vu sur X3). L'auto-update
+  // ne se justifie que pendant le travail bloquant (pollCancel, progression),
+  // ou la boucle principale est a l'arret.
   if (state_ == State::CONFIRM) {
-    mappedInput.update();
     if (TouchHeaderBackButton::wasTapped(mappedInput, renderer) ||
         mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       finishAfterBackPress();
@@ -558,7 +563,6 @@ void RaindropSyncActivity::loop() {
     return;
   }
   if (state_ == State::COMPLETE || state_ == State::ERROR) {
-    mappedInput.update();
     if (TouchHeaderBackButton::wasTapped(mappedInput, renderer) ||
         mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       finishAfterBackPress();
