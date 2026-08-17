@@ -2257,7 +2257,7 @@ void HomeActivity::openRaindropMenu() {
                            if (choice->index == 0) {
                              silentRestartToNetwork(NetworkBootTarget::RAINDROP_SYNC);
                            } else {
-                             activityManager.goToFileBrowser("/Articles");
+                             activityManager.goToArticles();
                            }
                          });
 }

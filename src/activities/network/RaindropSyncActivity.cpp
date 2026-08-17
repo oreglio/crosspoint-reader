@@ -288,12 +288,15 @@ bool RaindropSyncActivity::unpackBundle() {
     const uint32_t dataStart = localOffset + 30 + u16(local + 26) + u16(local + 28);
 
     const bool isManifest = strcmp(name, MANIFEST_ENTRY) == 0;
-    if (!isManifest && !isSafeArticleFileName(name)) {
+    // L'index TSV (snapshot titres/tags/dates du serveur) alimente le viewer
+    // d'articles : extrait vers /Articles/.index en l'ecrasant.
+    const bool isIndex = strcmp(name, "index.tsv") == 0;
+    if (!isManifest && !isIndex && !isSafeArticleFileName(name)) {
       LOG_ERR("RDROP", "Rejected unsafe bundle entry name");
       failedCount_++;
       continue;
     }
-    if (!isManifest) {
+    if (!isManifest && !isIndex) {
       // Un article marque lu sur la liseuse ne ressuscite pas quand le serveur
       // le reecrit (backfill de resume) : il attend son archivage Raindrop.
       const std::string donePath = std::string(DONE_DIR) + "/" + name;
@@ -319,14 +322,16 @@ bool RaindropSyncActivity::unpackBundle() {
       continue;
     }
 
-    currentArticle_ = name;
-    const unsigned long now = millis();
-    if (now - lastDrawMs > 1500) {
-      lastDrawMs = now;
-      requestUpdate(true);
+    if (!isIndex) {
+      currentArticle_ = name;
+      const unsigned long now = millis();
+      if (now - lastDrawMs > 1500) {
+        lastDrawMs = now;
+        requestUpdate(true);
+      }
     }
 
-    const std::string destPath = std::string(ARTICLES_DIR) + "/" + name;
+    const std::string destPath = isIndex ? "/Articles/.index" : std::string(ARTICLES_DIR) + "/" + name;
     HalFile out;
     if (!Storage.openFileForWrite("RDROP", destPath.c_str(), out)) {
       LOG_ERR("RDROP", "Could not open %s for write", destPath.c_str());
@@ -347,10 +352,10 @@ bool RaindropSyncActivity::unpackBundle() {
     if (!ok) {
       LOG_ERR("RDROP", "Extraction failed: %s", name);
       Storage.remove(destPath.c_str());
-      failedCount_++;
+      if (!isIndex) failedCount_++;
       continue;
     }
-    newCount_++;
+    if (!isIndex) newCount_++;
   }
 
   // Curseur avance des que la passe s'est terminee : re-telecharger 5,5 Mo

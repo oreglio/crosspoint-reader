@@ -110,6 +110,9 @@ class ActivityManager {
   void goToNearbyBookReceive();
   void goToSettings(bool dismissOnUpSwipe = false);
   void goToFileBrowser(std::string path = {});
+  // Viewer des articles Raindrop ; highlight = chemin d'un article a
+  // preselectionner (retour de lecture).
+  void goToArticles(std::string highlight = {});
   void goToLibrary();
   void goToRecentBooks();
   void goToBrowser();

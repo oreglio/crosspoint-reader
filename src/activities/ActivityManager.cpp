@@ -19,6 +19,7 @@
 #include "components/TouchRegistry.h"
 #include "home/AlertActivity.h"
 #include "home/CrashActivity.h"
+#include "home/ArticlesActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
@@ -168,9 +169,9 @@ void ActivityManager::loop() {
         lock.unlock();  // goHome may acquire its own lock
         if (returnToArticlesOnReaderExit) {
           // Le geste Home passe par goHome() directement et garde son sens ;
-          // seul le Back du lecteur revient ici.
+          // seul le Back du lecteur revient ici (ouverture d'article ratee).
           returnToArticlesOnReaderExit = false;
-          goToFileBrowser("/Articles");
+          goToArticles();
           continue;
         }
         goHome(exitedItem);
@@ -438,6 +439,10 @@ void ActivityManager::goToSettings(const bool dismissOnUpSwipe) {
 
 void ActivityManager::goToFileBrowser(std::string path) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
+}
+
+void ActivityManager::goToArticles(std::string highlight) {
+  replaceActivity(std::make_unique<ArticlesActivity>(renderer, mappedInput, std::move(highlight)));
 }
 
 void ActivityManager::goToLibrary() { replaceActivity(std::make_unique<LibraryListActivity>(renderer, mappedInput)); }

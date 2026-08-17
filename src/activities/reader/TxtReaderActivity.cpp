@@ -435,7 +435,8 @@ void TxtReaderActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) &&
       mappedInput.getHeldTime() < ReaderUtils::GO_HOME_MS) {
     if (txt && txt->getPath().rfind("/Articles/", 0) == 0) {
-      activityManager.goToFileBrowser(txt->getPath());
+      // Retour au viewer d'articles, selection sur l'article qu'on vient de lire.
+      activityManager.goToArticles(txt->getPath());
     } else {
       onGoHome();
     }
