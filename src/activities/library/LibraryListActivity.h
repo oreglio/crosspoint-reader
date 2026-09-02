@@ -18,8 +18,8 @@
 //
 // Rows render through fui::list on a UiTabListActivity ring (0 = the sort
 // strip, 1..N = the books), which is what brings touch: rows, tabs, the A-Z
-// grid and the search strip all register FreeInkUI hit rects. Titles wrap
-// over up to three lines with per-item row heights, measured by the widget —
+// grid and the header search action all register FreeInkUI hit rects. Titles
+// wrap over up to three lines with per-item row heights, measured by the widget —
 // a short title costs a short row, as the pre-conversion renderer did.
 //
 // Only the visible window of rows is materialized per render (title/author
@@ -44,6 +44,8 @@ class LibraryListActivity final : public UiTabListActivity {
   int tabCount() const override;
   int activeTab() const override;
   const char* tabLabel(int index) const override;
+  freeink::ui::BitmapRef tabIcon(int index) const override;
+  uint16_t tabInputMask() const override;
   void onTabAction(int index) override;
   void onTabLongPress(int index) override;
   void stepTab(int direction) override;
@@ -55,8 +57,9 @@ class LibraryListActivity final : public UiTabListActivity {
 
  private:
   // The shelf's own actions, after the base's ACTION_ROW / ACTION_TAB.
-  static constexpr freeink::ui::ActionId ACTION_LETTER = ACTION_TAB_USER;
-  static constexpr freeink::ui::ActionId ACTION_LETTER_MODE = ACTION_TAB_USER + 1;
+  static constexpr freeink::ui::ActionId ACTION_SEARCH = ACTION_TAB_USER;
+  static constexpr freeink::ui::ActionId ACTION_LETTER = ACTION_TAB_USER + 1;
+  static constexpr freeink::ui::ActionId ACTION_LETTER_MODE = ACTION_TAB_USER + 2;
 
   // The readers open the Library from a HOLD of either button pair, and all
   // four of those buttons move the cursor or the sort strip here on release.
@@ -70,9 +73,6 @@ class LibraryListActivity final : public UiTabListActivity {
   bool rebuildIndex();
   bool rowTextFor(int entry, std::string& title, std::string& author, bool* isFavorite = nullptr);
   void openSelectedBook();
-  // Swap TitleAsc/TitleDesc in place: the Titles tab keeps its slot and the
-  // direction state lives for the whole power-on session (file-static).
-  void flipTitleDirection();
   // Long-press on a row: the row's secondary actions, headed by the book's own
   // title so there is no doubt which row they land on.
   void openBookMenu();
@@ -97,19 +97,17 @@ class LibraryListActivity final : public UiTabListActivity {
   // Ring 0 is the strip; the selected BOOK is ring - 1.
   int selectedEntry() const;
   bool tabsFocused() const { return ringPos() == 0; }
+  bool searchShortcutActive() const;
   // Row + viewport reset after a data change; ring 0 (strip focus) survives,
   // any row selection collapses to the first row.
   void resetListPosition();
-  // Cursor within the strip. Separate from the active view because the strip
-  // carries one entry that is not a sort mode: Search.
-  int tabCursor = 0;
-
   // Rows surviving the current query, as positions in the active sort order.
   // Empty query means no filtering and this stays untouched, so the ordinary
   // shelf pays nothing for the feature.
   std::string query;
   std::vector<uint16_t> filtered;
   void openSearch();
+  void buildSearchAction(UiScreen& screen);
   // Details is a mode of this activity too, like the grid: a full-screen page
   // for the selected row, render + Back, no lifecycle of its own.
   bool detailsView = false;
@@ -127,6 +125,7 @@ class LibraryListActivity final : public UiTabListActivity {
   void routeModalTouch();
   static void letterActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
   static void letterModeActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
+  static void searchActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
   // One bit per letter, computed when the grid opens. Testing each letter against
   // the index while drawing would re-read every record 26 times per frame.
   uint32_t lettersPresent = 0;
@@ -139,19 +138,11 @@ class LibraryListActivity final : public UiTabListActivity {
   void applyFilter();
   int rowCount() const;
   int rowFor(int entry) const;
-  void cycleSortOrder(bool forward = true);
   const char* sortOrderLabel() const;
 
-  // The sort strip: fui::tabBar with the shelf's own two-state treatment,
-  // plus the state decorations no component carries (the Titles direction
-  // triangle and the Search "filtered" dot), drawn on the band through the
-  // same FreeInkUI target.
-  void buildSortTabs(UiScreen& screen);
-  int16_t sortStripHeight(UiScreen& screen) const;
   // The list itself. Materializes ListItems and their strings for the visible
-  // window only, mirroring the widget's own layout math (heights, section
-  // headers in author order) so the page the reader sees is exactly the page
-  // navigation counts.
+  // window only. FreeInkUI owns row and section-heading geometry, and reports
+  // the measured page size back to navigation.
   void buildRows(UiScreen& screen);
   void drawPositionReadout();
   void nextPage();
@@ -159,9 +150,9 @@ class LibraryListActivity final : public UiTabListActivity {
 
   library::LibraryIndexFile index;
   library::LibraryFavoritesFile favorites;
-  // The ★ view flag lives in a file-static (sFavoritesView), like the title
-  // direction: with the star leading the strip, leaving the shelf in the ★
-  // view and coming back to Recent read as a bug on the device.
+  // The ★ view flag lives in a file-static (sFavoritesView): with the star
+  // leading the strip, leaving the shelf in the ★ view and coming back to
+  // Recent read as a bug on the device.
   // One popup, two menus that can never coexist: the row's book menu and the
   // ★ tab's sort menu.
   OptionPopup popup;

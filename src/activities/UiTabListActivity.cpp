@@ -119,6 +119,7 @@ void UiTabListActivity::buildTabBar(UiScreen& screen) {
   fui::TabItem tabs[MAX_TABS];
   for (int i = 0; i < count; i++) {
     tabs[i].label = tabLabel(i);
+    tabs[i].icon = tabIcon(i);
     tabs[i].value = static_cast<int16_t>(i);
     tabs[i].selected = activeTab() == i;
   }
@@ -126,7 +127,7 @@ void UiTabListActivity::buildTabBar(UiScreen& screen) {
   tabProps.tabs = tabs;
   tabProps.count = static_cast<uint16_t>(count);
   tabProps.action = ACTION_TAB;
-  tabProps.inputMask = fui::InputTouch;
+  tabProps.inputMask = tabInputMask();
   // Pill shape and label size are theme-driven; the label-hugging treatment
   // keeps wide labels inside their slot at large UI scales.
   const bool tabsFocused = ringPos() == 0;

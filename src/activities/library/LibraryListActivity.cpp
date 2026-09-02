@@ -24,11 +24,6 @@
 namespace fui = freeink::ui;
 
 namespace {
-// Which way the Titles tab runs. One direction for the whole power-on session:
-// it survives this activity's delete-on-exit on purpose, and it is deliberately
-// not a setting — a persisted field would be one more thing to migrate for a
-// preference the next boot can simply re-express in one hold.
-bool sTitleDescending = false;
 // The ★ view survives the shelf the same way: with the star leading the strip,
 // leaving in the favorites view and returning to Recent read as a bug on the
 // device. A boot still starts on Recent — the full shelf is the honest default.
@@ -37,10 +32,8 @@ bool sFavoritesView = false;
 // back to Recent read as "the filters do not save". One session-long shelf
 // state, statics only, zero settings.
 library::SortOrder sSortOrder = library::SortOrder::DateDesc;
-// The ★ view carries its OWN remembered order: sorting favorites by author and
-// then browsing Recent must not cost the favorites their order — which it did,
-// on the device, while they shared one variable. The title direction stays
-// shared: one triangle, one truth.
+// The ★ view carries its own remembered order: sorting favorites by author and
+// then browsing Recent must not cost the favorites their order.
 library::SortOrder sFavSortOrder = library::SortOrder::DateDesc;
 // Every row lookup goes through the order of the ACTIVE view.
 library::SortOrder currentOrder() { return sFavoritesView ? sFavSortOrder : sSortOrder; }
@@ -65,29 +58,20 @@ LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManag
   uiTarget.setFont(fui::GfxRendererTarget::FONT_SMALL, SMALL_FONT_ID);
 }
 
-// The strip's tab order, which is also the cycle order: the ★ first, then
-// Recent, Titles, Author, Search. The star sits at the edge because a glyph
-// wedged between two words breaks the row's reading — first device feedback —
-// and an edge is where the eye expects the special place anyway. Moving onto
-// ★ or a sort tab applies it at once; Search waits for Confirm, since opening
-// a keyboard is not something a sideways press should do by itself.
-//
-// Both title directions live on ONE tab. Z-A paid a full strip slot for a rare
-// use, and French labels were already overflowing the right edge; direction is
-// state on the tab (the drawn triangle), not a place in the row.
+// Search lives in the header, so every tab is a complete view/order state.
 constexpr int kFavTab = 0;
 constexpr int kRecentTab = 1;
-constexpr int kTitlesTab = 2;
-constexpr int kAuthorTab = 3;
-constexpr int kSearchTab = 4;
-constexpr int kTabSlots = kSearchTab + 1;
+constexpr int kTitleAscTab = 2;
+constexpr int kTitleDescTab = 3;
+constexpr int kAuthorTab = 4;
+constexpr int kTabSlots = kAuthorTab + 1;
 
-// No longer one-to-one: both title orders map to the Titles tab.
 int sortTabIndex(const library::SortOrder order) {
   switch (order) {
     case library::SortOrder::TitleAsc:
+      return kTitleAscTab;
     case library::SortOrder::TitleDesc:
-      return kTitlesTab;
+      return kTitleDescTab;
     case library::SortOrder::AuthorAsc:
       return kAuthorTab;
     case library::SortOrder::DateDesc:
@@ -97,7 +81,8 @@ int sortTabIndex(const library::SortOrder order) {
 }
 
 library::SortOrder orderForTab(const int tab) {
-  if (tab == kTitlesTab) return sTitleDescending ? library::SortOrder::TitleDesc : library::SortOrder::TitleAsc;
+  if (tab == kTitleAscTab) return library::SortOrder::TitleAsc;
+  if (tab == kTitleDescTab) return library::SortOrder::TitleDesc;
   if (tab == kAuthorTab) return library::SortOrder::AuthorAsc;
   return library::SortOrder::DateDesc;
 }
@@ -106,19 +91,23 @@ library::SortOrder orderForTab(const int tab) {
 // that reads as four copies of the word once they sit side by side.
 const char* tabLabelFor(const int tab) {
   if (tab == kRecentTab) return tr(STR_LIBRARY_TAB_RECENT);
-  if (tab == kTitlesTab) return tr(STR_LIBRARY_TAB_TITLES);
+  if (tab == kTitleAscTab) return "A-Z";
+  if (tab == kTitleDescTab) return "Z-A";
   if (tab == kAuthorTab) return tr(STR_LIBRARY_TAB_AUTHOR);
-  return tr(STR_LIBRARY_SEARCH);
+  return nullptr;
 }
 
 int LibraryListActivity::tabCount() const { return kTabSlots; }
 
-// The ACTIVE VIEW's tab — the ★ or the sort composing the shelf. Never Search:
-// Search is an action on the strip, not a view, so the strip's own cursor
-// (tabCursor) is the only state that can sit on it.
 int LibraryListActivity::activeTab() const { return sFavoritesView ? kFavTab : sortTabIndex(sSortOrder); }
 
 const char* LibraryListActivity::tabLabel(const int index) const { return tabLabelFor(index); }
+
+fui::BitmapRef LibraryListActivity::tabIcon(const int index) const {
+  return index == kFavTab ? fui::bitmapFromIcon(icon_star_16_fui) : fui::BitmapRef{};
+}
+
+uint16_t LibraryListActivity::tabInputMask() const { return fui::InputTouch | fui::InputLongPress; }
 
 int LibraryListActivity::selectedEntry() const {
   // Ring 0 (strip focused) keeps row 0 as the working selection, exactly as
@@ -143,7 +132,6 @@ void LibraryListActivity::onEnter() {
   library::LibraryShelfState state;
   library::loadLibraryState(state);
   sFavoritesView = state.favoritesView;
-  sTitleDescending = state.titleDescending;
   sSortOrder = state.shelfSort;
   sFavSortOrder = state.favSort;
 
@@ -156,9 +144,9 @@ void LibraryListActivity::onEnter() {
     // itself.
     RenderLock lock(*this);
     UiTabListActivity::onEnter();
+    app.on(ACTION_SEARCH, &LibraryListActivity::searchActionTrampoline, this);
     app.on(ACTION_LETTER, &LibraryListActivity::letterActionTrampoline, this);
     app.on(ACTION_LETTER_MODE, &LibraryListActivity::letterModeActionTrampoline, this);
-    tabCursor = activeTab();
     // Optimistic open: if an index exists, paint from it immediately and let
     // the user decide when to refresh. Only a missing or unreadable index
     // forces the walk, so entering the screen is normally instant.
@@ -196,7 +184,7 @@ void LibraryListActivity::onExit() {
   // is the right answer anyway: the shelf should reopen on that book.
   library::LibraryShelfState state;
   state.favoritesView = sFavoritesView;
-  state.titleDescending = sTitleDescending;
+  state.titleDescending = sSortOrder == library::SortOrder::TitleDesc;
   state.shelfSort = sSortOrder;
   state.favSort = sFavSortOrder;
   if (indexReady) {
@@ -403,15 +391,11 @@ void LibraryListActivity::openFavoritesSortMenu() {
       case 0:
         sFavSortOrder = library::SortOrder::DateDesc;
         break;
-      // The Titles tab's triangle keeps telling the truth if the reader
-      // later leaves ★: direction state follows the choice made here.
       case 1:
         sFavSortOrder = library::SortOrder::TitleAsc;
-        sTitleDescending = false;
         break;
       case 2:
         sFavSortOrder = library::SortOrder::TitleDesc;
-        sTitleDescending = true;
         break;
       case 3:
         sFavSortOrder = library::SortOrder::AuthorAsc;
@@ -426,64 +410,7 @@ void LibraryListActivity::openFavoritesSortMenu() {
   requestUpdate();
 }
 
-// Direction is a flip of existing state, not a different tab: the strip keeps
-// its width and the reader keeps their place in the row of tabs. The header
-// keeps announcing the full truth ("Library · Title Z-A").
-void LibraryListActivity::flipTitleDirection() {
-  sTitleDescending = !sTitleDescending;
-  const library::SortOrder order = sTitleDescending ? library::SortOrder::TitleDesc : library::SortOrder::TitleAsc;
-  // Written to whichever order is live: the grid's mode line can flip inside
-  // the ★ view, where the shelf's own sort must stay untouched.
-  if (sFavoritesView) {
-    sFavSortOrder = order;
-  } else {
-    sSortOrder = order;
-  }
-  // Same invalidation as activating a tab: the filter holds POSITIONS in the
-  // old order, and every remembered page boundary died with them.
-  applyFilter();
-  resetListPosition();
-  requestUpdate(true);
-}
-
-void LibraryListActivity::cycleSortOrder(const bool forward) {
-  tabCursor = (tabCursor + (forward ? 1 : kTabSlots - 1)) % kTabSlots;
-  if (tabCursor == kFavTab) {
-    // Landing on ★ applies it at once, like any sort tab. The order itself is
-    // untouched: favorites compose with whatever order is current.
-    sFavoritesView = true;
-    applyFilter();
-    // The view changed, so the ring below belongs to the NEW tab; the strip
-    // keeps the focus it had (ring 0), the list under it starts at the top.
-    auto& n = activeNav();
-    n.selected = 0;
-    n.top = 0;
-    selectLastOnNextBuild = false;
-  } else if (tabCursor != kSearchTab) {
-    sFavoritesView = false;
-    sSortOrder = orderForTab(tabCursor);
-    applyFilter();
-    auto& n = activeNav();
-    n.selected = 0;
-    n.top = 0;
-    selectLastOnNextBuild = false;
-  }
-  requestUpdate();
-}
-
-void LibraryListActivity::stepTab(const int direction) { cycleSortOrder(direction > 0); }
-
-// Touch tap on a strip pill: the same application the button cycle does, minus
-// the travel. Search still waits for nothing — a tap IS the deliberate act the
-// sideways press wasn't.
 void LibraryListActivity::onTabAction(const int index) {
-  if (index == kSearchTab) {
-    tabCursor = kSearchTab;
-    app.clearTapFlash();
-    openSearch();
-    return;
-  }
-  tabCursor = index;
   if (index == kFavTab) {
     sFavoritesView = true;
   } else {
@@ -500,25 +427,13 @@ void LibraryListActivity::onTabAction(const int index) {
   requestUpdate();
 }
 
-// A held tap on a tab pill is the tab's secondary action — the same map the
-// Confirm hold follows on the focused strip.
 void LibraryListActivity::onTabLongPress(const int index) {
-  if (index == kTitlesTab) {
-    flipTitleDirection();
-    return;
-  }
-  if (index == kFavTab) {
-    openFavoritesSortMenu();
-    return;
-  }
-  if (index == kSearchTab && !query.empty()) {
-    // Search's secondary action clears its own filter, without a trip
-    // through the keyboard.
-    query.clear();
-    applyFilter();
-    resetListPosition();
-    requestUpdate(true);
-  }
+  if (index == kFavTab) openFavoritesSortMenu();
+}
+
+void LibraryListActivity::stepTab(const int direction) {
+  const int next = (activeTab() + direction + kTabSlots) % kTabSlots;
+  onTabAction(next);
 }
 
 const char* LibraryListActivity::sortOrderLabel() const {
@@ -690,21 +605,10 @@ void LibraryListActivity::openLetterGrid() {
   requestUpdate();
 }
 
-// The mode line above the grid. Sorted by author the choice is which WORD the
-// letters mean; sorted by title it is the direction — the novice path to the
-// same flip the strip's hold offers.
 void LibraryListActivity::toggleLetterGridMode() {
-  if (currentOrder() == library::SortOrder::AuthorAsc) {
-    jumpByGivenName = !jumpByGivenName;
-    // The letters present as first names are not those present as surnames.
-    // The cursor is on the mode line, not on a letter, so nothing needs
-    // re-seating here — Down does that entering the grid.
-    computeLettersPresent();
-  } else {
-    // The letter SET is direction blind (first letters do not change), so
-    // nothing needs recomputing.
-    flipTitleDirection();
-  }
+  if (currentOrder() != library::SortOrder::AuthorAsc) return;
+  jumpByGivenName = !jumpByGivenName;
+  computeLettersPresent();
   requestUpdate();
 }
 
@@ -722,9 +626,8 @@ void LibraryListActivity::letterActionTrampoline(const fui::ActionEvent& event, 
 void LibraryListActivity::letterModeActionTrampoline(const fui::ActionEvent& event, void* user) {
   auto* self = static_cast<LibraryListActivity*>(user);
   if (!self->letterGrid) return;
-  // Tapping the already-active choice states nothing new.
-  const bool titleOrder = currentOrder() != library::SortOrder::AuthorAsc;
-  const int active = titleOrder ? (sTitleDescending ? 1 : 0) : (self->jumpByGivenName ? 0 : 1);
+  if (currentOrder() != library::SortOrder::AuthorAsc) return;
+  const int active = self->jumpByGivenName ? 0 : 1;
   if (event.value == active) return;
   self->toggleLetterGridMode();
 }
@@ -740,13 +643,17 @@ void LibraryListActivity::openSearch() {
                            if (result.isCancelled) return;
                            query = std::get<KeyboardResult>(result.data).text;
                            applyFilter();
-                           // The result belongs to the list: the cursor lands
-                           // on the first surviving row, not on the strip.
                            auto& n = activeNav();
-                           n.selected = 1;
+                           n.selected = !query.empty() && rowCount() == 0 && !degraded ? 0 : 1;
                            n.top = 0;
                            requestUpdate();
                          });
+}
+
+void LibraryListActivity::searchActionTrampoline(const fui::ActionEvent&, void* user) {
+  auto* self = static_cast<LibraryListActivity*>(user);
+  self->app.clearTapFlash();
+  self->openSearch();
 }
 
 // Title and author for one entry, read straight from the index. Only ever called
@@ -851,8 +758,10 @@ bool LibraryListActivity::handleCustomInput() {
     if (mappedInput.wasReleased(MappedInputManager::Button::Down)) delta = kLetterCols;
     if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
       if (letterCursor < kLetterCols) {
-        letterCursor = -1;
-        requestUpdate();
+        if (currentOrder() == library::SortOrder::AuthorAsc) {
+          letterCursor = -1;
+          requestUpdate();
+        }
         return true;
       }
       delta = -kLetterCols;
@@ -917,33 +826,16 @@ bool LibraryListActivity::handleButtons() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    // Dispatched on release, by held time, so one press means exactly one
-    // thing. A hold is the secondary action of the FOCUSED context — the rule
-    // the whole gesture map follows.
     if (mappedInput.getHeldTime() >= kHoldMs) {
-      // On the strip's Titles tab the hold flips the direction — the triangle
-      // and the header both change, so the flip explains itself. On a book row
-      // it opens the row's own menu.
       if (tabsFocused()) {
-        if (tabCursor == kTitlesTab) flipTitleDirection();
-        if (tabCursor == kFavTab) openFavoritesSortMenu();
-        if (tabCursor == kSearchTab && !query.empty()) {
-          query.clear();
-          applyFilter();
-          resetListPosition();
-          requestUpdate(true);
-        }
+        if (activeTab() == kFavTab) openFavoritesSortMenu();
       } else {
         openBookMenu();
       }
       return true;
     }
     if (tabsFocused()) {
-      if (tabCursor == kSearchTab) {
-        openSearch();
-      } else if (currentOrder() != library::SortOrder::DateDesc) {
-        openLetterGrid();
-      }
+      if (currentOrder() != library::SortOrder::DateDesc) openLetterGrid();
       return true;
     }
     if (count > 0) openSelectedBook();
@@ -962,15 +854,18 @@ bool LibraryListActivity::handleButtons() {
   // rather than on it, which is not what "last page" promises.
   if (mappedInput.wasReleased(MappedInputManager::Button::Right) && (tabsFocused() || count > 0)) {
     if (tabsFocused()) {
-      cycleSortOrder(/*forward=*/true);
+      stepTab(1);
     } else {
       nextPage();
     }
     return true;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Left) && (tabsFocused() || count > 0)) {
-    if (tabsFocused()) {
-      cycleSortOrder(/*forward=*/false);
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left) &&
+      (searchShortcutActive() || tabsFocused() || count > 0)) {
+    if (searchShortcutActive()) {
+      openSearch();
+    } else if (tabsFocused()) {
+      stepTab(-1);
     } else if (mappedInput.getHeldTime() >= kHoldMs) {
       n.selected = 1;
       n.top = 0;
@@ -995,7 +890,6 @@ bool LibraryListActivity::handleButtons() {
       // orders behind a hidden strip would repaint the same walk-order list
       // under a different title.
       n.selected = 0;
-      tabCursor = activeTab();
       requestUpdate();
     } else if (n.selected - 1 > n.top) {
       n.selected--;
@@ -1021,6 +915,12 @@ bool LibraryListActivity::handleButtons() {
   return false;
 }
 
+bool LibraryListActivity::searchShortcutActive() const {
+  if (detailsView || letterGrid || degraded) return false;
+  if (ringPos() == 1) return true;
+  return tabsFocused() && !query.empty() && rowCount() == 0;
+}
+
 // Touch routing for the modal grid: handleCustomInput consumes the whole pass
 // while a mode is up, so the base's routeListTouch never runs — the app's hit
 // rects (letters, mode line) are routed here instead.
@@ -1029,103 +929,22 @@ void LibraryListActivity::routeModalTouch() {
   if (route.routed && app.invalidated()) requestUpdate();
 }
 
-// The strip takes its height from its own label line, exactly as the manual
-// renderer did (lineH + 8): a fixed band clipped the labels as soon as the UI
-// scale grew the small font. Details and the grid consume the same height so
-// every mode's content starts at the same y.
-int16_t LibraryListActivity::sortStripHeight(UiScreen& screen) const {
-  return static_cast<int16_t>(screen.target().lineHeight(screen.theme().smallText.font) + 8);
-}
+void LibraryListActivity::buildSearchAction(UiScreen& screen) {
+  if (!mappedInput.hasTouchHardware() || detailsView || letterGrid || degraded) return;
 
-// The sort strip: every mode visible at once, the active one underlined. On a
-// panel that refreshes whole, showing the alternatives costs nothing per frame
-// and saves a menu round-trip to discover them.
-//
-// The band is a fui::tabBar — which is what makes the pills tappable — with
-// the shelf's own two-state treatment: focused, the cursor's pill inverts
-// (the strongest signal this panel has that Left/Right now belong to the
-// strip); unfocused, the active VIEW carries a plain underline, so the list
-// keeps the reader's attention. No band fill: on a 1-bit panel the dithered
-// grey is a literal checkerboard, the same pattern the selected row uses.
-void LibraryListActivity::buildSortTabs(UiScreen& screen) {
-  fui::TabItem tabs[kTabSlots];
-  for (int i = 0; i < kTabSlots; i++) {
-    if (i == kFavTab) {
-      // A drawn mark, not a word: nothing to translate, and it is the same
-      // star the favorite rows carry, so the strip teaches the marker.
-      tabs[i].icon = fui::bitmapFromIcon(icon_star_16_fui);
-    } else {
-      tabs[i].label = tabLabelFor(i);
-    }
-    tabs[i].value = static_cast<int16_t>(i);
-    // Focused, the cursor marks the pill; unfocused, the active VIEW does —
-    // which is ★ while the favorites view is on, not the sort composing it.
-    tabs[i].selected = tabsFocused()    ? i == tabCursor
-                       : sFavoritesView ? i == kFavTab
-                                        : (i != kSearchTab && sortTabIndex(sSortOrder) == i);
-  }
-
-  fui::TabBarProps props;
-  props.tabs = tabs;
-  props.count = kTabSlots;
-  props.action = ACTION_TAB;
-  props.inputMask = fui::InputTouch | fui::InputLongPress;
-  props.text = screen.theme().smallText;
-  props.tabInset = fui::Insets{2, 0, 2, 0};
-  props.contentInset = fui::Insets{2, 6, 2, 6};
-  props.minTouchSize = screen.theme().minTouchSize;
-
-  fui::StyleSet styles;
-  styles.explicitlySet = true;
-  styles.normal.foreground = fui::Paint::solid(fui::Color::Black);
-  if (tabsFocused()) {
-    styles.selected.background = fui::Paint::solid(fui::Color::Black);
-    styles.selected.foreground = fui::Paint::solid(fui::Color::White);
-    styles.selected.radius = 4;
-  } else {
-    styles.selected.foreground = fui::Paint::solid(fui::Color::Black);
-    props.selectedUnderline = 1;
-  }
-  styles.focused = styles.selected;
-  styles.active = styles.selected;
-  props.tabStyles = styles;
-
-  const fui::Rect band = screen.takeTop(sortStripHeight(screen));
-  fui::tabBar(screen.frame(), band, props);
-
-  // The two state decorations no component slot carries, drawn on the band
-  // through the same target. The active Titles tab tells its direction as a
-  // small triangle, so direction is never hidden state; an active query
-  // filters every view, so its tab says so with a dot — the same
-  // state-on-the-tab idiom.
-  const int16_t slot = static_cast<int16_t>(band.width / kTabSlots);
-  const int16_t lineH = screen.target().lineHeight(props.text.font);
-  const bool activeTitles = sortTabIndex(sSortOrder) == kTitlesTab;
-  if (activeTitles) {
-    const int16_t w = screen.target().measureText(props.text.font, tabLabelFor(kTitlesTab), props.text).width;
-    const int16_t x = static_cast<int16_t>(band.x + kTitlesTab * slot + (slot - w) / 2 + w + 5);
-    const int16_t midY = static_cast<int16_t>(band.y + 2 + (lineH + 4) / 2);
-    constexpr int16_t triW = 7;
-    constexpr int16_t triH = 4;
-    const fui::Paint ink = fui::Paint::solid(fui::Color::Black);
-    if (sTitleDescending) {
-      screen.target().triangle(fui::Point{x, static_cast<int16_t>(midY - triH / 2)},
-                               fui::Point{static_cast<int16_t>(x + triW), static_cast<int16_t>(midY - triH / 2)},
-                               fui::Point{static_cast<int16_t>(x + triW / 2), static_cast<int16_t>(midY + triH / 2)},
-                               ink);
-    } else {
-      screen.target().triangle(fui::Point{static_cast<int16_t>(x + triW / 2), static_cast<int16_t>(midY - triH / 2)},
-                               fui::Point{x, static_cast<int16_t>(midY + triH / 2)},
-                               fui::Point{static_cast<int16_t>(x + triW), static_cast<int16_t>(midY + triH / 2)}, ink);
-    }
-  }
-  if (!query.empty()) {
-    const int16_t w = screen.target().measureText(props.text.font, tabLabelFor(kSearchTab), props.text).width;
-    const int16_t x = static_cast<int16_t>(band.x + kSearchTab * slot + (slot - w) / 2 + w + 5);
-    constexpr int16_t dotW = 5;
-    const int16_t y = static_cast<int16_t>(band.y + 2 + (lineH + 4 - dotW) / 2);
-    screen.target().fill(fui::Rect{x, y, dotW, dotW}, fui::Paint::solid(fui::Color::Black), 2);
-  }
+  const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
+  constexpr int16_t actionBandHeight = 60;
+  fui::HeaderProps props;
+  props.borderEdges = fui::EdgesNone;
+  props.styles.explicitlySet = true;
+  props.trailingIcon = fui::bitmapFromIcon(icon_search_32);
+  props.trailingAction = ACTION_SEARCH;
+  props.trailingStyles = fui::plainStyles();
+  fui::header(
+      screen.frame(),
+      fui::Rect{static_cast<int16_t>(header.x), static_cast<int16_t>(header.y + header.height - actionBandHeight),
+                static_cast<int16_t>(header.width), actionBandHeight},
+      props);
 }
 
 void LibraryListActivity::buildRows(UiScreen& screen) {
@@ -1299,70 +1118,51 @@ void LibraryListActivity::buildDetails(UiScreen& screen) {
   drawBlock(sizeLine, screen.theme().smallText);
 }
 
-// The A-Z grid, as components: one button per PRESENT letter (an absent letter
-// is simply not drawn — its slot stays empty and nothing moves, because the
-// grid's positions come from the alphabet's index), and two mode buttons above
-// it. Buttons are what make the letters tappable.
 void LibraryListActivity::buildLetterGrid(UiScreen& screen) {
   const fui::Rect body = screen.body();
   auto& target = screen.target();
   const int cell = (body.width - 2 * LIBRARY_SIDE_PADDING) / kLetterCols;
   const int rows = (kLetterCount + kLetterCols - 1) / kLetterCols;
-  const int cellH = body.height / (rows + 1);
+  const bool hasNameMode = currentOrder() == library::SortOrder::AuthorAsc;
+  const int cellH = body.height / (rows + (hasNameMode ? 1 : 0));
 
-  // Both modes shown, not just the active one. Printing only the current choice
-  // hides the fact that there IS a choice — the same reason the sort strip lists
-  // every mode. Sorted by author the choice is which WORD the letters mean;
-  // sorted by title it is the direction. "A-Z"/"Z-A" are letter symbols rather
-  // than words, so they carry no translation.
-  const bool titleOrder = currentOrder() != library::SortOrder::AuthorAsc;
-  const char* labels[2] = {titleOrder ? "A-Z" : tr(STR_LIBRARY_JUMP_GIVEN),
-                           titleOrder ? "Z-A" : tr(STR_LIBRARY_JUMP_SURNAME)};
-  const int active = titleOrder ? (sTitleDescending ? 1 : 0) : (jumpByGivenName ? 0 : 1);
-  // Centered — and deliberately NOT all-default: screen.button() substitutes
-  // the body font for any style that fails textStyleUnset, which is how these
-  // labels once rendered a size up from their measured width and ellipsized
-  // ("By first …"). Centering both marks the style caller-owned and is what
-  // the button does with it anyway.
-  fui::TextStyle modeText = screen.theme().smallText;
-  modeText.align = fui::TextAlign::Center;
-  const int16_t modeH = target.lineHeight(modeText.font);
-  constexpr int16_t kModeGap = 20;
-  int16_t labelW[2];
-  for (int i = 0; i < 2; i++) labelW[i] = target.measureText(modeText.font, labels[i], modeText).width;
-  int16_t mx = static_cast<int16_t>(body.x + (body.width - (labelW[0] + labelW[1] + kModeGap)) / 2);
-  const int16_t modeY = static_cast<int16_t>(body.y + 2);
+  if (hasNameMode) {
+    const char* labels[2] = {tr(STR_LIBRARY_JUMP_GIVEN), tr(STR_LIBRARY_JUMP_SURNAME)};
+    const int active = jumpByGivenName ? 0 : 1;
+    fui::TextStyle modeText = screen.theme().smallText;
+    modeText.align = fui::TextAlign::Center;
+    const int16_t modeH = target.lineHeight(modeText.font);
+    constexpr int16_t kModeGap = 20;
+    int16_t labelW[2];
+    for (int i = 0; i < 2; i++) labelW[i] = target.measureText(modeText.font, labels[i], modeText).width;
+    int16_t mx = static_cast<int16_t>(body.x + (body.width - (labelW[0] + labelW[1] + kModeGap)) / 2);
+    const int16_t modeY = static_cast<int16_t>(body.y + 2);
 
-  for (int i = 0; i < 2; i++) {
-    // Focused, the active choice inverts — the strongest signal this panel has
-    // that Left/Right are about to change it. Unfocused it keeps an underline,
-    // so the line stays quiet while the grid holds attention.
-    const bool on = i == active;
-    fui::ButtonProps mode;
-    mode.label = labels[i];
-    mode.action = ACTION_LETTER_MODE;
-    mode.value = static_cast<int16_t>(i);
-    mode.text = modeText;
-    mode.styles.explicitlySet = true;
-    mode.styles.normal.foreground = fui::Paint::solid(fui::Color::Black);
-    if (on && letterCursor < 0) {
-      mode.styles.normal.background = fui::Paint::solid(fui::Color::Black);
-      mode.styles.normal.foreground = fui::Paint::solid(fui::Color::White);
-      mode.styles.normal.radius = 4;
+    for (int i = 0; i < 2; i++) {
+      const bool on = i == active;
+      fui::ButtonProps mode;
+      mode.label = labels[i];
+      mode.action = ACTION_LETTER_MODE;
+      mode.value = static_cast<int16_t>(i);
+      mode.text = modeText;
+      mode.styles.explicitlySet = true;
+      mode.styles.normal.foreground = fui::Paint::solid(fui::Color::Black);
+      if (on && letterCursor < 0) {
+        mode.styles.normal.background = fui::Paint::solid(fui::Color::Black);
+        mode.styles.normal.foreground = fui::Paint::solid(fui::Color::White);
+        mode.styles.normal.radius = 4;
+      }
+      screen.button(mode, fui::Rect{static_cast<int16_t>(mx - 5), static_cast<int16_t>(modeY - 2),
+                                    static_cast<int16_t>(labelW[i] + 10), static_cast<int16_t>(modeH + 4)});
+      if (on && letterCursor >= 0) {
+        target.fill(fui::Rect{mx, static_cast<int16_t>(modeY + modeH + 1), labelW[i], 1},
+                    fui::Paint::solid(fui::Color::Black));
+      }
+      mx = static_cast<int16_t>(mx + labelW[i] + kModeGap);
     }
-    const fui::Rect slot{static_cast<int16_t>(mx - 5), static_cast<int16_t>(modeY - 2),
-                         static_cast<int16_t>(labelW[i] + 10), static_cast<int16_t>(modeH + 4)};
-    screen.button(mode, slot);
-    if (on && letterCursor >= 0) {
-      target.fill(fui::Rect{mx, static_cast<int16_t>(modeY + modeH + 1), labelW[i], 1},
-                  fui::Paint::solid(fui::Color::Black));
-    }
-    mx = static_cast<int16_t>(mx + labelW[i] + kModeGap);
   }
 
-  // Centre the block itself: 26 letters do not fill 5 columns evenly, and laid
-  // out from the left margin the remainder all landed on one side.
-  const int16_t top = static_cast<int16_t>(body.y + cellH / 2);
+  const int16_t top = static_cast<int16_t>(body.y + (hasNameMode ? cellH / 2 : 3));
   const int16_t originX = static_cast<int16_t>(body.x + (body.width - kLetterCols * cell) / 2);
   char letterLabels[kLetterCount][2];
 
@@ -1402,14 +1202,13 @@ void LibraryListActivity::buildScreen(UiScreen& screen) {
   screen.setContentMargin(
       fui::Insets{static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput)), 0,
                   static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
+  buildSearchAction(screen);
 
   if (detailsView) {
-    screen.spacer(static_cast<int16_t>(sortStripHeight(screen) + metrics.verticalSpacing));
     buildDetails(screen);
     return;
   }
   if (letterGrid) {
-    screen.spacer(static_cast<int16_t>(sortStripHeight(screen) + metrics.verticalSpacing));
     buildLetterGrid(screen);
     return;
   }
@@ -1417,8 +1216,7 @@ void LibraryListActivity::buildScreen(UiScreen& screen) {
   // The strip stays visible over an empty FILTERED view — it is the way out.
   // Only a card with no books at all drops it: there is nothing to sort.
   if (!degraded && index.bookCount() > 0) {
-    buildSortTabs(screen);
-    screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+    buildTabBar(screen);
   }
 
   if (rowCount() == 0) {
@@ -1467,6 +1265,7 @@ void LibraryListActivity::render(RenderLock&&) {
   // pair does nothing, and an empty label is how the hints bar says so.
   const char* prevLabel =
       detailsView ? "" : (letterGrid || tabsFocused() ? tr(STR_DIR_LEFT) : tr(STR_LIBRARY_PAGE_PREV));
+  if (searchShortcutActive()) prevLabel = tr(STR_SEARCH);
   const char* nextLabel =
       detailsView ? "" : (letterGrid || tabsFocused() ? tr(STR_DIR_RIGHT) : tr(STR_LIBRARY_PAGE_NEXT));
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), prevLabel, nextLabel);

@@ -37,6 +37,8 @@ class UiTabListActivity : public UiListActivity {
   virtual int tabCount() const = 0;
   virtual int activeTab() const = 0;
   virtual const char* tabLabel(int index) const = 0;
+  virtual freeink::ui::BitmapRef tabIcon(int index) const { return {}; }
+  virtual uint16_t tabInputMask() const { return freeink::ui::InputTouch; }
   // Touch tap on a tab pill (bounds already checked).
   virtual void onTabAction(int index) = 0;
   // Touch long-press on a tab pill; only fires when the subclass opted in via
