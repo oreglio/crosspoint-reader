@@ -131,7 +131,7 @@ void LibraryListActivity::resetListPosition() {
   auto& n = activeNav();
   n.top = 0;
   if (n.selected != 0) n.selected = 1;
-  pageStarts.clear();
+  selectLastOnNextBuild = false;
 }
 
 void LibraryListActivity::onEnter() {
@@ -382,7 +382,7 @@ void LibraryListActivity::promptDeleteSelectedBook() {
                            auto& n = activeNav();
                            n.selected = 1;
                            n.top = 0;
-                           pageStarts.clear();
+                           selectLastOnNextBuild = false;
                            requestUpdate(true);
                          });
 }
@@ -458,7 +458,7 @@ void LibraryListActivity::cycleSortOrder(const bool forward) {
     auto& n = activeNav();
     n.selected = 0;
     n.top = 0;
-    pageStarts.clear();
+    selectLastOnNextBuild = false;
   } else if (tabCursor != kSearchTab) {
     sFavoritesView = false;
     sSortOrder = orderForTab(tabCursor);
@@ -466,7 +466,7 @@ void LibraryListActivity::cycleSortOrder(const bool forward) {
     auto& n = activeNav();
     n.selected = 0;
     n.top = 0;
-    pageStarts.clear();
+    selectLastOnNextBuild = false;
   }
   requestUpdate();
 }
@@ -495,7 +495,7 @@ void LibraryListActivity::onTabAction(const int index) {
   auto& n = activeNav();
   n.selected = 0;
   n.top = 0;
-  pageStarts.clear();
+  selectLastOnNextBuild = false;
   app.clearTapFlash();
   requestUpdate();
 }
@@ -557,9 +557,7 @@ int LibraryListActivity::rowFor(const int entry) const {
 // the strip keeps the focus and which tab's state the reset lands on.
 void LibraryListActivity::applyFilter() {
   filtered.clear();
-  // Cleared even on the empty-query path: dropping a filter changes the list just
-  // as much as applying one.
-  pageStarts.clear();
+  selectLastOnNextBuild = false;
   if (query.empty() && !sFavoritesView) return;
 
   // Folded the same way the stored folds were, articles removed included —
@@ -669,7 +667,7 @@ void LibraryListActivity::jumpToLetter(const char letter) {
       auto& n = activeNav();
       n.selected = entry + 1;
       n.top = entry;
-      pageStarts.clear();
+      selectLastOnNextBuild = false;
       return;
     }
   }
@@ -880,14 +878,13 @@ bool LibraryListActivity::handleCustomInput() {
   }
 
   // Swipes page the viewport without moving the selection, like every FUI
-  // list — but this list's back-paging history describes a path the viewport
-  // just left, so the boundaries die with the swipe.
+  // list.
   const auto swipe = mappedInput.wasSwipe();
   if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
     auto& n = activeNav();
-    const int delta = swipe == MappedInputManager::SwipeDir::Up ? n.visibleRows : -n.visibleRows;
+    const int delta = swipe == MappedInputManager::SwipeDir::Up ? n.pageRows() : -n.pageRows();
     if (n.scrollBy(delta, rowCount())) {
-      pageStarts.clear();
+      selectLastOnNextBuild = false;
       requestUpdate();
     }
     return true;
@@ -975,11 +972,9 @@ bool LibraryListActivity::handleButtons() {
     if (tabsFocused()) {
       cycleSortOrder(/*forward=*/false);
     } else if (mappedInput.getHeldTime() >= kHoldMs) {
-      // The visited-page history is a path; jumping off it makes those
-      // boundaries meaningless, exactly as the letter jump does.
       n.selected = 1;
       n.top = 0;
-      pageStarts.clear();
+      selectLastOnNextBuild = false;
       requestUpdate();
     } else {
       previousPage();
@@ -1014,10 +1009,10 @@ bool LibraryListActivity::handleButtons() {
     if (tabsFocused()) {
       n.selected = 1;
       requestUpdate();
-    } else if (n.selected - 1 < n.top + n.visibleRows - 1 && n.selected - 1 < count - 1) {
+    } else if (n.selected - 1 < n.top + n.pageRows() - 1 && n.selected - 1 < count - 1) {
       n.selected++;
       requestUpdate();
-    } else if (n.top + n.visibleRows < count) {
+    } else if (n.top + n.pageRows() < count) {
       nextPage();
     }
     return true;
@@ -1133,173 +1128,76 @@ void LibraryListActivity::buildSortTabs(UiScreen& screen) {
   }
 }
 
-// The list itself. Only the visible window is materialized — strings and
-// ListItems for at most one page — and the window is laid out with the same
-// accumulation the widget uses (uniform rows, shorter section headers), so
-// the page the reader sees is exactly the page navigation counts. The widget
-// then receives the window as a list that fits whole: count = what was built,
-// topIndex = 0, and the true position stays in the activity's ListNav.
 void LibraryListActivity::buildRows(UiScreen& screen) {
-  auto& n = activeNav();
+  auto& nav = activeNav();
   const int count = rowCount();
-  // Sorted by author, the permutation already places one author's books
-  // consecutively, so grouping costs one header row per run and no extra
-  // pass. The author then appears once above the run instead of under every
-  // title, which is what makes the shelf answer "what else has this person
-  // written".
   const bool grouped = currentOrder() == library::SortOrder::AuthorAsc;
 
   fui::ListProps props;
+  props.count = static_cast<uint16_t>(count);
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch | fui::InputLongPress;
   props.labelText = screen.theme().bodyText;
-  // Up to three lines per title, each row taking exactly the lines its title
-  // uses — the pre-conversion shelf's render, carried by the widget's
-  // measured per-item heights. No setting, as before: a short title costs a
-  // short row, so density is only paid where a title needs it.
   props.labelText.maxLines = 3;
-  // Author headings never carried a rule; whitespace and proximity group.
   props.headerUnderline = false;
-  // The position readout carries "where am I"; a scroll track beside it would
-  // say the same thing twice.
   props.scrollIndicator = false;
-  const auto rowType = grouped ? UiListRowType::SingleLine : UiListRowType::WithSubtitle;
-  props.rowHeight = uiListRowHeight(screen.theme(), rowType);
-  if (props.rowGap < 0) props.rowGap = screen.theme().listRowGap;
+  syncTabListViewport(screen, props, /*hasSubtitle=*/!grouped);
 
-  const fui::Rect band = screen.body();
-  const int16_t rowH = props.rowHeight;
-  const int16_t rowGap = props.rowGap;
-  const uint16_t visibleCap = fui::listVisibleRows(band, rowH, rowGap);
-  // Header geometry, mirroring components/lists/list.h exactly: header row =
-  // small line + 4, sectionGap above every non-first header.
-  const int16_t headerLh = screen.target().lineHeight(screen.theme().smallText.font);
-  const int16_t headerH = static_cast<int16_t>(headerLh + 4);
-  // Label geometry for the widget's per-item growth, same arithmetic as its
-  // height pre-pass: the rows sit inside the theme's row inset, lose the side
-  // padding, the 24px icon and the text gap — what remains is the width a
-  // title wraps against.
-  const int16_t wrapLh = screen.target().lineHeight(props.labelText.font);
-  const int16_t sidePad = screen.theme().listSidePadding;
-  const int16_t labelAvail =
-      static_cast<int16_t>(band.width - 2 * screen.theme().listInset - 2 * sidePad - 24 - props.textGap);
-
-  if (n.top < 0) n.top = 0;
-  if (n.top > count - 1) n.top = count - 1;
-
-  // The window buffers are sized once per build and never grow while items
-  // hold pointers into them: c_str() stability is what makes the borrow safe.
-  const size_t cap = static_cast<size_t>(visibleCap) + 1;
+  // The fixed-height estimate is an upper bound: wrapping and inline headings
+  // can only reduce the number of logical book rows that fit.
+  const size_t cap = static_cast<size_t>(nav.visibleRows > 0 ? nav.visibleRows : 1);
   if (winTitles.size() < cap) winTitles.resize(cap);
   if (winAuthors.size() < cap) winAuthors.resize(cap);
   if (winHeaders.size() < cap) winHeaders.resize(cap);
   winItems.clear();
-  if (winItems.capacity() < cap * 2) winItems.reserve(cap * 2);
+  if (winItems.capacity() < cap) winItems.reserve(cap);
 
   const fui::BitmapRef bookIcon = listIconFor(UIIcon::Book);
   const fui::BitmapRef starIcon = fui::bitmapFromIcon(icon_star_24_fui);
 
-  int16_t cursorY = 0;
   int books = 0;
   int headers = 0;
-  int selItem = -1;
-  int lastBookItem = -1;
-  const int displayEntry = n.selected > 0 ? n.selected - 1 : 0;
-  for (int entry = n.top; entry < count; entry++) {
+  // Capture this after syncTabListViewport(), because its clamp must also move
+  // the beginning of the materialized window.
+  const int windowStart = static_cast<int>(props.topIndex);
+  for (int entry = windowStart; entry < count && books < static_cast<int>(cap); entry++) {
     bool isFavorite = false;
     std::string& title = winTitles[static_cast<size_t>(books)];
     std::string& author = winAuthors[static_cast<size_t>(books)];
     rowTextFor(entry, title, author, &isFavorite);
 
-    // The first row of a page always carries its heading: without it a page
-    // can open on books whose author was named on the page before.
     const bool startsGroup =
         grouped && !author.empty() && (books == 0 || author != winAuthors[static_cast<size_t>(books - 1)]);
-
-    // This row's height, mirroring the widget's own pre-pass: a title that
-    // wraps grows the row by exactly the lines it uses. Subtitle rows grow on
-    // any wrap (their base height is sized for one title line); label-only
-    // rows (author order) keep the "would maxLines already fit rowH" gate.
-    int16_t itemH = rowH;
-    const bool hasSubtitle = !grouped && !author.empty();
-    if (labelAvail > 0 && (hasSubtitle || static_cast<int16_t>(wrapLh * props.labelText.maxLines) > rowH)) {
-      const auto& target = screen.target();
-      if (target.measureText(props.labelText.font, title.c_str(), props.labelText).width > labelAvail) {
-        const fui::Size wrapped = fui::measureWrappedText(target, title.c_str(), props.labelText, labelAvail);
-        const int16_t lines = wrapLh > 0 ? static_cast<int16_t>(wrapped.height / wrapLh) : 1;
-        if (lines > 1) itemH = static_cast<int16_t>(rowH + wrapLh * (lines - 1));
-      }
-    }
-
-    // Fit check, mirroring the widget's own accumulation — a heading is never
-    // emitted without the book it names (the widget's height break would
-    // strand it as a trailing orphan).
-    const int itemIdx = static_cast<int>(winItems.size());
-    int16_t needed = static_cast<int16_t>(itemH);
+    fui::ListItem item;
     if (startsGroup) {
-      const int16_t pad = itemIdx != 0 ? props.sectionGap : 0;
-      needed = static_cast<int16_t>(needed + pad + headerH + rowGap);
-    }
-    const int bookItemIdx = itemIdx + (startsGroup ? 1 : 0);
-    if (cursorY + needed > band.height || books >= static_cast<int>(visibleCap) ||
-        bookItemIdx >= static_cast<int>(visibleCap)) {
-      break;
-    }
-
-    if (startsGroup) {
-      // Written surname-first, as a catalogue does: the shelf is ORDERED by
-      // surname, and printing "Anton Chekhov" above a run that sits between
-      // Chateaubriand and Crane makes the order look arbitrary. Only in author
-      // order: elsewhere the natural spelling reads better.
-      // Into its OWN storage, NOT back into the author slot: the run
-      // comparison above reads the next row's author straight from the index,
-      // so "Xun, Lu" would never match "Lu Xun" and every row after a heading
-      // would start a fresh group.
       std::string& heading = winHeaders[static_cast<size_t>(headers++)];
       heading = author;
       const size_t lastSpace = heading.find_last_of(' ');
       if (lastSpace != std::string::npos && lastSpace + 1 < heading.size()) {
         heading = heading.substr(lastSpace + 1) + ", " + heading.substr(0, lastSpace);
       }
-      fui::ListItem header;
-      header.isHeader = true;
-      header.label = heading.c_str();
-      winItems.push_back(header);
-      const int16_t pad = itemIdx != 0 ? props.sectionGap : 0;
-      cursorY = static_cast<int16_t>(cursorY + pad + headerH + rowGap);
+      item.sectionHeading = heading.c_str();
     }
 
-    fui::ListItem item;
     item.label = title.c_str();
     if (!grouped && !author.empty()) item.subtitle = author.c_str();
-    // The mark replaces the row's book icon outright: the icon is decoration
-    // every row shares, the star is information, and reusing the slot moves
-    // no text. Skipped in the ★ view itself, where every row would carry it
-    // and it would say nothing.
     item.icon = (isFavorite && !sFavoritesView) ? starIcon : bookIcon;
     item.actionValue = static_cast<int16_t>(entry);
-    if (entry == displayEntry) selItem = static_cast<int>(winItems.size());
-    lastBookItem = static_cast<int>(winItems.size());
     winItems.push_back(item);
-    cursorY = static_cast<int16_t>(cursorY + itemH + rowGap);
     books++;
   }
 
-  // Report how much this page held, for the next input pass to page by; then
-  // put the ring back inside it. previousPage() aims past the end because a
-  // page's size is only known once built — clamp now that it has been.
-  n.visibleRows = books > 0 ? books : 1;
-  if (n.selected - 1 >= n.top + n.visibleRows) {
-    n.selected = n.top + n.visibleRows;
-    selItem = lastBookItem;
-  }
-  if (n.selected - 1 >= count) n.selected = count;
-
   props.items = winItems.data();
-  props.count = static_cast<uint16_t>(winItems.size());
-  props.topIndex = 0;
-  props.selectedIndex = static_cast<int16_t>(selItem);
+  props.itemsWindowFirst = static_cast<uint16_t>(windowStart);
+  props.itemsWindowCount = static_cast<uint16_t>(winItems.size());
   screen.list(props);
+  if (selectLastOnNextBuild) {
+    selectLastOnNextBuild = false;
+    if (nav.drawnRows > 0) {
+      nav.selected = nav.top + nav.drawnRows;
+      nav.rebuildNeeded = true;
+    }
+  }
 }
 
 // The Details page: where the stored author provenance finally reaches the
@@ -1551,6 +1449,15 @@ void LibraryListActivity::render(RenderLock&&) {
   }
 
   renderUi();
+  for (int pass = 0; activeNav().consumeRebuildNeeded() && pass < 8; ++pass) {
+    renderer.clearScreen();
+    if (mappedInput.hasTouchHardware()) {
+      TouchHeaderBackButton::draw(renderer, uiTarget, header, title, true);
+    } else {
+      GUI.drawHeader(renderer, header, title);
+    }
+    renderUi();
+  }
 
   if (!detailsView) drawPositionReadout();
   // The bottom pair delivers Left/Right on this hardware, so labelling it
@@ -1587,37 +1494,23 @@ void LibraryListActivity::drawPositionReadout() {
   renderer.drawText(SMALL_FONT_ID, x, y, buf, true);
 }
 
-// Page boundaries are content-dependent in author order (headings consume band
-// height), so they cannot be computed from an index. They are therefore
-// remembered as the reader moves forward, which makes going back exact rather
-// than an estimate that would drift on every turn.
 void LibraryListActivity::nextPage() {
   const int count = rowCount();
-  auto& n = activeNav();
-  const int next = n.top + n.visibleRows;
+  auto& nav = activeNav();
+  const int next = nav.top + std::max(1, nav.pageRows());
   if (next >= count) return;
-  if (pageStarts.empty()) pageStarts.push_back(0);
-  pageStarts.push_back(static_cast<uint16_t>(next));
-  n.top = next;
-  n.selected = next + 1;
+  selectLastOnNextBuild = false;
+  nav.top = next;
+  nav.selected = next + 1;
   requestUpdate();
 }
 
 void LibraryListActivity::previousPage(const bool selectLast) {
-  auto& n = activeNav();
-  if (n.top <= 0) return;
-  if (pageStarts.size() > 1) {
-    pageStarts.pop_back();
-    n.top = pageStarts.back();
-  } else {
-    // No recorded history — the reader jumped here by some other route. Fall back
-    // to a screenful back; it may not land on a boundary this pass, but the next
-    // render re-measures and nothing is lost.
-    n.top = std::max(0, n.top - n.visibleRows);
-    pageStarts.assign(1, static_cast<uint16_t>(n.top));
-  }
-  // selectLast is only known to be right after the build that measures this
-  // page, so aim past the end and let buildRows clamp it.
-  n.selected = (selectLast ? n.top + n.visibleRows - 1 : n.top) + 1;
+  auto& nav = activeNav();
+  selectLastOnNextBuild = false;
+  if (nav.top <= 0) return;
+  nav.top = std::max(0, nav.top - std::max(1, nav.pageRows()));
+  nav.selected = nav.top + 1;
+  selectLastOnNextBuild = selectLast;
   requestUpdate();
 }

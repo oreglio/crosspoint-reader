@@ -98,9 +98,9 @@ void UiListActivity::navigateButtons() {
   buttonNavigator.onPreviousRelease(
       [this, count, &n] { moveSelectionTo(ButtonNavigator::previousIndex(n.selected, count)); });
   buttonNavigator.onNextContinuous(
-      [this, count, &n] { moveSelectionTo(ButtonNavigator::nextPageIndex(n.selected, count, n.visibleRows)); });
+      [this, count, &n] { moveSelectionTo(ButtonNavigator::nextPageIndex(n.selected, count, n.pageRows())); });
   buttonNavigator.onPreviousContinuous(
-      [this, count, &n] { moveSelectionTo(ButtonNavigator::previousPageIndex(n.selected, count, n.visibleRows)); });
+      [this, count, &n] { moveSelectionTo(ButtonNavigator::previousPageIndex(n.selected, count, n.pageRows())); });
 }
 
 void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, const bool hasSubtitle) {
@@ -131,6 +131,13 @@ void UiListActivity::render(RenderLock&&) {
   renderer.clearScreen();
   drawChrome();
   renderUi();
+  // Variable-height rows can fit fewer entries than the fixed-height estimate.
+  // Rebuild inside the same framebuffer when layout feedback adjusts the top.
+  for (int pass = 0; activeNav().consumeRebuildNeeded() && pass < 8; ++pass) {
+    renderer.clearScreen();
+    drawChrome();
+    renderUi();
+  }
   drawFooter();
   renderer.displayBuffer();
 }

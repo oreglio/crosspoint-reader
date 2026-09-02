@@ -98,8 +98,7 @@ class LibraryListActivity final : public UiTabListActivity {
   int selectedEntry() const;
   bool tabsFocused() const { return ringPos() == 0; }
   // Row + viewport reset after a data change; ring 0 (strip focus) survives,
-  // any row selection collapses to the first row. Page history dies with the
-  // old boundaries.
+  // any row selection collapses to the first row.
   void resetListPosition();
   // Cursor within the strip. Separate from the active view because the strip
   // carries one entry that is not a sort mode: Search.
@@ -167,11 +166,9 @@ class LibraryListActivity final : public UiTabListActivity {
   // ★ tab's sort menu.
   OptionPopup popup;
 
-  // First entry of each page visited on the way here, so going back lands on
-  // the same boundaries the reader came through. Needed because pages are not
-  // uniform in author order: section headers consume band height, so a page's
-  // size is only known once built.
-  std::vector<uint16_t> pageStarts;
+  // Going up from the first row of a page lands on the final row measured on
+  // the previous page. Resolved after layout, before the framebuffer is shown.
+  bool selectLastOnNextBuild = false;
   bool indexReady = false;
   // Set when the walk finished but the sort did not, so the screen can say the
   // order is discovery order rather than silently showing a wrong one.
