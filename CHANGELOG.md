@@ -88,6 +88,7 @@
 
 ### Fixed
 
+- Favorites sorted by author now keep drawing when moving to the next page.
 - Touch readers can now cancel a font download from the progress screen or its header Back button.
 - Sleep screens now reuse a compact SD-card index for custom wallpaper folders, avoiding a full folder scan on every sleep while rebuilding safely after file changes.
 - Touch taps and on-screen keyboard presses now route reliably while UI screens redraw.
