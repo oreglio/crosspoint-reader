@@ -948,6 +948,7 @@ void LibraryListActivity::buildSearchAction(UiScreen& screen) {
 }
 
 void LibraryListActivity::buildRows(UiScreen& screen) {
+  const unsigned long buildStartedAt = millis();
   auto& nav = activeNav();
   const int count = rowCount();
   const bool grouped = currentOrder() == library::SortOrder::AuthorAsc;
@@ -1009,7 +1010,13 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
   props.items = winItems.data();
   props.itemsWindowFirst = static_cast<uint16_t>(windowStart);
   props.itemsWindowCount = static_cast<uint16_t>(winItems.size());
+  const unsigned long rowsReadyAt = millis();
   screen.list(props);
+  LOG_INF("LIB",
+          "rows view=%s order=%u top=%d selected=%d supplied=%u drawn=%d read=%lums layout=%lums follow=%d rebuild=%d",
+          sFavoritesView ? "favorites" : "library", static_cast<unsigned>(currentOrder()), nav.top, nav.selected,
+          static_cast<unsigned>(winItems.size()), nav.drawnRows, rowsReadyAt - buildStartedAt, millis() - rowsReadyAt,
+          nav.followPending ? 1 : 0, nav.rebuildNeeded ? 1 : 0);
   if (selectLastOnNextBuild) {
     selectLastOnNextBuild = false;
     if (nav.drawnRows > 0) {
@@ -1229,6 +1236,10 @@ void LibraryListActivity::buildScreen(UiScreen& screen) {
 }
 
 void LibraryListActivity::render(RenderLock&&) {
+  const unsigned long renderStartedAt = millis();
+  LOG_INF("LIB", "render begin view=%s order=%u top=%d selected=%d pageRows=%d",
+          sFavoritesView ? "favorites" : "library", static_cast<unsigned>(currentOrder()), activeNav().top,
+          activeNav().selected, activeNav().pageRows());
   // The menu paints over the retained frame — no clear, no page redraw, the
   // same overlay idiom Settings uses for its popups.
   if (popup.processRender(renderer, mappedInput)) return;
@@ -1271,6 +1282,7 @@ void LibraryListActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), prevLabel, nextLabel);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
+  LOG_INF("LIB", "render complete in %lums", millis() - renderStartedAt);
 }
 
 // "12/69 books" at the bottom right: which book is selected, out of how many.
@@ -1297,6 +1309,9 @@ void LibraryListActivity::nextPage() {
   const int count = rowCount();
   auto& nav = activeNav();
   const int next = nav.top + std::max(1, nav.pageRows());
+  LOG_INF("LIB", "next page view=%s order=%u top=%d selected=%d pageRows=%d next=%d count=%d",
+          sFavoritesView ? "favorites" : "library", static_cast<unsigned>(currentOrder()), nav.top, nav.selected,
+          nav.pageRows(), next, count);
   if (next >= count) return;
   selectLastOnNextBuild = false;
   nav.top = next;
