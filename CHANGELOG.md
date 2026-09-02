@@ -49,6 +49,7 @@
 
 ### Fixed
 
+- Opening or leaving the Library no longer risks closing an index handle before it has been opened.
 - Library paging now uses the rows actually measured by FreeInkUI, so variable-height author headings cannot skip books and moving up across a page boundary lands on the previous page's final book.
 - Books uploaded through the fast (WebSocket) upload path now appear in the Library without a manual index rebuild.
 - Filenames that list the same author twice — the shape export tools leave behind, as in `Henry S_ Warren, Henry S_ Warren Jr` — no longer have that name rearranged into nonsense on the shelf. Authors written surname-first still read the right way round, so `Austen, Jane` shows as `Jane Austen`.
