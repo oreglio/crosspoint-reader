@@ -56,3 +56,9 @@ firmware/
 
 # Written by scripts/git_branch.py on every build.
 lib/AppVersion/AppVersionGenerated.h
+
+# Codex-facing mirror of .claude/skills, generated locally
+.agents/
+
+# Playwright MCP debug output
+.playwright-mcp/
