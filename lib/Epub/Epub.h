@@ -29,6 +29,7 @@ class Epub {
   std::string cachePath;
   // Spine and TOC cache
   std::unique_ptr<BookMetadataCache> bookMetadataCache;
+  std::unique_ptr<BookMetadataCache::BookMetadata> fallbackMetadata;
   // CSS parser for styling
   std::unique_ptr<CssParser> cssParser;
   // CSS files
@@ -89,9 +90,9 @@ class Epub {
   };
 
   void migrateLegacyCachePath(const std::string& cacheDir) const;
-  bool findContentOpfFile(std::string* contentOpfFile) const;
+  bool findContentOpfFile(std::string* contentOpfFile, ZipFile* sharedZip = nullptr) const;
   bool parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, bool writeSpineEntries = true,
-                       bool collectCssFiles = true);
+                       bool collectCssFiles = true, bool metadataOnly = false, ZipFile* sharedZip = nullptr);
   bool parseTocNcxFile() const;
   bool parseTocNavFile() const;
   CssParseStatus parseCssFiles(bool forceRebuild = false) const;
@@ -99,6 +100,8 @@ class Epub {
   void releaseCssFileList();
 
  public:
+  enum class MetadataSource { NONE, CACHE, PACKAGE_DOCUMENT };
+
   enum class XLocationLoadMode : uint8_t {
     Immediate,
     Skip,
@@ -113,6 +116,7 @@ class Epub {
   std::string& getBasePath() { return contentBasePath; }
   bool load(bool buildIfMissing = true, bool skipLoadingCss = false,
             XLocationLoadMode xLocationLoadMode = XLocationLoadMode::Immediate, bool cacheCumulativeSpineSizes = false);
+  bool loadMetadata(MetadataSource* source = nullptr);
   // Loads optional stable-page and source-spine metadata after a Skip-mode open.
   // Failure leaves normal size-based progress available.
   bool loadXLocations();

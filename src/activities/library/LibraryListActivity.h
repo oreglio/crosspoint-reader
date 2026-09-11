@@ -3,6 +3,9 @@
 #include <LibraryFavoritesFile.h>
 #include <LibraryIndexFile.h>
 
+#include <array>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -23,10 +26,10 @@
 // a short title costs a short row, as the pre-conversion renderer did.
 //
 // Only the visible window of rows is materialized per render (title/author
-// strings and ListItems), so nothing proportional to the library is held: the
-// index streams from SD and the screen keeps at most a page of strings.
+// strings and ListItems). The ordinary shelf keeps at most a page of strings;
+// an active search additionally uses one fallible uint16_t slot per indexed
+// book so allocation failure remains recoverable on the C3.
 inline constexpr int LIBRARY_SIDE_PADDING = 12;
-
 class LibraryListActivity final : public UiTabListActivity {
  public:
   explicit LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
@@ -93,6 +96,13 @@ class LibraryListActivity final : public UiTabListActivity {
   // The selection captured by openSelectedBook before it closes the index, so
   // onExit can still record which book the reader just left for.
   library::FavoriteKey exitSelection{};
+  void clearPageHistory();
+  void rememberPageStart(uint16_t start);
+  // Sub-screens act on button press, so a button still held when we resume must
+  // not also act here. Records what to swallow on the next release.
+  void swallowHeldReleases();
+  // Touch routing while the grid consumes the loop pass, so its component hit
+  // rects still dispatch.
 
   // Ring 0 is the strip; the selected BOOK is ring - 1.
   int selectedEntry() const;
@@ -106,10 +116,12 @@ class LibraryListActivity final : public UiTabListActivity {
   int tabCursor = 0;
 
   // Rows surviving the current query, as positions in the active sort order.
-  // Empty query means no filtering and this stays untouched, so the ordinary
-  // shelf pays nothing for the feature.
+  // Empty query means no filtering and this owns no allocation, so the ordinary
+  // shelf pays nothing proportional to the library for the feature.
   std::string query;
-  std::vector<uint16_t> filtered;
+  std::unique_ptr<uint16_t[]> filtered;
+  uint16_t filteredCount = 0;
+  bool filterFailed = false;
   void openSearch();
   // Details is a mode of this activity too, like the grid: a full-screen page
   // for the selected row, render + Back, no lifecycle of its own.
@@ -167,11 +179,13 @@ class LibraryListActivity final : public UiTabListActivity {
   // ★ tab's sort menu.
   OptionPopup popup;
 
-  // First entry of each page visited on the way here, so going back lands on
-  // the same boundaries the reader came through. Needed because pages are not
-  // uniform in author order: section headers consume band height, so a page's
-  // size is only known once built.
-  std::vector<uint16_t> pageStarts;
+  // First entry of each recent page visited on the way here, so going back
+  // lands on the same boundaries the reader came through. This fixed history
+  // lives in the heap-allocated activity and cannot grow until vector::push_back
+  // aborts on the C3. Older boundaries fall back to a measured-page estimate.
+  static constexpr size_t PAGE_HISTORY_CAPACITY = 128;
+  std::array<uint16_t, PAGE_HISTORY_CAPACITY> pageStarts{};
+  size_t pageStartCount = 0;
   bool indexReady = false;
   // Set when the walk finished but the sort did not, so the screen can say the
   // order is discovery order rather than silently showing a wrong one.
