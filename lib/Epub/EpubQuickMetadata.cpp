@@ -1,4 +1,4 @@
-#include "LibraryMeta.h"
+#include "EpubQuickMetadata.h"
 
 #include <Logging.h>
 #include <Memory.h>
@@ -9,7 +9,7 @@
 #include <cstring>
 #include <string_view>
 
-namespace library {
+namespace epub {
 namespace {
 
 // Collects an inflated file into a string, refusing to grow past a cap.
@@ -239,4 +239,4 @@ bool readBookMetadata(const std::string& epubPath, BookMetadata& out) {
   return !out.title.empty() || !out.author.empty();
 }
 
-}  // namespace library
+}  // namespace epub

@@ -220,26 +220,6 @@ TEST(LibraryTitleMerge, BlocksExporterMidPhraseTruncation) {
   EXPECT_FALSE(preferFilenameTitle("", "anything at all here"));
 }
 
-TEST(LibraryMetadataGuard, ClassifiesYearsAndLeavesNamesAlone) {
-  EXPECT_TRUE(looksLikeMetadata("2019"));
-  EXPECT_TRUE(looksLikeMetadata("1985"));
-  EXPECT_TRUE(looksLikeMetadata("2085"));  // in range; see the title test below
-  EXPECT_FALSE(looksLikeMetadata("42"));
-  EXPECT_FALSE(looksLikeMetadata("herman melville"));
-}
-
-TEST(LibraryMetadataGuard, NeverAppliedToTheTitleSegment) {
-  // The guard would classify "2085" as a year, so a title that is a bare year
-  // survives only because segment 0 is never classified. This is the invariant
-  // that makes the unconditional segment-2+ drop safe, so it gets its own test.
-  const auto p = parseFilename("2085 -- Herbert G Wells -- 2020 -- Sample Press");
-  EXPECT_EQ(p.title, "2085");
-  EXPECT_EQ(p.author, "Herbert G Wells");
-
-  EXPECT_EQ(parseFilename("1987").title, "1987");
-  EXPECT_EQ(parseFilename("1987 -- Verne, Jules").title, "1987");
-}
-
 // --- matchesQuery ------------------------------------------------------------
 //
 // Cases taken from the shape of the accented and

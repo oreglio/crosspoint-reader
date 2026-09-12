@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Epub.h>
+#include <EpubQuickMetadata.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -13,7 +14,6 @@
 #include <vector>
 
 #include "LibraryIndexFile.h"
-#include "LibraryMeta.h"
 #include "LibraryText.h"
 
 namespace library {
@@ -193,8 +193,8 @@ void stageRecord(WalkState& st, const std::string& name, const uint32_t fileSize
     // Otherwise inflate the package document. Two small entries out of the zip,
     // not the seconds-per-book indexing pass that would build the cache above.
     if (!titleFromBook && !authorFromBook) {
-      BookMetadata meta;
-      const bool read = readBookMetadata(fullPath, meta);
+      epub::BookMetadata meta;
+      const bool read = epub::readBookMetadata(fullPath, meta);
       opfTooLarge = meta.opfTooLarge;
       if (!read) LOG_DBG("LIBIDX", "no metadata for %s", fullPath.c_str());
       if (read) {

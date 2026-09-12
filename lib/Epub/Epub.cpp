@@ -27,6 +27,7 @@
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/TocNavParser.h"
 #include "Epub/parsers/TocNcxParser.h"
+#include "EpubQuickMetadata.h"
 
 namespace {
 constexpr int kDefaultThumbHeight = 180;
@@ -2235,4 +2236,14 @@ int Epub::resolveHrefToSpineIndex(const std::string& href) const {
     if (spineFilename == targetFilename) return i;
   }
   return -1;
+}
+
+bool Epub::loadMetadata(std::string& title, std::string& author) {
+  epub::BookMetadata metadata;
+  if (!epub::readBookMetadata(getPath(), metadata)) {
+    return false;
+  }
+  title = metadata.title;
+  author = metadata.author;
+  return true;
 }

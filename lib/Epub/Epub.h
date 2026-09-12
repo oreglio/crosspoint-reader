@@ -100,6 +100,15 @@ class Epub {
   bool findContentOpfFile(std::string* contentOpfFile) const;
   bool parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, bool writeSpineEntries = true,
                        bool collectCssFiles = true);
+
+ public:
+  // Title and author only, for the library index build. Delegates to
+  // EpubQuickMetadata, whose 8 KB inflate bound is what keeps this off the
+  // abort() path on the C3 — see EpubQuickMetadata.h for the measurement.
+  // Returns false whenever the caller should fall back to the filename.
+  bool loadMetadata(std::string& title, std::string& author);
+
+ private:
   bool parseTocNcxFile() const;
   bool parseTocNavFile() const;
   CssParseStatus parseCssFiles(bool forceRebuild = false) const;
