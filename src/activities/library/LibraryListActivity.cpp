@@ -1,5 +1,6 @@
 #include "LibraryListActivity.h"
 
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <LibraryBuilder.h>
@@ -31,10 +32,10 @@ bool sFavoritesView = false;
 // And the sort itself, for the same reason: choosing A-Z, leaving and coming
 // back to Recent read as "the filters do not save". One session-long shelf
 // state, statics only, zero settings.
-library::SortOrder sSortOrder = library::SortOrder::DateDesc;
+library::SortOrder sSortOrder = library::SortOrder::AddedDesc;
 // The ★ view carries its own remembered order: sorting favorites by author and
 // then browsing Recent must not cost the favorites their order.
-library::SortOrder sFavSortOrder = library::SortOrder::DateDesc;
+library::SortOrder sFavSortOrder = library::SortOrder::AddedDesc;
 // Every row lookup goes through the order of the ACTIVE view.
 library::SortOrder currentOrder() { return sFavoritesView ? sFavSortOrder : sSortOrder; }
 
@@ -43,6 +44,17 @@ library::SortOrder currentOrder() { return sFavoritesView ? sFavSortOrder : sSor
 constexpr unsigned long kHoldMs = 800;
 
 }  // namespace
+
+ShelfFormat shelfFormatForName(const std::string_view name) {
+  // Case-insensitive, through the same helpers the builder's own gate uses
+  // (LibraryBuilder.cpp:178): a BOOK.EPUB is indexed, so it must name its
+  // format here too.
+  if (FsHelpers::hasEpubExtension(name)) return ShelfFormat::Epub;
+  if (FsHelpers::hasTxtExtension(name)) return ShelfFormat::Txt;
+  if (FsHelpers::hasMarkdownExtension(name)) return ShelfFormat::Md;
+  if (FsHelpers::hasXtcExtension(name)) return ShelfFormat::Xtc;
+  return ShelfFormat::Other;
+}
 
 LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     // Long-press opt-in: rows and tabs carry InputLongPress, so a held tap is
@@ -73,8 +85,10 @@ int sortTabIndex(const library::SortOrder order) {
     case library::SortOrder::TitleDesc:
       return kTitleDescTab;
     case library::SortOrder::AuthorAsc:
+    case library::SortOrder::AuthorDesc:
       return kAuthorTab;
-    case library::SortOrder::DateDesc:
+    case library::SortOrder::AddedAsc:
+    case library::SortOrder::AddedDesc:
       return kRecentTab;
   }
   return kRecentTab;
@@ -84,7 +98,7 @@ library::SortOrder orderForTab(const int tab) {
   if (tab == kTitleAscTab) return library::SortOrder::TitleAsc;
   if (tab == kTitleDescTab) return library::SortOrder::TitleDesc;
   if (tab == kAuthorTab) return library::SortOrder::AuthorAsc;
-  return library::SortOrder::DateDesc;
+  return library::SortOrder::AddedDesc;
 }
 
 // The strip needs the mode alone. The header strings carry a "Library ·" prefix
@@ -184,7 +198,6 @@ void LibraryListActivity::onExit() {
   // is the right answer anyway: the shelf should reopen on that book.
   library::LibraryShelfState state;
   state.favoritesView = sFavoritesView;
-  state.titleDescending = sSortOrder == library::SortOrder::TitleDesc;
   state.shelfSort = sSortOrder;
   state.favSort = sFavSortOrder;
   if (indexReady) {
@@ -203,23 +216,12 @@ bool LibraryListActivity::openIndex() {
 }
 
 bool LibraryListActivity::rebuildIndex() {
-  // Carry the monotonic counter forward so "recently added" ordering survives a
-  // rebuild: a book that was already on the card must not jump to the top.
-  uint16_t carriedFirstSeen = 0;
-  {
-    library::LibraryIndexFile previous;
-    if (previous.open(library::libraryIndexPath())) carriedFirstSeen = previous.header().nextFirstSeen;
-  }
   library::BuildStats stats;
-  const bool ok = library::buildLibraryIndex(
-      "/", carriedFirstSeen, stats, SETTINGS.libraryUseMetadata != 0,
-      [](const uint16_t booksSoFar, const char*, void*) {
-        // Let the idle task run so the task watchdog stays fed: its panic
-        // timeout is 5 s and a metadata walk can run longer than that.
-        if ((booksSoFar & 31u) == 0) delay(1);
-        return true;
-      },
-      nullptr);
+  // Their builder feeds the task watchdog itself — LibraryBuilder.cpp:86 is
+  // `if ((++workUnits & 0x1Fu) == 0) delay(1);`, with more delays through the
+  // metadata and sort passes. The progress callback we used to pass for that
+  // reason no longer exists, and re-adding one would be dead weight.
+  const bool ok = library::buildLibraryIndex("/", stats, SETTINGS.libraryUseMetadata != 0);
   if (ok) {
     LOG_INF("LIB", "reconciled: %u unchanged, %u added, %u renamed, %u removed (%u dup, %u unreadable)",
             static_cast<unsigned>(stats.unchanged), static_cast<unsigned>(stats.added),
@@ -382,14 +384,14 @@ void LibraryListActivity::openFavoritesSortMenu() {
   const std::string titles = tr(STR_LIBRARY_TAB_TITLES);
   const std::vector<std::string> options{tr(STR_LIBRARY_TAB_RECENT), titles + " A-Z", titles + " Z-A",
                                          tr(STR_LIBRARY_TAB_AUTHOR)};
-  const int current = sFavSortOrder == library::SortOrder::DateDesc    ? 0
+  const int current = sFavSortOrder == library::SortOrder::AddedDesc   ? 0
                       : sFavSortOrder == library::SortOrder::TitleAsc  ? 1
                       : sFavSortOrder == library::SortOrder::TitleDesc ? 2
                                                                        : 3;
   popup.show(tr(STR_LIBRARY_FAV_SORT_TITLE), options, current, [this](const int choice) {
     switch (choice) {
       case 0:
-        sFavSortOrder = library::SortOrder::DateDesc;
+        sFavSortOrder = library::SortOrder::AddedDesc;
         break;
       case 1:
         sFavSortOrder = library::SortOrder::TitleAsc;
@@ -438,14 +440,18 @@ void LibraryListActivity::stepTab(const int direction) {
 
 const char* LibraryListActivity::sortOrderLabel() const {
   switch (sSortOrder) {
-    case library::SortOrder::DateDesc:
+    case library::SortOrder::AddedDesc:
       return tr(STR_LIBRARY_SORT_RECENT);
+    case library::SortOrder::AddedAsc:
+      return tr(STR_LIBRARY_SORT_OLDEST);
     case library::SortOrder::TitleAsc:
       return tr(STR_LIBRARY_SORT_TITLE_AZ);
     case library::SortOrder::TitleDesc:
       return tr(STR_LIBRARY_SORT_TITLE_ZA);
     case library::SortOrder::AuthorAsc:
       return tr(STR_LIBRARY_SORT_AUTHOR);
+    case library::SortOrder::AuthorDesc:
+      return tr(STR_LIBRARY_SORT_AUTHOR_ZA);
   }
   return "";
 }
@@ -835,7 +841,7 @@ bool LibraryListActivity::handleButtons() {
       return true;
     }
     if (tabsFocused()) {
-      if (currentOrder() != library::SortOrder::DateDesc) openLetterGrid();
+      if (currentOrder() != library::SortOrder::AddedDesc) openLetterGrid();
       return true;
     }
     if (count > 0) openSelectedBook();
@@ -1064,23 +1070,6 @@ void LibraryListActivity::buildDetails(UiScreen& screen) {
   if (!author.empty()) {
     y = static_cast<int16_t>(y + metrics.verticalSpacing);
     drawBlock(author.c_str(), screen.theme().bodyText);
-    const char* provenance = nullptr;
-    switch (library::recordAuthorProvenance(record)) {
-      case library::CLIX_AUTHOR_FROM_FOLDER:
-        provenance = tr(STR_LIBRARY_PROV_FOLDER);
-        break;
-      case library::CLIX_AUTHOR_FROM_CACHE:
-        provenance = tr(STR_LIBRARY_PROV_CACHE);
-        break;
-      case library::CLIX_AUTHOR_FROM_OPF:
-        provenance = tr(STR_LIBRARY_PROV_OPF);
-        break;
-      case library::CLIX_AUTHOR_UNKNOWN:
-        // A guess pulled from the filename pattern: naming a source for it
-        // would claim more than the build knows.
-        break;
-    }
-    if (provenance != nullptr) drawBlock(provenance, screen.theme().smallText);
   }
 
   // The file itself: name, folder, then size and format on one line.
@@ -1091,20 +1080,20 @@ void LibraryListActivity::buildDetails(UiScreen& screen) {
   drawBlock(folder.c_str(), screen.theme().smallText);
 
   const char* formatToken = "";
-  switch (library::recordFormat(record)) {
-    case library::CLIX_FORMAT_EPUB:
+  switch (shelfFormatForName(name)) {
+    case ShelfFormat::Epub:
       formatToken = "EPUB";
       break;
-    case library::CLIX_FORMAT_TXT:
+    case ShelfFormat::Txt:
       formatToken = "TXT";
       break;
-    case library::CLIX_FORMAT_MD:
+    case ShelfFormat::Md:
       formatToken = "MD";
       break;
-    case library::CLIX_FORMAT_XTC:
+    case ShelfFormat::Xtc:
       formatToken = "XTC";
       break;
-    case library::CLIX_FORMAT_OTHER:
+    case ShelfFormat::Other:
       break;
   }
   char sizeLine[48];

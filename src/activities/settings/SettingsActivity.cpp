@@ -3,9 +3,8 @@
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
-#include <LibraryBuilder.h>
-#include <LibraryIndexFile.h>
 #include <I18n.h>
+#include <LibraryBuilder.h>
 #include <Logging.h>
 #include <WiFi.h>
 
@@ -1102,11 +1101,6 @@ void SettingsActivity::toggleCurrentSetting() {
         // first, so blocking the render task costs nothing visible.
         RenderLock lock(*this);
         GUI.drawPopup(renderer, tr(STR_LIBRARY_REBUILDING));
-        uint16_t carried = 0;
-        {
-          library::LibraryIndexFile previous;
-          if (previous.open(library::libraryIndexPath())) carried = previous.header().nextFirstSeen;
-        }
         // Say something before blocking. This walks every folder and, with
         // metadata on, opens every book — 2060 books measured at several seconds
         // — and it ran with no indication at all, so the device read as frozen.
@@ -1115,15 +1109,7 @@ void SettingsActivity::toggleCurrentSetting() {
         GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
 
         library::BuildStats stats;
-        const bool ok = library::buildLibraryIndex(
-            "/", carried, stats, SETTINGS.libraryUseMetadata != 0,
-            [](const uint16_t booksSoFar, const char*, void*) {
-              // Let the idle task run so the task watchdog stays fed: its panic
-              // timeout is 5 s and a metadata walk can run longer than that.
-              if ((booksSoFar & 31u) == 0) delay(1);
-              return true;
-            },
-            nullptr);
+        const bool ok = library::buildLibraryIndex("/", stats, SETTINGS.libraryUseMetadata != 0);
         if (ok) {
           LOG_INF("LIB", "rebuild: %u books (%u new, %u renamed, %u removed, %u enriched) in %ums",
                   static_cast<unsigned>(stats.books), static_cast<unsigned>(stats.added),

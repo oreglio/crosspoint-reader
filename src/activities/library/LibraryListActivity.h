@@ -4,6 +4,7 @@
 #include <LibraryIndexFile.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "activities/UiTabListActivity.h"
@@ -26,6 +27,11 @@
 // strings and ListItems), so nothing proportional to the library is held: the
 // index streams from SD and the screen keeps at most a page of strings.
 inline constexpr int LIBRARY_SIDE_PADDING = 12;
+
+// Upstream's index does not store a format field, so the shelf derives it from
+// the file name — the only place it is used is the Details page's size line.
+enum class ShelfFormat : uint8_t { Epub, Txt, Md, Xtc, Other };
+ShelfFormat shelfFormatForName(std::string_view name);
 
 class LibraryListActivity final : public UiTabListActivity {
  public:
