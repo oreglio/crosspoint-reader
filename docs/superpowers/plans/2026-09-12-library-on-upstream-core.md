@@ -311,10 +311,15 @@ encodes direction in the value, so `titleDescending` becomes redundant.
 `LibraryState.cpp` mixes byte parsing with `HalStorage` I/O, so it cannot be
 host-tested as it stands. The repo already solves this for the neighbouring
 format: `LibraryFavorites.cpp` is pure (`parseFavorites` / `serializeFavorites`)
-and `LibraryFavoritesFile.cpp` does the I/O, which is why
-`test/library_favorites/CMakeLists.txt` compiles one file and needs no stubs at
-all. Mirror that split here rather than building a storage harness for two
-asserts.
+and `LibraryFavoritesFile.cpp` does the I/O. Mirror that split here rather than
+building a storage harness for two asserts.
+
+One wrinkle the split does not remove: the codec needs `SortOrder`, which lives
+in `LibraryIndexFile.h`, and that header includes `<HalStorage.h>`. So the test
+does need a storage stub after all — but not a new one. Task 2 brought
+`test/library_index_file/stubs/{HalStorage.h,Logging.h}` into the tree, and the
+repo already shares stub directories between suites (`test/epub_grayscale`
+points at `../memory_policy/stubs`). Point at those rather than writing more.
 
 **Files:**
 - Create: `lib/LibraryIndex/LibraryStateCodec.h`
@@ -395,6 +400,7 @@ add_executable(LibraryStateTest
 )
 
 target_include_directories(LibraryStateTest PRIVATE
+  ../library_index_file/stubs
   ${REPO_ROOT}/lib/LibraryIndex
 )
 
@@ -415,7 +421,9 @@ add_subdirectory(library_state)
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `cmake -S test -B test/build && cmake --build test/build --target LibraryStateTest -j8`
-Expected: FAIL — `LibraryStateCodec.h` does not exist.
+Expected: FAIL — `LibraryStateCodec.h` does not exist. (If it instead fails on
+a missing `Arduino.h` or `HalStorage.h`, the stub path above is wrong — fix the
+include directory, not the codec.)
 
 - [ ] **Step 3: Write the pure codec**
 
