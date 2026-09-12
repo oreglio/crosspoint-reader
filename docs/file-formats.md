@@ -737,11 +737,10 @@ not walk order — so author browsing looks alphabetised by title rather than
 unsorted. A failed canonical-spelling scratch array touches neither order: it
 only skips choosing one display spelling per author group, so the same
 person's name can appear under more than one spelling. `DEDUP_DEGRADED` says
-duplicate
-detection stopped early, either because its scratch array failed to allocate
-or because more than `LIBRARY_MAX_DEDUP_KEYS` (1024) distinct name+size keys
-turned up in one walk; past that point some duplicate books may survive in
-the index.
+duplicate detection stopped early, either because its scratch array failed to
+allocate or because more than `LIBRARY_MAX_DEDUP_KEYS` (1024) distinct
+name+size keys turned up in one walk; past that point some duplicate books may
+survive in the index.
 
 `selfSize` is the expected file size. Comparing it against the real one is a free
 truncation guard: a build cut short by a power failure cannot pass.

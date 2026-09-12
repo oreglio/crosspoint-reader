@@ -649,6 +649,13 @@ grep -rn "STR_LIBRARY_PROV" lib/I18n/ src/ || echo "provenance keys gone"
 Expected: "provenance keys gone". If `src/` still references one, Task 5 has
 not run yet — that is expected at this point and is not a failure of this task.
 
+Note that at this point in the sequence the script itself exits 1 rather than
+regenerating: it scans `src` and `lib` and fails with a CRITICAL on any `STR_*`
+a source names but `english.yaml` no longer defines, and until Task 5 lands,
+`LibraryListActivity.cpp` still names the three deleted `STR_LIBRARY_PROV_*`
+keys. The generated headers are regenerated for real by Task 5 step 1, which
+runs the same command after the last such reference is gone.
+
 - [ ] **Step 4: Commit**
 
 ```bash
@@ -927,7 +934,7 @@ its symbol name, and treat the number as a hint only.
 
 **Interfaces:**
 - Consumes: `library::SortOrder` with both directions per order.
-- Produces: a four-slot strip, `★ | Time | Title ▾ | Author`.
+- Produces: a four-slot strip, `★ | Time | Title ↓ | Author`.
 
 - [ ] **Step 1: Give the two new sort labels the prefix their neighbours carry**
 
@@ -1044,7 +1051,7 @@ const char* LibraryListActivity::tabLabel(const int index) const {
   // renders them together, so a second arrow-bearing tab would overwrite the
   // first. The inactive tabs return stable tr() pointers instead.
   static char withArrow[64];
-  snprintf(withArrow, sizeof(withArrow), "%s %s", base, orderIsDescending(sSortOrder) ? "▾" : "▴");
+  snprintf(withArrow, sizeof(withArrow), "%s %s", base, orderIsDescending(sSortOrder) ? "↓" : "↑");
   return withArrow;
 }
 ```
