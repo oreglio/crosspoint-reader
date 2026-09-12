@@ -8,31 +8,15 @@
 // shelf several times a day; a lost or corrupt file costs nothing but
 // defaults.
 //
-// /.crosspoint/library.state, little-endian, exactly 12 bytes:
-//   u8  version       currently 1
-//   u8  flags         bit0 favorites view, bit1 titles descending
-//   u8  shelfSort     SortOrder of the tab strip
-//   u8  favSort       SortOrder of the ★ view
-//   u32 selNameHash   \ identity of the selected book — the same pair
-//   u32 selFileSize   / favorites key by; 0,0 means none
-//
 // The selection anchor is an identity, not a row number, so it survives a
 // sort change, a filter, and even an index rebuild between sessions.
+//
+// The on-disk byte layout lives in LibraryStateCodec.h, split out so it can
+// be host-tested.
 
-#include <cstdint>
-
-#include "LibraryFavorites.h"
-#include "LibraryIndexFile.h"
+#include "LibraryStateCodec.h"
 
 namespace library {
-
-struct LibraryShelfState {
-  bool favoritesView = false;
-  bool titleDescending = false;
-  SortOrder shelfSort = SortOrder::DateDesc;
-  SortOrder favSort = SortOrder::DateDesc;
-  FavoriteKey selected{};  // nameHash 0 and fileSize 0 = none
-};
 
 // A missing file is defaults and success; a corrupt or implausible one is
 // defaults too, logged. Same reject-don't-guess stance as everything else
