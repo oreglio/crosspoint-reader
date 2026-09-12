@@ -166,7 +166,6 @@ class LibraryListActivity final : public UiTabListActivity {
   void applyFilter();
   int rowCount() const;
   int rowFor(int entry) const;
-  const char* sortOrderLabel() const;
 
   // The list itself. Materializes ListItems and their strings for the visible
   // window only. FreeInkUI owns row and section-heading geometry, and reports

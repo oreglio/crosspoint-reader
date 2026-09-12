@@ -55,6 +55,8 @@
 
 ### Fixed
 
+- The Library strip sits flush under the header. It was reserving its space from the device safe area while the header was drawn from the screen edge, so a bezel inset's worth of empty band stood between them.
+- The Library header reads `Library` rather than `Library · Title A-Z`. The direction was stated twice — the active tab already draws it as an arrow — and the longer title crowded the search action beside it.
 - The sort arrow on the Library strip can be flipped on X3/X4. The active tab drew a direction it had no way to change there: the hold that reverses it was dispatched only by touch, so on a button reader the arrow was decoration.
 - Opening or leaving the Library no longer risks closing an index handle before it has been opened.
 - Library paging now uses the rows actually measured by FreeInkUI, so variable-height author headings cannot skip books and moving up across a page boundary lands on the previous page's final book.

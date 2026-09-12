@@ -487,24 +487,6 @@ void LibraryListActivity::stepTab(const int direction) {
   onTabAction(next);
 }
 
-const char* LibraryListActivity::sortOrderLabel() const {
-  switch (sSortOrder) {
-    case library::SortOrder::AddedDesc:
-      return tr(STR_LIBRARY_SORT_RECENT);
-    case library::SortOrder::AddedAsc:
-      return tr(STR_LIBRARY_SORT_OLDEST);
-    case library::SortOrder::TitleAsc:
-      return tr(STR_LIBRARY_SORT_TITLE_AZ);
-    case library::SortOrder::TitleDesc:
-      return tr(STR_LIBRARY_SORT_TITLE_ZA);
-    case library::SortOrder::AuthorAsc:
-      return tr(STR_LIBRARY_SORT_AUTHOR);
-    case library::SortOrder::AuthorDesc:
-      return tr(STR_LIBRARY_SORT_AUTHOR_ZA);
-  }
-  return "";
-}
-
 int LibraryListActivity::rowCount() const {
   const bool filteredView = !query.empty() || sFavoritesView;
   return filteredView ? static_cast<int>(filtered.size()) : static_cast<int>(index.bookCount());
@@ -1142,10 +1124,18 @@ void LibraryListActivity::buildScreen(UiScreen& screen) {
   // Content below the header band, above the button hints. The strip sits
   // between the header and the list, and takes its height from the list
   // rather than overlaying it.
-  // No topPadding: the header band already ends where the strip begins, and
-  // the extra pad read as a stray gap above the tabs on the device.
-  screen.setContentMargin(fui::Insets{static_cast<int16_t>(TouchHeaderBackButton::height(metrics, mappedInput)), 0,
-                                      static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
+  // setContentMargin() insets from the SAFE AREA (FreeInkApp.h:65) while the
+  // header is drawn from the SCREEN edge, at topPadding
+  // (TouchHeaderBackButton.cpp:61). Measuring the strip's top in the first
+  // origin and the header's bottom in the second left exactly safeArea.top -
+  // topPadding of empty band between them — the gap seen on the device, which
+  // dropping topPadding here had only made worse. setContentMarginFromScreen()
+  // is the seam between the two origins: it reserves the header measured from
+  // the screen edge and refuses to inset twice for a bezel the safe area has
+  // already accounted for (marginBeyondSafeArea, FreeInkApp.h:658).
+  screen.setContentMarginFromScreen(
+      fui::Insets{static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput)), 0,
+                  static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
   buildSearchAction(screen);
 
   if (detailsView) {
@@ -1174,12 +1164,15 @@ void LibraryListActivity::render(RenderLock&&) {
   if (popup.processRender(renderer, mappedInput)) return;
   renderer.clearScreen();
   const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
-  const char* title = detailsView ? tr(STR_LIBRARY_MENU_DETAILS)
-                      // The ★ view announces itself: a list that changes under an unchanged
-                      // title reads as an indexing bug — it did, on the device.
+  // The header names the PLACE; the strip names the order. It used to carry
+  // "Library · Title A-Z", which said the direction a second time — the active
+  // tab already draws it as an arrow — and left no room beside the search
+  // action. The ★ view keeps its own name because it is a different place, not
+  // a different order.
+  const char* title = detailsView      ? tr(STR_LIBRARY_MENU_DETAILS)
                       : sFavoritesView ? tr(STR_LIBRARY_SORT_FAVORITES)
                       : degraded       ? tr(STR_LIBRARY_TITLE_UNSORTED)
-                                       : sortOrderLabel();
+                                       : tr(STR_LIBRARY);
   if (mappedInput.hasTouchHardware()) {
     TouchHeaderBackButton::draw(renderer, uiTarget, header, title, true);
   } else {
