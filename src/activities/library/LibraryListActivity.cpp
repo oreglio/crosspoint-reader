@@ -127,7 +127,7 @@ const char* LibraryListActivity::tabLabel(const int index) const {
   // renders them together, so a second arrow-bearing tab would overwrite the
   // first. The inactive tabs return stable tr() pointers instead.
   static char withArrow[64];
-  snprintf(withArrow, sizeof(withArrow), "%s %s", base, orderIsDescending(sSortOrder) ? "▾" : "▴");
+  snprintf(withArrow, sizeof(withArrow), "%s %s", base, orderIsDescending(sSortOrder) ? "↓" : "↑");
   return withArrow;
 }
 
