@@ -3,11 +3,22 @@
 Status: designed, not started. 2026-09-12. Revised after review the same day.
 Base: `sync/upstream-20260912`.
 
-**Pinned upstream base: `crosspoint/feat/library-view` at `d4411be9`.** That
-branch has already moved (`ad949bdd` at the time of writing). The verbatim
-boundary below is meaningless without a fixed point, so re-pin deliberately and
-re-verify the claims in this spec when doing so — do not let a `git fetch`
-silently change what "verbatim" means.
+**Pinned upstream base: `crosspoint/feat/library-view` at `ad949bdd`**
+(2026-09-12, "Simplify library navigation to unified ring model").
+
+The verbatim boundary below is meaningless without a fixed point, so re-pin
+deliberately and re-verify this spec's claims when doing so — never let a
+`git fetch` silently change what "verbatim" means.
+
+Re-pinned from `d4411be9` on 2026-09-12 and re-verified. The single intervening
+commit touches only *their* screen — `LibraryListActivity.{cpp,h}`,
+`src/components/icons/blocks.h`, `english.yaml`. A `git diff` across the whole
+adopted boundary (`lib/LibraryIndex/`, `lib/Epub/`, the four test suites)
+returns empty, so every claim below was confirmed unchanged:
+`CLIX_FORMAT_VERSION = 2`, no `ClixFormat`, `Epub::loadMetadata` present,
+`buildLibraryIndex(rootPath, stats, readMetadata)`, the watchdog feed at
+`LibraryBuilder.cpp:86`, the `loadMetadata` call at line 348, 1333 builder
+lines, and the `SortOrder` table below.
 
 ## Problem
 
@@ -167,12 +178,13 @@ records `metadataStatus` (`NOT_ATTEMPTED`, `EXTRACTED`, `FAILED`) and exposes
 came from the filename. The Details line becomes **"from the book"** versus
 **"from the filename"**.
 
-Behaviour change to accept: today `CLIX_AUTHOR_UNKNOWN` draws **no** provenance
-line at all (`LibraryListActivity.cpp:1078-1080`). After the collapse there is
-no unknown state, so every book gets a line. It is a visible change rather than
-a refactor, but it is arguably a correction: that code's own reason for drawing
-nothing is that "naming a source for it would claim more than the build knows",
-and "from the filename" is exactly what the build knows in that case.
+**Decided: every book shows a provenance line.** Today `CLIX_AUTHOR_UNKNOWN`
+draws none at all (`LibraryListActivity.cpp:1078-1080`); after the collapse
+there is no unknown state, so the line is always drawn. This is a deliberate
+choice, confirmed on review, not an accepted side effect — and it is arguably a
+correction rather than a change: that code's own reason for staying silent is
+that "naming a source for it would claim more than the build knows", and "from
+the filename" is exactly what the build knows in that case.
 
 A sidecar file storing one byte per book was considered and rejected: it
 reintroduces a file to maintain and a migration, for a distinction nobody
