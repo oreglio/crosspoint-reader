@@ -666,7 +666,7 @@ could only ever say the same thing."
 
 ---
 
-### Task 5: Repair the shelf against the new core
+### Task 5: Repair the build against the new core
 
 **Files:**
 - Modify: `src/activities/library/LibraryListActivity.h` (add the format enum)
@@ -677,7 +677,44 @@ could only ever say the same thing."
 - Consumes: everything Task 2 produces, `Task 4`'s two `StrId`s, Task 3's struct.
 - Produces: a firmware that builds on all three targets.
 
-- [ ] **Step 1: Give the format label a home**
+- [ ] **Step 1: Give `HalFile` a modification time**
+
+Upstream's builder calls `entry.modificationTime()` (`LibraryBuilder.cpp:467`)
+and our `HalFile` has no such method, so the core does not compile here. This
+is the same kind of seam as `Epub::loadMetadata` in Task 1: a small, deliberate
+edit to a shared file, outside the verbatim boundary.
+
+It is not cosmetic. `reuseMetadata` requires `modificationTime != 0`
+(`LibraryBuilder.cpp:316`); without it no prior record is ever reused and every
+rebuild re-parses every book's metadata — which is the cost argument for
+defaulting `libraryUseMetadata` to 1.
+
+Port upstream's implementation rather than inventing one. In
+`lib/hal/HalStorage.h`, beside the other `HalFile` accessors:
+
+```cpp
+  // FAT modify date and time packed into one word, date in the high half.
+  // Zero when the card carries no timestamp for this entry, which the library
+  // index reads as "cannot be trusted for reuse".
+  uint32_t modificationTime();
+```
+
+In `lib/hal/HalStorage.cpp`, beside the other wrapped calls:
+
+```cpp
+uint32_t HalFile::modificationTime() {
+  HalStorage::StorageLock lock;
+  uint16_t date = 0;
+  uint16_t time = 0;
+  if (!impl || !impl->file.getModifyDateTime(&date, &time) || date == 0) return 0;
+  return (static_cast<uint32_t>(date) << 16) | time;
+}
+```
+
+`FsFile::getModifyDateTime(uint16_t*, uint16_t*)` is SdFat's, declared at
+`FsFile.h:305`; `HalFile::Impl` already wraps an `FsFile`.
+
+- [ ] **Step 2: Give the format label a home**
 
 Upstream's `LibraryFormat.h` has neither `ClixFormat` nor `recordFormat()`.
 Add to `src/activities/library/LibraryListActivity.h`, above the class:
@@ -705,7 +742,7 @@ ShelfFormat shelfFormatForName(const std::string_view name) {
 }
 ```
 
-- [ ] **Step 2: Delete the provenance block, keep the format label**
+- [ ] **Step 3: Delete the provenance block, keep the format label**
 
 In `LibraryListActivity.cpp`, delete the whole provenance `switch` and its
 `drawBlock` (lines 1067-1083) — everything between the author `drawBlock` and
@@ -716,7 +753,7 @@ Then replace `switch (library::recordFormat(record))` (line 1094) with
 `switch (shelfFormatForName(name))`, renaming each case label from
 `library::CLIX_FORMAT_EPUB` to `ShelfFormat::Epub` and so on.
 
-- [ ] **Step 3: Move the sort orders onto their enum**
+- [ ] **Step 4: Move the sort orders onto their enum**
 
 Replace every `library::SortOrder::DateDesc` with `library::SortOrder::AddedDesc`:
 
@@ -726,7 +763,7 @@ sed -i '' 's/SortOrder::DateDesc/SortOrder::AddedDesc/g' \
   src/activities/library/LibraryListActivity.cpp src/activities/library/LibraryListActivity.h
 ```
 
-- [ ] **Step 4: Make both `SortOrder` switches exhaustive again**
+- [ ] **Step 5: Make both `SortOrder` switches exhaustive again**
 
 The enum grew from four values to six, and neither switch has a `default:` on
 purpose, so `-Werror=switch` will reject both.
@@ -789,13 +826,13 @@ STR_LIBRARY_SORT_OLDEST: "Les plus anciens d'abord"
 STR_LIBRARY_SORT_AUTHOR_ZA: "Auteur Z-A"
 ```
 
-- [ ] **Step 5: Stop writing the flag that no longer exists**
+- [ ] **Step 6: Stop writing the flag that no longer exists**
 
 `LibraryListActivity.cpp:187` still sets `state.titleDescending`, which Task 3
 removed from the struct. Delete that one line from `onExit()`; `state.shelfSort`
 on the next line already carries the direction.
 
-- [ ] **Step 6: Simplify both builder call sites**
+- [ ] **Step 7: Simplify both builder call sites**
 
 In `src/activities/library/LibraryListActivity.cpp`, replace the block at
 lines 208-222 with:
@@ -822,7 +859,7 @@ In `src/activities/settings/SettingsActivity.cpp`, replace the call at lines
 
 and delete its `carried` preamble.
 
-- [ ] **Step 7: Build all three targets**
+- [ ] **Step 8: Build all three targets**
 
 ```bash
 pio run -e default && pio run -e sticky && pio run -e x4-pro
@@ -831,12 +868,12 @@ pio run -e default && pio run -e sticky && pio run -e x4-pro
 Expected: SUCCESS on all three. Fix whatever the compiler names; do **not**
 resolve anything by editing the eight adopted core files.
 
-- [ ] **Step 8: Run the host tests**
+- [ ] **Step 9: Run the host tests**
 
 Run: `cmake --build test/build -j8 && (cd test/build && ctest -j8)`
 Expected: only the two known `SectionPersistenceTest` failures.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 clang-format -i src/activities/library/LibraryListActivity.h src/activities/library/LibraryListActivity.cpp src/activities/settings/SettingsActivity.cpp
