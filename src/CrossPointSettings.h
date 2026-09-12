@@ -634,10 +634,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t hideFileExtension = 0;
   // File browser display row style (0 = one-line theme list, 1 = two-line compact display)
   uint8_t fileBrowserDisplay = FILE_BROWSER_DISPLAY_1_LINE;
-  // Show the title and author read from inside each book rather than its
-  // filename. Off until the metadata pass has actually run, so the shelf never
-  // promises information it does not have.
-  uint8_t libraryUseMetadata = 0;
+  // Defaults on: upstream's index derives an author only from the book's own
+  // metadata -- it never parses a filename -- so with extraction off the shelf
+  // would have no authors at all. Affordable because Epub::loadMetadata keeps
+  // an 8 KB inflate bound and the builder re-parses only changed books.
+  uint8_t libraryUseMetadata = 1;
   // Remove a book from the Recent Books list when its End-of-Book screen is reached (0 = off, 1 = on)
   uint8_t removeReadBooksFromRecents = 0;
   // Move epub to /Read/ folder on SD card when marked as finished (0 = disabled, 1 = enabled)
