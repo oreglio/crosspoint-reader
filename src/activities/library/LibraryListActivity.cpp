@@ -72,41 +72,44 @@ LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManag
 
 // Search lives in the header, so every tab is a complete view/order state.
 constexpr int kFavTab = 0;
-constexpr int kRecentTab = 1;
-constexpr int kTitleAscTab = 2;
-constexpr int kTitleDescTab = 3;
-constexpr int kAuthorTab = 4;
+constexpr int kTimeTab = 1;
+constexpr int kTitleTab = 2;
+constexpr int kAuthorTab = 3;
 constexpr int kTabSlots = kAuthorTab + 1;
 
 int sortTabIndex(const library::SortOrder order) {
   switch (order) {
+    case library::SortOrder::AddedAsc:
+    case library::SortOrder::AddedDesc:
+      return kTimeTab;
     case library::SortOrder::TitleAsc:
-      return kTitleAscTab;
     case library::SortOrder::TitleDesc:
-      return kTitleDescTab;
+      return kTitleTab;
     case library::SortOrder::AuthorAsc:
     case library::SortOrder::AuthorDesc:
       return kAuthorTab;
-    case library::SortOrder::AddedAsc:
-    case library::SortOrder::AddedDesc:
-      return kRecentTab;
   }
-  return kRecentTab;
+  return kTimeTab;
 }
 
-library::SortOrder orderForTab(const int tab) {
-  if (tab == kTitleAscTab) return library::SortOrder::TitleAsc;
-  if (tab == kTitleDescTab) return library::SortOrder::TitleDesc;
-  if (tab == kAuthorTab) return library::SortOrder::AuthorAsc;
-  return library::SortOrder::AddedDesc;
+// Ascending is the resting state of every tab except Time, where "newest
+// first" is what a reader means by recently added.
+library::SortOrder orderForTab(const int tab, const bool descending) {
+  if (tab == kTitleTab) return descending ? library::SortOrder::TitleDesc : library::SortOrder::TitleAsc;
+  if (tab == kAuthorTab) return descending ? library::SortOrder::AuthorDesc : library::SortOrder::AuthorAsc;
+  return descending ? library::SortOrder::AddedDesc : library::SortOrder::AddedAsc;
 }
 
-// The strip needs the mode alone. The header strings carry a "Library ·" prefix
-// that reads as four copies of the word once they sit side by side.
+bool orderIsDescending(const library::SortOrder order) {
+  return order == library::SortOrder::AddedDesc || order == library::SortOrder::TitleDesc ||
+         order == library::SortOrder::AuthorDesc;
+}
+
+// The arrow is appended by tabLabel(), which knows the active order; this
+// returns the bare mode so an inactive tab stays quiet.
 const char* tabLabelFor(const int tab) {
-  if (tab == kRecentTab) return tr(STR_LIBRARY_TAB_RECENT);
-  if (tab == kTitleAscTab) return "A-Z";
-  if (tab == kTitleDescTab) return "Z-A";
+  if (tab == kTimeTab) return tr(STR_LIBRARY_TAB_RECENT);
+  if (tab == kTitleTab) return tr(STR_LIBRARY_TAB_TITLES);
   if (tab == kAuthorTab) return tr(STR_LIBRARY_TAB_AUTHOR);
   return nullptr;
 }
@@ -115,7 +118,18 @@ int LibraryListActivity::tabCount() const { return kTabSlots; }
 
 int LibraryListActivity::activeTab() const { return sFavoritesView ? kFavTab : sortTabIndex(sSortOrder); }
 
-const char* LibraryListActivity::tabLabel(const int index) const { return tabLabelFor(index); }
+const char* LibraryListActivity::tabLabel(const int index) const {
+  const char* base = tabLabelFor(index);
+  if (base == nullptr || index != activeTab()) return base;
+  // Only the active tab shows which way it runs; a row of arrows reads as noise.
+  // That invariant is what makes one shared buffer safe here:
+  // UiTabListActivity.cpp:121 collects every tab's pointer into one array and
+  // renders them together, so a second arrow-bearing tab would overwrite the
+  // first. The inactive tabs return stable tr() pointers instead.
+  static char withArrow[64];
+  snprintf(withArrow, sizeof(withArrow), "%s %s", base, orderIsDescending(sSortOrder) ? "▾" : "▴");
+  return withArrow;
+}
 
 fui::BitmapRef LibraryListActivity::tabIcon(const int index) const {
   return index == kFavTab ? fui::bitmapFromIcon(icon_star_16_fui) : fui::BitmapRef{};
@@ -417,7 +431,7 @@ void LibraryListActivity::onTabAction(const int index) {
     sFavoritesView = true;
   } else {
     sFavoritesView = false;
-    sSortOrder = orderForTab(index);
+    sSortOrder = orderForTab(index, /*descending=*/index == kTimeTab);
   }
   applyFilter();
   // Tab taps land with the tab bar focused, like the button cycle leaves it.
@@ -430,7 +444,17 @@ void LibraryListActivity::onTabAction(const int index) {
 }
 
 void LibraryListActivity::onTabLongPress(const int index) {
-  if (index == kFavTab) openFavoritesSortMenu();
+  if (index == kFavTab) {
+    openFavoritesSortMenu();
+    return;
+  }
+  // A hold on the tab you are already on flips its direction; a hold on
+  // another tab is just a slow tap, and onTabAction has already run for it.
+  if (index != activeTab()) return;
+  sSortOrder = orderForTab(index, !orderIsDescending(sSortOrder));
+  applyFilter();
+  app.clearTapFlash();
+  requestUpdate();
 }
 
 void LibraryListActivity::stepTab(const int direction) {
@@ -1187,9 +1211,10 @@ void LibraryListActivity::buildScreen(UiScreen& screen) {
   // Content below the header band, above the button hints. The strip sits
   // between the header and the list, and takes its height from the list
   // rather than overlaying it.
-  screen.setContentMargin(
-      fui::Insets{static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput)), 0,
-                  static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
+  // No topPadding: the header band already ends where the strip begins, and
+  // the extra pad read as a stray gap above the tabs on the device.
+  screen.setContentMargin(fui::Insets{TouchHeaderBackButton::height(metrics, mappedInput), 0,
+                                      static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
   buildSearchAction(screen);
 
   if (detailsView) {
