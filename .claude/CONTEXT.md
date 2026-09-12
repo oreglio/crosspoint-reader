@@ -78,3 +78,35 @@ Refer to https://freeink.org/llms.txt for guidance.
 
 - POSIX TZ signs are inverted from ISO 8601 in `TimeStore::applyTimezone()`: `"UTC-1"` means UTC+1.
 - `LyraTheme::drawHeader()` does not call `BaseTheme::drawHeader()`, so header changes in the base theme must be duplicated in Lyra if needed.
+
+## Divergences assumées vis-à-vis d'upstream
+
+- `UiAppHost` reste **non-template** ici alors qu'upstream l'a paramétré en
+  `UiAppHost<MaxInteractions, MaxHandlers>`. Raison : `UiListActivity` en dérive
+  et ~40 activités en dérivent, donc le template instancierait `FreeInkApp` une
+  quarantaine de fois (croissance flash). Le surcoût RAM est borné : 256 o par
+  hôte vivant. Les écrans portés depuis crosspoint passent par les alias
+  `reset()`/`render()`/`App`/`Screen`. Un écran porté qui utilise `listIconFor`
+  doit inclure `components/UiAppHelpers.h` lui-même : le template amont le
+  tirait transitivement, pas notre header.
+- Valeurs de raccourcis persistées : le fork garde la sienne, celles d'amont
+  décalent. `LONG_MENU_LIBRARY` = 22, `SHORTCUT_LIBRARY` = 31.
+- `CrossPointSettings::saveToFile()` est **privée**. Tout appel amont ajouté
+  doit devenir `saveGlobalDefaults()`, ou passer par l'indirection du lecteur
+  (`persistGlobalSettings()`) quand des valeurs propres au livre sont en RAM.
+
+## Langues et build
+
+Un build X3/X4 n'embarque qu'EN+FR (`custom_languages` dans `platformio.ini`),
+donc `Language` n'a pas d'énumérateur pour les autres : nommer `Language::DE`
+ne compile pas. Garder tout code sensible derrière `I18N_HAS_*`. La table
+`keyboard_layouts::ALL` garde ses neuf lignes en toutes circonstances — leur
+position **est** l'affectation de bits persistée — les langues absentes portant
+`Language::_COUNT` via les macros `KBD_LANG_*`.
+
+## Tests hôte
+
+`SectionPersistenceTest.FullCommitReopens...` et
+`.PartialCommitFiltersFutureAnchors...` échouent depuis la sync du 12/09/2026.
+Ce sont des tests **amont** qui échouent aussi sur un worktree
+`upstream/development` pur — ne pas les imputer à une modification locale.
