@@ -728,11 +728,16 @@ for a walk that was capped or aborted.
 
 `RANKS_DEGRADED` is one flag for three independent allocation failures, all
 runtime heap conditions rather than a fixed book-count ceiling. A failed
-title-sort key array falls back **both** the author order and the arrival
-order to walk order, since neither sort runs without it. A failed
-author-order sort-key array falls back only the author order. A failed
-canonical-spelling scratch array skips choosing one display spelling per
-author group, without touching either order. `DEDUP_DEGRADED` says duplicate
+title-sort key array leaves the records themselves in walk order; since the
+author order and the arrival order are both gated on that same sort having
+succeeded, they fall back to walk order too. A failed author-order sort-key
+array, with the title sort intact, sends only the author order back to the
+order the records are already stored in — folded-title order in that case,
+not walk order — so author browsing looks alphabetised by title rather than
+unsorted. A failed canonical-spelling scratch array touches neither order: it
+only skips choosing one display spelling per author group, so the same
+person's name can appear under more than one spelling. `DEDUP_DEGRADED` says
+duplicate
 detection stopped early, either because its scratch array failed to allocate
 or because more than `LIBRARY_MAX_DEDUP_KEYS` (1024) distinct name+size keys
 turned up in one walk; past that point some duplicate books may survive in
