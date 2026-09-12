@@ -236,7 +236,11 @@ bool readBookMetadata(const std::string& epubPath, BookMetadata& out) {
   if (!ok) return false;
 
   parseOpfMetadata(opfXml, out);
-  return !out.title.empty() || !out.author.empty();
+  // Success means the package document was READ, not that it said anything. A
+  // book whose dc:title and dc:creator are both empty is a book we know about:
+  // reporting failure here had the library record it as CLIX_METADATA_FAILED,
+  // which never satisfies the reuse gate, so it was re-parsed on every rebuild.
+  return true;
 }
 
 }  // namespace epub
