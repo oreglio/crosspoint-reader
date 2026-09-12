@@ -917,6 +917,10 @@ at LibraryBuilder.cpp:86, which is the only reason dropping it is safe."
 
 ### Task 6: Four tabs, uniform hold-to-flip, no gap above the strip
 
+Line numbers below are anchored to commit `e3124f9f` and every one of them
+moved when Task 5 rewrote this file — by up to fourteen lines. Find each site by
+its symbol name, and treat the number as a hint only.
+
 **Files:**
 - Modify: `src/activities/library/LibraryListActivity.cpp:62-110` and the strip handlers
 - Modify: `src/activities/library/LibraryListActivity.cpp:1198-1204` (content margin)
@@ -956,7 +960,8 @@ source reference to a deleted key.
 
 - [ ] **Step 2: Replace the tab constants**
 
-In `LibraryListActivity.cpp`, replace lines 62-67:
+In `LibraryListActivity.cpp`, find the block of tab constants that begins
+`constexpr int kFavTab = 0;` (line 74 as of commit e3124f9f) and replace it:
 
 ```cpp
 constexpr int kFavTab = 0;
@@ -979,7 +984,8 @@ constexpr int kTabSlots = kAuthorTab + 1;
 
 - [ ] **Step 3: Fold direction into the tab, not into a slot**
 
-Replace `sortTabIndex` (lines 69-80) and `orderForTab` (lines 83-88):
+Replace the whole of `sortTabIndex` and `orderForTab` (lines 81 and 97 as of
+commit e3124f9f) and add `orderIsDescending` beside them:
 
 ```cpp
 int sortTabIndex(const library::SortOrder order) {
@@ -1013,7 +1019,7 @@ bool orderIsDescending(const library::SortOrder order) {
 
 - [ ] **Step 4: Label the tabs and carry the arrow**
 
-Replace `tabLabelFor` (lines 92-98):
+Replace `tabLabelFor` (line 106 as of commit e3124f9f):
 
 ```cpp
 // The arrow is appended by tabLabel(), which knows the active order; this
@@ -1026,7 +1032,7 @@ const char* tabLabelFor(const int tab) {
 }
 ```
 
-and replace `LibraryListActivity::tabLabel` (line 104):
+and replace `LibraryListActivity::tabLabel` (line 118 as of commit e3124f9f):
 
 ```cpp
 const char* LibraryListActivity::tabLabel(const int index) const {
@@ -1045,8 +1051,8 @@ const char* LibraryListActivity::tabLabel(const int index) const {
 
 - [ ] **Step 5: Give each tab a resting direction when it is activated**
 
-`onTabAction` (line 413) calls the old single-argument `orderForTab`. Replace
-that call:
+`LibraryListActivity::onTabAction` (line 415 as of commit e3124f9f) calls the
+old single-argument `orderForTab`. Replace that call:
 
 ```cpp
     sSortOrder = orderForTab(index, /*descending=*/index == kTimeTab);
@@ -1059,7 +1065,8 @@ untouched — `applyFilter()`, the nav reset, `app.clearTapFlash()` and
 
 - [ ] **Step 6: Make a hold on the focused tab flip its direction**
 
-Replace `LibraryListActivity::onTabLongPress` (line 430) in full:
+Replace `LibraryListActivity::onTabLongPress` (line 432 as of commit e3124f9f)
+in full:
 
 ```cpp
 void LibraryListActivity::onTabLongPress(const int index) {
@@ -1082,7 +1089,8 @@ reads `sSortOrder` directly.
 
 - [ ] **Step 7: Remove the gap above the strip**
 
-Replace lines 1202-1204:
+Replace the `screen.setContentMargin(...)` call (line 1191 as of commit
+e3124f9f):
 
 ```cpp
   screen.setContentMargin(
