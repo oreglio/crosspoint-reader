@@ -894,7 +894,12 @@ bool LibraryListActivity::handleButtons() {
   // reader never loses the sense of a fixed frame.
   if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
     if (tabsFocused()) {
-      // already at the top
+      // What sits above the strip is the header, and the only thing in it is
+      // the search action — so Up out of the strip opens it, the way Up out of
+      // a row lands on the strip. The press did nothing here before, and the
+      // magnifier had no button route of its own: Left reaches it only from the
+      // first row, or from the strip when a query has emptied the shelf.
+      if (!degraded) openSearch();
     } else if (n.selected == 1 && !degraded) {
       // Degraded hides the strip, so it must not take focus either: cycling
       // orders behind a hidden strip would repaint the same walk-order list
