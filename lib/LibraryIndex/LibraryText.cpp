@@ -3,10 +3,23 @@
 #include <Utf8.h>
 
 #include <algorithm>
-#include <array>
 #include <cstring>
 
 namespace library {
+
+std::string joinLibraryPath(const std::string_view folder, const std::string_view name) {
+  std::string path;
+  path.reserve(folder.size() + name.size() + 1);
+  if (folder.empty()) {
+    path.push_back('/');
+  } else {
+    path.append(folder);
+    if (folder.back() != '/') path.push_back('/');
+  }
+  path.append(name);
+  return path;
+}
+
 namespace {
 
 // Letters with no canonical decomposition, plus the punctuation that would
@@ -71,30 +84,75 @@ void appendLowerAscii(const uint32_t cp, std::string& out) {
   out.push_back(static_cast<char>(cp >= 'A' && cp <= 'Z' ? cp - 'A' + 'a' : cp));
 }
 
+struct CodepointRange {
+  uint32_t first;
+  uint32_t last;
+};
+
+constexpr bool inRanges(const uint32_t cp, const CodepointRange* ranges, const size_t count) {
+  for (size_t i = 0; i < count; i++) {
+    if (cp >= ranges[i].first && cp <= ranges[i].last) return true;
+  }
+  return false;
+}
+
+// Script coverage follows the SD-font catalog. Keeping the ranges here costs a
+// few hundred flash bytes; linking libunibreak solely for its general-category
+// table would add roughly 75 KiB of tables plus the classifier code.
+constexpr CodepointRange LETTER_RANGES[] = {
+    {0x0041, 0x005A},   {0x0061, 0x007A},   {0x00C0, 0x02AF},  // Latin and IPA
+    {0x0370, 0x03FF},   {0x1F00, 0x1FFF},                      // Greek
+    {0x0400, 0x0481},   {0x048A, 0x052F},                      // Cyrillic
+    {0x0531, 0x0556},   {0x0560, 0x0588},                      // Armenian
+    {0x05D0, 0x05EA},   {0x05EF, 0x05F2},   {0xFB1D, 0xFB4F},  // Hebrew
+    {0x0620, 0x064A},   {0x066E, 0x066F},   {0x0671, 0x06D3},   {0x06D5, 0x06D5},
+    {0x06E5, 0x06E6},   {0x06EE, 0x06EF},   {0x06FA, 0x06FC},   {0x06FF, 0x06FF},
+    {0x0750, 0x077F},   {0x08A0, 0x08C9},   {0xFB50, 0xFDF9},   {0xFE70, 0xFEFC},  // Arabic
+    {0x10A0, 0x10C5},   {0x10D0, 0x10FF},   {0x1C90, 0x1CBF},   {0x2D00, 0x2D25},  // Georgian
+    {0x1200, 0x135A},   {0x1380, 0x138F},   {0x2D80, 0x2DDE},                      // Ethiopic
+    {0x13A0, 0x13F5},   {0x13F8, 0x13FD},   {0xAB70, 0xABBF},                      // Cherokee
+    {0x2D30, 0x2D67},                                                              // Tifinagh
+    {0x3041, 0x3096},   {0x30A1, 0x30FA},   {0x3105, 0x312F},   {0x31A0, 0x31BF},  // Kana/Bopomofo
+    {0x3400, 0x4DBF},   {0x4E00, 0x9FFF},   {0xF900, 0xFAFF},                      // Han
+    {0x1100, 0x11FF},   {0x3131, 0x318E},   {0xA960, 0xA97F},   {0xAC00, 0xD7FF},  // Hangul
+    {0x20000, 0x2EBEF}, {0x2F800, 0x2FA1F}, {0x30000, 0x323AF},                    // Han extensions
+};
+
+constexpr CodepointRange NUMBER_RANGES[] = {
+    {0x0030, 0x0039}, {0x0660, 0x0669}, {0x06F0, 0x06F9}, {0x0966, 0x096F}, {0xFF10, 0xFF19},
+};
+
+constexpr CodepointRange MARK_RANGES[] = {
+    {0x0483, 0x0489}, {0x0591, 0x05BD}, {0x05BF, 0x05BF}, {0x05C1, 0x05C2}, {0x05C4, 0x05C5},
+    {0x05C7, 0x05C7}, {0x0610, 0x061A}, {0x064B, 0x065F}, {0x0670, 0x0670}, {0x06D6, 0x06DC},
+    {0x06DF, 0x06E4}, {0x06E7, 0x06E8}, {0x06EA, 0x06ED}, {0x08D3, 0x08FF}, {0xFB1E, 0xFB1E},
+};
+
+bool isUnicodeNumber(const uint32_t cp) {
+  return inRanges(cp, NUMBER_RANGES, sizeof(NUMBER_RANGES) / sizeof(NUMBER_RANGES[0]));
+}
+
+bool isUnicodeMark(const uint32_t cp) {
+  return utf8IsCombiningMark(cp) || inRanges(cp, MARK_RANGES, sizeof(MARK_RANGES) / sizeof(MARK_RANGES[0]));
+}
+
+bool isUnicodeLetter(const uint32_t cp) {
+  if (isUnicodeMark(cp) || isUnicodeNumber(cp) || cp == 0x00D7 || cp == 0x00F7 || cp == 0x0374 || cp == 0x0375 ||
+      cp == 0x037E || cp == 0x0387 || cp == 0x03F6)
+    return false;
+  return inRanges(cp, LETTER_RANGES, sizeof(LETTER_RANGES) / sizeof(LETTER_RANGES[0]));
+}
+
 // Articles stripped from the head of sort and search keys. Display text never
 // goes through this.
 constexpr const char* ARTICLES[] = {"the ", "a ",   "an ", "le ",  "la ",  "les ", "l'",   "un ",
                                     "une ", "de ",  "du ", "des ", "der ", "die ", "das ", "el ",
                                     "los ", "las ", "il ", "lo ",  "gli ", "i ",   "o ",   "os "};
 
-// Words that must not be the last word of a filename title for TITLE_MERGE to
-// fire: an exporter truncating mid-phrase almost always stops on one of these.
-constexpr const char* STOP_TAIL[] = {"a",    "an",   "the", "of",   "to",   "for",  "at", "if",  "in",
-                                     "on",   "and",  "or",  "with", "from", "your", "is", "as",  "by",
-                                     "de",   "du",   "des", "la",   "le",   "les",  "un", "une", "et",
-                                     "pour", "dans", "sur", "que",  "qui",  "ce",   "d",  "l",   "e"};
-
-bool isStopTail(const std::string_view word) {
-  for (const char* s : STOP_TAIL) {
-    if (word == s) return true;
-  }
-  return false;
-}
-
-// Views into `folded`, not copies: the caller keeps that string alive as long
-// as the tokens, and a std::string per token costs an allocation each plus 24
-// bytes of stack apiece -- 288 B for the twelve, over the 256 B AGENTS.md asks
-// callers to justify.
+// Views into `folded`, not copies: the caller keeps that string alive for as
+// long as the tokens, and a std::string per token costs an allocation each plus
+// 24 bytes of stack apiece -- 288 B for the twelve, over the 256 B this repo
+// asks callers to justify.
 void splitTokens(std::string_view folded, std::string_view* out, size_t maxTokens, size_t& count) {
   count = 0;
   size_t i = 0;
@@ -106,42 +164,11 @@ void splitTokens(std::string_view folded, std::string_view* out, size_t maxToken
   }
 }
 
-bool looksLikeHexDigest(std::string_view s) {
-  if (s.empty()) return false;
-  // At least one decimal digit is required: "Bede" and "Abba" are authors,
-  // not digests, and a real hash without a single digit is vanishingly rare.
-  // The trade-off runs the other way for pure-letter strings like "deadbeef",
-  // which now read as an (odd) author instead of being dropped — harmless.
-  bool sawDigit = false;
-  for (const char c : s) {
-    const bool digit = (c >= '0' && c <= '9');
-    if (!digit && (c < 'a' || c > 'f')) return false;
-    sawDigit = sawDigit || digit;
-  }
-  return sawDigit;
-}
-
-bool allDigits(std::string_view s) {
-  if (s.empty()) return false;
-  for (const char c : s) {
-    if (c < '0' || c > '9') return false;
-  }
-  return true;
-}
-
-// A plausible publication year, 1500-2099. Narrow on purpose: a wider range
-// would swallow titles like "1987" and "2085".
-bool isYear(std::string_view s) {
-  if (s.size() != 4 || !allDigits(s)) return false;
-  const int y = (s[0] - '0') * 1000 + (s[1] - '0') * 100 + (s[2] - '0') * 10 + (s[3] - '0');
-  return (y >= 1500 && y <= 2099);
-}
-
-// Drop a trailing run of spaces and hyphens. Exporters leave "Paris, 1985 -"
-// when a later field was empty.
-std::string_view trimTrailingDashes(std::string_view s) {
-  while (!s.empty() && (s.back() == ' ' || s.back() == '-')) s.remove_suffix(1);
-  return s;
+bool isSingleCodepoint(const std::string_view text) {
+  if (text.empty()) return false;
+  const auto* cursor = reinterpret_cast<const unsigned char*>(text.data());
+  utf8NextCodepoint(&cursor);
+  return cursor == reinterpret_cast<const unsigned char*>(text.data() + text.size());
 }
 
 }  // namespace
@@ -169,7 +196,7 @@ std::string fold(const std::string_view text, const bool stripArticle) {
     const uint32_t cp = utf8NextCodepoint(&cursor);
     if (cp == 0) break;
 
-    if (utf8IsCombiningMark(cp)) continue;  // already-decomposed input
+    if (isUnicodeMark(cp)) continue;
 
     const char* mapped = explicitMapping(cp);
     if (mapped != nullptr) {
@@ -184,6 +211,13 @@ std::string fold(const std::string_view text, const bool stripArticle) {
       if (pendingSpace && !out.empty()) out.push_back(' ');
       pendingSpace = false;
       appendLowerAscii(base, out);
+      continue;
+    }
+
+    if (base >= 0x80 && (isUnicodeLetter(base) || isUnicodeNumber(base))) {
+      if (pendingSpace && !out.empty()) out.push_back(' ');
+      pendingSpace = false;
+      utf8AppendCodepoint(base, out);
       continue;
     }
 
@@ -204,68 +238,11 @@ std::string fold(const std::string_view text, const bool stripArticle) {
   return out;
 }
 
-bool looksLikeMetadata(const std::string_view raw) {
-  // Takes the RAW segment, not a folded one. The fold turns ',' ';' and '#' into
-  // spaces, and the "<publisher>, <year>" shape is defined by exactly those
-  // separators — folding first would make that rule unable to fire at all.
-  const std::string_view trimmed = trimTrailingDashes(raw);
-  if (trimmed.empty()) return true;
-
-  const std::string folded = fold(trimmed);
-  if (folded.empty()) return true;
-
-  if (folded.size() >= 4 && folded.size() <= 32 && looksLikeHexDigest(folded)) return true;
-  if (folded.rfind("isbn10", 0) == 0 || folded.rfind("isbn13", 0) == 0) return true;
-  // Organisation credits that export tools leave in the author slot:
-  // "Internet Archive", "Open Library" and the like are sources, not people.
-  // Matching the last word keeps this free of any hardcoded site list, and no
-  // person's surname is "Archive" or "Library".
-  const size_t lastSpace = folded.find_last_of(' ');
-  const std::string_view lastWord =
-      lastSpace == std::string::npos ? std::string_view(folded) : std::string_view(folded).substr(lastSpace + 1);
-  if (lastWord == "archive" || lastWord == "library") return true;
-  if (folded.size() == 13 && allDigits(folded) && folded.rfind("97", 0) == 0) return true;
-  if (folded.size() == 10 && allDigits(folded.substr(0, 9)) &&
-      (folded[9] == 'x' || (folded[9] >= '0' && folded[9] <= '9'))) {
-    return true;
-  }
-  if (isYear(folded)) return true;
-
-  // "<place or publisher>, 2019" and "<series>; DL 2009" — a short-ish head, a
-  // separator, then a year. The head bound keeps this from firing on a long
-  // title that happens to end in a number. Punctuation comes from the raw text;
-  // the tail is folded so "DL" and "dl" behave alike.
-  const size_t sep = trimmed.find_last_of(",;#");
-  if (sep != std::string_view::npos && sep <= 80) {
-    std::string tail = fold(trimmed.substr(sep + 1));
-    if (tail.rfind("dl ", 0) == 0) tail.erase(0, 3);
-    if (isYear(tail)) return true;
-  }
-  return false;
-}
-
-ParsedName parseFilename(const std::string_view stem) {
-  ParsedName out;
-  constexpr std::string_view SEP = " -- ";
-
-  const size_t first = stem.find(SEP);
-  if (first == std::string_view::npos) {
-    out.title.assign(stem);
-    return out;
-  }
-
-  out.title.assign(stem.substr(0, first));
-
-  const size_t secondStart = first + SEP.size();
-  const size_t second = stem.find(SEP, secondStart);
-  const std::string_view candidate =
-      stem.substr(secondStart, second == std::string_view::npos ? std::string_view::npos : second - secondStart);
-
-  // Segments 2..n are never read. Only this one candidate is classified.
-  if (!looksLikeMetadata(candidate)) out.author.assign(candidate);
-
-  if (out.title.empty()) out.title.assign(stem);
-  return out;
+uint32_t foldedGroupInitial(const std::string_view folded) {
+  if (folded.empty()) return 0;
+  const auto* cursor = reinterpret_cast<const unsigned char*>(folded.data());
+  const uint32_t cp = utf8NextCodepoint(&cursor);
+  return isUnicodeLetter(cp) ? cp : 0;
 }
 
 std::string cleanPersonName(const std::string_view author) {
@@ -330,17 +307,7 @@ std::string cleanPersonName(const std::string_view author) {
     std::string_view first(collapsed.data() + comma + 1, collapsed.size() - comma - 1);
     while (!first.empty() && first.front() == ' ') first.remove_prefix(1);
     while (!last.empty() && last.back() == ' ') last.remove_suffix(1);
-    // A given name is one or two words plus the odd initial, never four. Past
-    // that bound the comma is not an inversion but an exporter artifact —
-    // "Henry S_ Warren, Henry S_ Warren Jr" is one author listed twice, and
-    // turning it round yields "Henry S Warren Jr Henry S Warren". Refusing to
-    // invert shows the name exactly as the filename spells it, which is wrong in
-    // no way the reader can see.
-    size_t givenWords = first.empty() ? 0 : 1;
-    for (const char c : first) {
-      if (c == ' ') givenWords++;
-    }
-    if (!first.empty() && !last.empty() && givenWords <= 3) {
+    if (!first.empty() && !last.empty()) {
       std::string swapped;
       swapped.reserve(collapsed.size());
       swapped.append(first);
@@ -353,25 +320,12 @@ std::string cleanPersonName(const std::string_view author) {
 }
 
 std::string authorKey(const std::string_view author) {
-  // Drop bracketed spans ("George Sand [Sand, George]") and everything after
-  // a multi-author separator.
-  std::string cleaned;
-  cleaned.reserve(author.size());
-  int depth = 0;
-  for (const char c : author) {
-    if (c == '[' || c == '(') {
-      depth++;
-      continue;
-    }
-    if (c == ']' || c == ')') {
-      if (depth > 0) depth--;
-      continue;
-    }
-    if (c == ';') break;
-    if (depth == 0) cleaned.push_back(c);
-  }
-
-  const std::string folded = fold(cleaned);
+  // The same cleanup the display name gets: bracketed spans dropped
+  // ("George Sand [Sand, George]") and everything after a multi-author
+  // separator cut. cleanPersonName also turns "Austen, Jane" round, which makes
+  // no difference here — the tokens are sorted below, so word order is already
+  // irrelevant to the key.
+  const std::string folded = fold(cleanPersonName(author));
 
   constexpr size_t MAX_TOKENS = 12;
   std::string_view tokens[MAX_TOKENS];
@@ -382,7 +336,7 @@ std::string authorKey(const std::string_view author) {
   // "Herbert Wells"), so they must not change the key.
   size_t kept = 0;
   for (size_t i = 0; i < count; i++) {
-    if (tokens[i].size() > 1) tokens[kept++] = tokens[i];
+    if (!isSingleCodepoint(tokens[i])) tokens[kept++] = tokens[i];
   }
   std::sort(tokens, tokens + kept);
 
@@ -395,34 +349,11 @@ std::string authorKey(const std::string_view author) {
   // first, so a whole-token cut would reduce "Wollstonecraft, Mary" to the key
   // "alex" and merge every Alex in the library; the byte cut keeps
   // "mary wollsto", which stays a prefix of the full key and discriminates.
-  if (key.size() > AUTHOR_KEY_MAX_BYTES) key.resize(AUTHOR_KEY_MAX_BYTES);
+  if (key.size() > AUTHOR_KEY_MAX_BYTES) {
+    key.resize(static_cast<size_t>(utf8SafeTruncateBuffer(key.data(), AUTHOR_KEY_MAX_BYTES)));
+  }
   while (!key.empty() && key.back() == ' ') key.pop_back();
   return key;
-}
-
-bool preferFilenameTitle(const std::string_view dcTitle, const std::string_view fnTitle) {
-  const std::string dc = fold(dcTitle);
-  const std::string fn = fold(fnTitle);
-  if (dc.empty() || fn.empty()) return false;
-  if (fn.size() <= dc.size()) return false;
-  if (fn.compare(0, dc.size(), dc) != 0) return false;
-  if (fn[dc.size()] != ' ') return false;  // word boundary, not a mid-word prefix
-
-  // Views, like authorKey's: twenty-four std::strings here cost 576 B of stack
-  // on their own, more than twice what AGENTS.md asks callers to justify.
-  constexpr size_t MAX_TOKENS = 24;
-  std::string_view extra[MAX_TOKENS];
-  size_t count = 0;
-  splitTokens(std::string_view(fn).substr(dc.size() + 1), extra, MAX_TOKENS, count);
-  if (count == 0) return false;
-
-  size_t substantial = 0;
-  for (size_t i = 0; i < count; i++) {
-    if (extra[i].size() >= 3) substantial++;
-  }
-  if (substantial < 2) return false;
-
-  return !isStopTail(extra[count - 1]);
 }
 
 // fold() keeps the apostrophe, which is right for sorting — "L'Eneide" belongs
@@ -467,30 +398,19 @@ std::string surnameKey(const std::string_view displayAuthor) {
   const std::string folded = fold(displayAuthor);
   if (folded.empty()) return {};
 
-  size_t lastStart = std::string::npos;
-  size_t lastEnd = folded.size();
-  size_t i = folded.size();
-  while (i > 0) {
-    i--;
-    if (folded[i] != ' ') {
-      if (lastStart == std::string::npos) lastEnd = i + 1;
-      lastStart = i;
-    } else if (lastStart != std::string::npos) {
-      break;
-    }
-  }
-  if (lastStart == std::string::npos) return {};
+  // fold() defers its spaces, so the result has no leading, trailing or repeated
+  // space. The last one is therefore the separator before the surname, and a name
+  // with no space at all is its own key.
+  const size_t sep = folded.rfind(' ');
+  if (sep == std::string::npos) return folded;
 
   std::string key;
-  key.reserve(folded.size() + 1);
-  key.append(folded, lastStart, lastEnd - lastStart);
+  key.reserve(folded.size());
+  key.append(folded.substr(sep + 1));
   // The given names follow, so two people sharing a surname stay in a stable,
   // readable order rather than whichever the disk walk happened to produce.
-  if (lastStart > 0) {
-    key.push_back(' ');
-    key.append(folded, 0, lastStart);
-    while (!key.empty() && key.back() == ' ') key.pop_back();
-  }
+  key.push_back(' ');
+  key.append(folded.substr(0, sep));
   return key;
 }
 

@@ -18,7 +18,6 @@ ClixHeader makeHeader(const uint16_t books, const uint32_t folderBytes = 300, co
   h.foldVersion = CLIX_FOLD_VERSION;
   h.bookCount = books;
   h.folderCount = 4;
-  h.knownAuthorCount = books;
   layoutSections(h, folderBytes, nameBytes == 0 ? books * 80u : nameBytes);
   return h;
 }
@@ -31,6 +30,7 @@ TEST(LibraryFormat, StructSizesAreFrozen) {
   EXPECT_EQ(sizeof(ClixHeader), 64u);
   EXPECT_EQ(sizeof(ClixRecord), 128u);
   EXPECT_EQ(sizeof(ClixFolderHeader), 1u);
+  EXPECT_EQ(CLIX_FORMAT_VERSION, 2u);
 }
 
 TEST(LibraryFormat, RecordsTileSectorsExactly) {
@@ -74,8 +74,8 @@ TEST(LibraryFormat, PermutationArraysDoNotOverlapEachOther) {
   const ClixHeader h = makeHeader(100, 116);
   EXPECT_EQ(authorOrderOffset(h, 0), h.permStart);
   EXPECT_EQ(authorOrderOffset(h, 99), h.permStart + 198u);
-  EXPECT_EQ(dateOrderOffset(h, 0), h.permStart + 200u);
-  EXPECT_GT(dateOrderOffset(h, 0), authorOrderOffset(h, h.bookCount - 1));
+  EXPECT_EQ(arrivalOrderOffset(h, 0), h.permStart + 200u);
+  EXPECT_GT(arrivalOrderOffset(h, 0), authorOrderOffset(h, h.bookCount - 1));
 }
 
 TEST(LibraryFormat, SizeArithmeticMatchesTheSpecTable) {
@@ -116,6 +116,10 @@ TEST(LibraryFormatValidation, RejectsUnknownVersionsSeparately) {
   h = makeHeader(60, 116);
   h.foldVersion = CLIX_FOLD_VERSION + 1;
   EXPECT_EQ(validateHeader(h, h.selfSize), ClixValidity::StaleFoldVersion);
+  EXPECT_EQ(validateHeaderStructure(h, h.selfSize), ClixValidity::Ok);
+
+  // Reconciliation may ignore only the fold version, never damaged layout.
+  EXPECT_EQ(validateHeaderStructure(h, h.selfSize - 1), ClixValidity::SizeMismatch);
 }
 
 TEST(LibraryFormatValidation, RejectsLengthsBeyondTheFile) {
@@ -143,16 +147,18 @@ TEST(LibraryFormatValidation, RejectsTamperedOffsets) {
   ClixHeader h = makeHeader(60, 116);
   h.recordStart += CLIX_ALIGN;  // plausible, aligned, and wrong
   EXPECT_EQ(validateHeader(h, h.selfSize), ClixValidity::SectionsInconsistent);
-
-  h = makeHeader(60, 116);
-  h.knownAuthorCount = h.bookCount + 1;  // would page past the permutation array
-  EXPECT_EQ(validateHeader(h, h.selfSize), ClixValidity::SectionsInconsistent);
 }
 
 TEST(LibraryFormatValidation, RejectsAnImpossibleBookCount) {
   ClixHeader h = makeHeader(60, 116);
   h.bookCount = CLIX_MAX_RECORDS + 1;
   EXPECT_EQ(validateHeader(h, h.selfSize), ClixValidity::CountOutOfRange);
+}
+
+TEST(LibraryFormatValidation, RejectsInvalidMetadataMode) {
+  ClixHeader h = makeHeader(60, 116);
+  h.metadataEnabled = 2;
+  EXPECT_EQ(validateHeader(h, h.selfSize), ClixValidity::SectionsInconsistent);
 }
 
 TEST(LibraryFormatValidation, AcceptsAnEmptyLibrary) {
@@ -164,23 +170,13 @@ TEST(LibraryFormatValidation, AcceptsAnEmptyLibrary) {
   EXPECT_EQ(h.selfSize, CLIX_ALIGN);
 }
 
-TEST(LibraryRecordFlags, PackAndUnpackRoundTrip) {
-  for (const uint8_t fmt : {CLIX_FORMAT_EPUB, CLIX_FORMAT_TXT, CLIX_FORMAT_XTC, CLIX_FORMAT_OTHER}) {
-    for (const uint8_t prov :
-         {CLIX_AUTHOR_FROM_FOLDER, CLIX_AUTHOR_FROM_CACHE, CLIX_AUTHOR_FROM_OPF, CLIX_AUTHOR_UNKNOWN}) {
-      for (const bool fromOpf : {false, true}) {
-        for (const bool tooLarge : {false, true}) {
-          ClixRecord r{};
-          r.flags =
-              makeRecordFlags(static_cast<ClixFormat>(fmt), static_cast<ClixAuthorProvenance>(prov), fromOpf, tooLarge);
-          EXPECT_EQ(recordFormat(r), fmt);
-          EXPECT_EQ(recordAuthorProvenance(r), prov);
-          EXPECT_EQ(recordTitleFromOpf(r), fromOpf);
-          EXPECT_EQ(recordOpfTooLarge(r), tooLarge);
-        }
-      }
-    }
-  }
+TEST(LibraryHeaderFlags, DedupDegradationIsPersistedWithoutChangingTheLayout) {
+  ClixHeader h = makeHeader(60, 116);
+  h.flags = CLIX_FLAG_DEDUP_DEGRADED;
+
+  EXPECT_EQ(validateHeader(h, h.selfSize), ClixValidity::Ok);
+  EXPECT_NE(h.flags & CLIX_FLAG_DEDUP_DEGRADED, 0);
+  EXPECT_EQ(sizeof(ClixHeader), 64u);
 }
 
 TEST(LibraryFormat, ByteImageIsStableAcrossBuilds) {
@@ -188,18 +184,18 @@ TEST(LibraryFormat, ByteImageIsStableAcrossBuilds) {
   // offsets move and the on-disk format silently forks.
   EXPECT_EQ(offsetof(ClixRecord, nameOff), 0u);
   EXPECT_EQ(offsetof(ClixRecord, fileSize), 4u);
-  EXPECT_EQ(offsetof(ClixRecord, authorRank), 8u);
-  EXPECT_EQ(offsetof(ClixRecord, dateRank), 10u);
-  EXPECT_EQ(offsetof(ClixRecord, firstSeen), 12u);
-  EXPECT_EQ(offsetof(ClixRecord, folderId), 14u);
-  EXPECT_EQ(offsetof(ClixRecord, nameLen), 16u);
-  EXPECT_EQ(offsetof(ClixRecord, foldLen), 17u);
-  EXPECT_EQ(offsetof(ClixRecord, authorKeyLen), 18u);
-  EXPECT_EQ(offsetof(ClixRecord, flags), 19u);
-  EXPECT_EQ(offsetof(ClixRecord, fold), 20u);
-  EXPECT_EQ(offsetof(ClixRecord, authorKey), 116u);
+  EXPECT_EQ(offsetof(ClixRecord, firstSeen), 8u);
+  EXPECT_EQ(offsetof(ClixRecord, folderId), 10u);
+  EXPECT_EQ(offsetof(ClixRecord, nameLen), 12u);
+  EXPECT_EQ(offsetof(ClixRecord, foldLen), 13u);
+  EXPECT_EQ(offsetof(ClixRecord, authorKeyLen), 14u);
+  EXPECT_EQ(offsetof(ClixRecord, metadataStatus), 15u);
+  EXPECT_EQ(offsetof(ClixRecord, fold), 16u);
+  EXPECT_EQ(offsetof(ClixRecord, authorKey), 112u);
+  EXPECT_EQ(offsetof(ClixRecord, modificationTime), 124u);
 
+  EXPECT_EQ(offsetof(ClixHeader, metadataEnabled), 7u);
   EXPECT_EQ(offsetof(ClixHeader, bookCount), 8u);
-  EXPECT_EQ(offsetof(ClixHeader, folderStart), 24u);
-  EXPECT_EQ(offsetof(ClixHeader, selfSize), 48u);
+  EXPECT_EQ(offsetof(ClixHeader, folderStart), 16u);
+  EXPECT_EQ(offsetof(ClixHeader, selfSize), 40u);
 }

@@ -17,10 +17,12 @@
 namespace library {
 
 enum class SortOrder : uint8_t {
-  TitleAsc,   // the record order itself: costs nothing
-  TitleDesc,  // the record order backwards: also costs nothing
+  AddedAsc,
+  AddedDesc,
+  TitleAsc,
+  TitleDesc,
   AuthorAsc,
-  DateDesc,  // newest first — the default, so a book just copied on is row 0
+  AuthorDesc,
 };
 
 class LibraryIndexFile {
@@ -34,13 +36,18 @@ class LibraryIndexFile {
   // caused by a format bug is visible in the log rather than looking like a slow
   // first boot.
   bool open(const char* path);
+  // Accept an otherwise valid stale fold so a rebuild can preserve arrival
+  // history without exposing stale sort/search keys to the browser.
+  bool openForReconciliation(const char* path);
   void close();
   bool isOpen() const { return opened; }
+  bool ioFailed() const { return readFailed; }
 
   ClixValidity validity() const { return lastValidity; }
   const ClixHeader& header() const { return head; }
   uint16_t bookCount() const { return opened ? head.bookCount : 0; }
   bool ranksDegraded() const { return opened && (head.flags & CLIX_FLAG_RANKS_DEGRADED) != 0; }
+  bool dedupDegraded() const { return opened && (head.flags & CLIX_FLAG_DEDUP_DEGRADED) != 0; }
 
   // Record ordinal of the row at display position `row` in `order`. Returns
   // 0xFFFF when out of range, which callers treat as "no such row" rather than
@@ -48,6 +55,8 @@ class LibraryIndexFile {
   uint16_t ordinalForRow(SortOrder order, uint16_t row);
 
   bool readRecord(uint16_t ordinal, ClixRecord& out);
+  // Persisted complete-path fingerprint used by rebuild reconciliation.
+  bool readPathHash(const ClixRecord& record, uint64_t& out);
 
   // Display basename, exactly as it sits on the card. This is the only string
   // the UI draws, and it is never shortened on disk.
@@ -58,16 +67,22 @@ class LibraryIndexFile {
   // longer carries "Title - Author".
   bool readAuthor(const ClixRecord& record, std::string& out);
   bool readTitle(const ClixRecord& record, std::string& out);
+  // Cleaned author spelling before the library-wide spelling vote. Empty is a
+  // valid value, so success is independent of `out.empty()`.
+  bool readSourceAuthor(const ClixRecord& record, std::string& out);
 
   // Absolute path of the book, rebuilt from its folder record.
   bool readPath(const ClixRecord& record, std::string& out);
 
  private:
+  bool openImpl(const char* path, bool acceptStaleFold);
   bool readAt(uint32_t offset, void* dst, size_t len);
+  bool readBlobField(const ClixRecord& record, uint8_t field, std::string& out);
 
   HalFile file;
   ClixHeader head{};
   bool opened = false;
+  bool readFailed = false;
   ClixValidity lastValidity = ClixValidity::BadMagic;
 };
 

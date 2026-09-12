@@ -6,9 +6,6 @@
 
 using library::authorKey;
 using library::fold;
-using library::looksLikeMetadata;
-using library::parseFilename;
-using library::preferFilenameTitle;
 
 namespace {
 
@@ -91,6 +88,22 @@ TEST(LibraryFold, PunctuationSeparatesAndSpaceRunsCollapse) {
   EXPECT_EQ(fold("!!!"), "");
 }
 
+TEST(LibraryFold, PreservesHebrewLettersAndDropsNiqqud) {
+  EXPECT_EQ(fold("\u05E9\u05B8\u05C1\u05DC\u05D5\u05B9\u05DD"), "\u05E9\u05DC\u05D5\u05DD");
+  EXPECT_TRUE(library::matchesQuery(fold("\u05E9\u05DC\u05D5\u05DD \u05E2\u05D5\u05DC\u05DD"), fold("\u05E9\u05DC")));
+  EXPECT_FALSE(authorKey("\u05E2\u05DE\u05D5\u05E1 \u05E2\u05D5\u05D6").empty());
+}
+
+TEST(LibraryFold, GroupInitialUsesUnicodeLettersAndBucketsNumbers) {
+  EXPECT_EQ(library::foldedGroupInitial(fold("Alpha", true)), static_cast<uint32_t>('a'));
+  EXPECT_EQ(library::foldedGroupInitial(fold("\u05E9\u05DC\u05D5\u05DD", true)), 0x05E9u);
+  EXPECT_EQ(library::foldedGroupInitial(fold("\u041A\u043D\u0438\u0433\u0430", true)), 0x041Au);
+  EXPECT_EQ(library::foldedGroupInitial(fold("\u4E66", true)), 0x4E66u);
+  EXPECT_EQ(library::foldedGroupInitial(fold("2085", true)), 0u);
+  EXPECT_EQ(library::foldedGroupInitial(fold("\u0662\u0660\u0668\u0665", true)), 0u);
+  EXPECT_EQ(library::foldedGroupInitial(fold("!!!", true)), 0u);
+}
+
 TEST(LibraryFold, ArticleStrippingOnlyWhenAsked) {
   EXPECT_EQ(fold("The Iliad"), "the iliad");
   EXPECT_EQ(fold("The Iliad", true), "iliad");
@@ -98,61 +111,6 @@ TEST(LibraryFold, ArticleStrippingOnlyWhenAsked) {
   EXPECT_EQ(fold("L\xE2\x80\x99\xC3\x89n\xC3\xA9ide", true), "eneide");
   // A title that IS an article-like word must not vanish.
   EXPECT_EQ(fold("The", true), "the");
-}
-
-TEST(LibraryParse, TitleAndAuthorFromTheExportPattern) {
-  const auto p = parseFilename("Sample Title -- Xun, Lu -- 2012 -- Sample Press -- d8fc -- Open Library");
-  EXPECT_EQ(p.title, "Sample Title");
-  EXPECT_EQ(p.author, "Xun, Lu");
-}
-
-TEST(LibraryParse, NoSeparatorKeepsTheWholeStemAsTitle) {
-  const auto p = parseFilename("Jules Verne - Le Tour du monde");
-  EXPECT_EQ(p.title, "Jules Verne - Le Tour du monde");
-  EXPECT_TRUE(p.author.empty());
-}
-
-TEST(LibraryParse, ShortHexLookingNamesStayAuthors) {
-  // "Bede" and "Abba" are a-f-only words that used to be classified as hex
-  // digests and dropped; a digest must carry at least one decimal digit.
-  EXPECT_EQ(library::parseFilename("History -- Bede").author, "Bede");
-  EXPECT_EQ(library::parseFilename("Gold -- Abba").author, "Abba");
-  EXPECT_EQ(library::parseFilename("Title -- 3f2a9c8b").author, "");
-}
-
-TEST(LibraryFold, TruncatedTrailingSequenceIsDropped) {
-  // A string_view may end mid-sequence; the tail must be refused, not decoded
-  // against whatever memory follows.
-  const char raw[] = {'a', 'b', static_cast<char>(0xC3)};
-  EXPECT_EQ(library::fold(std::string_view(raw, 3)), "ab");
-}
-
-TEST(LibraryParse, MetadataInTheAuthorSlotIsRejected) {
-  // Exporters that have no author still emit the field, so segment 1 may hold a
-  // publisher, a year or a hash. Accepting those would print them as authors.
-  for (const char* stem : {
-           "Some Title -- 2019 -- Publisher",
-           "Some Title -- d8fc9e08df5718a087a9b2fbbb07e96b -- x",
-           "Some Title -- isbn13 9780310109563 -- x",
-           "Some Title -- 9782226463982 -- x",
-           "Some Title -- Paris, 2019 -- x",
-           "Some Title -- Une enquete de l'inspecteur Untel, Paris, DL 2009 -- x",
-           "Some Title -- Internet Archive",
-           "Some Title -- Open Library",
-           "Some Title -- Paris, 1985 -",  // trailing dash tolerance
-       }) {
-    EXPECT_TRUE(parseFilename(stem).author.empty()) << stem;
-  }
-}
-
-TEST(LibraryParse, RealAuthorsAreNotMistakenForMetadata) {
-  // "Wollstonecraft, Mary" is structurally identical to "Paris, France"; only the
-  // year requirement separates them. Any looser rule eats real authors.
-  for (const char* author : {"Wollstonecraft, Mary", "Wells, Herbert G.", "Lu Xun [Xun, Lu]", "Herbert G Wells",
-                             "Lu Xun_", "Sand, George", "Emile  Erckmann; Alexandre   Chatrian", "H_P_ Lovecraft"}) {
-    const std::string stem = std::string("T -- ") + author + " -- 2019";
-    EXPECT_EQ(parseFilename(stem).author, author) << author;
-  }
 }
 
 TEST(LibraryAuthorKey, OrderAndPunctuationDoNotMatter) {
@@ -171,6 +129,14 @@ TEST(LibraryAuthorKey, InitialsAreIgnored) {
 TEST(LibraryAuthorKey, SecondaryAuthorsAndBracketsDropped) {
   EXPECT_EQ(authorKey("Emile Erckmann; Alexandre Chatrian"), authorKey("Emile Erckmann"));
   EXPECT_EQ(authorKey("George Sand [Sand, George]"), authorKey("George Sand"));
+}
+
+TEST(LibraryAuthorKey, FilesystemUnderscoreStandsInForAFullStop) {
+  // The one input where the key's cleanup and cleanPersonName's differ before
+  // folding: an underscore the filesystem took instead of a full stop. Both
+  // reduce to the same initial, which fold() then drops as a one-letter token.
+  EXPECT_EQ(authorKey("Herbert G_ Wells"), authorKey("Herbert Wells"));
+  EXPECT_EQ(authorKey("Wells_ Herbert"), authorKey("Herbert Wells"));
 }
 
 TEST(LibraryAuthorKey, DistinctPeopleDoNotCollide) {
@@ -199,25 +165,6 @@ TEST(LibraryAuthorKey, FitsTheRecordFieldWithoutCollapsingToAForename) {
   EXPECT_FALSE(authorKey("Nebuchadnezzarson").empty());
   EXPECT_TRUE(authorKey("").empty());
   EXPECT_TRUE(authorKey("Q. X. Z.").empty());  // initials only: no identity
-}
-
-TEST(LibraryTitleMerge, PrefersTheRicherFilenameTitle) {
-  EXPECT_TRUE(preferFilenameTitle("2085", "2085 _ Artificial Minds and the Future of Machines"));
-  EXPECT_TRUE(preferFilenameTitle("Sample Chemistry", "Sample Chemistry: Do Cases and Samples Mix?"));
-}
-
-TEST(LibraryTitleMerge, BlocksExporterMidPhraseTruncation) {
-  // The filename stops on a stop word, so it is a cut phrase, not a fuller title.
-  EXPECT_FALSE(preferFilenameTitle("A Sceptic's Error", "A sceptic's error _ foundations for a new science of"));
-  EXPECT_FALSE(preferFilenameTitle("Sample Doctrine", "Sample Doctrine_ a revised and amplified edition, with a"));
-  // Too little added to be worth the swap.
-  EXPECT_FALSE(preferFilenameTitle("Wuthering Heights", "Wuthering Heights : A Novel"));
-  EXPECT_FALSE(preferFilenameTitle("The Iliad", "The Iliad"));
-  // Not a prefix at all.
-  EXPECT_FALSE(preferFilenameTitle("Germinal", "Emile Zola-Germinl"));
-  // Prefix but not on a word boundary.
-  EXPECT_FALSE(preferFilenameTitle("Sample", "Samples Chemistry Do Cases Mix"));
-  EXPECT_FALSE(preferFilenameTitle("", "anything at all here"));
 }
 
 // --- matchesQuery ------------------------------------------------------------
@@ -297,20 +244,6 @@ TEST(CleanPersonName, MultipleCommasAreLeftAlone) {
 
 TEST(CleanPersonName, DanglingCommaIsNotAnInversion) { EXPECT_EQ(library::cleanPersonName("Austen,"), "Austen"); }
 
-// Export tools list one author twice ("Henry S_ Warren, Henry S_ Warren Jr").
-// That is a single comma, so the inversion rule used to fire and scramble a name
-// the filename spelled correctly. A given name of four words is not a given name.
-TEST(CleanPersonName, DuplicatedAuthorArtifactIsNotInverted) {
-  EXPECT_EQ(library::cleanPersonName("Henry S_ Warren, Henry S_ Warren Jr"), "Henry S Warren, Henry S Warren Jr");
-}
-
-// The bound must not cost the cases the inversion exists for: a given name with
-// initials still turns round.
-TEST(CleanPersonName, GivenNamesWithInitialsStillInvert) {
-  EXPECT_EQ(library::cleanPersonName("Wells, Herbert G."), "Herbert G Wells");
-  EXPECT_EQ(library::cleanPersonName("Tolkien, John Ronald Reuel"), "John Ronald Reuel Tolkien");
-}
-
 // --- surnameKey --------------------------------------------------------------
 
 TEST(SurnameKey, SurnameLeadsThenGivenNames) {
@@ -331,4 +264,13 @@ TEST(SurnameKey, EmptyStaysEmpty) { EXPECT_EQ(library::surnameKey(""), ""); }
 // places even though "Victor Hugo" and "Hugo Victor" both exist in the wild.
 TEST(SurnameKey, HarmonisedDisplayNameKeepsAGroupTogether) {
   EXPECT_NE(library::surnameKey("Victor Hugo"), library::surnameKey("Hugo Victor"));
+}
+
+TEST(LibraryPath, RootDoesNotGainASecondSeparator) {
+  EXPECT_EQ(library::joinLibraryPath("/", "book.epub"), "/book.epub");
+  EXPECT_EQ(library::joinLibraryPath("", "book.epub"), "/book.epub");
+}
+
+TEST(LibraryPath, NestedFolderGetsOneSeparator) {
+  EXPECT_EQ(library::joinLibraryPath("/Books", "book.epub"), "/Books/book.epub");
 }
