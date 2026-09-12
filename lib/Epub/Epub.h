@@ -102,10 +102,13 @@ class Epub {
                        bool collectCssFiles = true);
 
  public:
-  // Title and author only, for the library index build. Delegates to
-  // EpubQuickMetadata, whose 8 KB inflate bound is what keeps this off the
-  // abort() path on the C3 — see EpubQuickMetadata.h for the measurement.
-  // Returns false whenever the caller should fall back to the filename.
+  // Title and author only, for the library index build. Reads the book's own
+  // metadata cache when it has one — a book already opened costs a header read
+  // and nothing else — and otherwise delegates to EpubQuickMetadata, whose 8 KB
+  // inflate bound is what keeps this off the abort() path on the C3; see
+  // EpubQuickMetadata.h for the measurement. Returns false only when neither
+  // source could be READ: a book that genuinely carries no title or author
+  // still returns true with both strings empty.
   bool loadMetadata(std::string& title, std::string& author);
 
  private:
