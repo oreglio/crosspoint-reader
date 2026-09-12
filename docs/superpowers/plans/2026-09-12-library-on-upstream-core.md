@@ -814,7 +814,16 @@ const char* LibraryListActivity::sortOrderLabel() const {
 
 Add the two new keys to `lib/I18n/translations/english.yaml` and
 `french.yaml` beside the existing `STR_LIBRARY_SORT_*` entries, then rerun
-`python3 scripts/gen_i18n.py`:
+`python3 scripts/gen_i18n.py`.
+
+Run it only AFTER step 3 has deleted the provenance block. The script scans
+`src` and `lib` by default and exits 1 with a CRITICAL listing any `STR_*` a
+source file references but `english.yaml` no longer defines — and until step 3
+lands, `LibraryListActivity.cpp` still names the three deleted
+`STR_LIBRARY_PROV_*` keys. Running it early is not a failure of your work; it
+just means the deletions above are not finished yet.
+
+The keys to add:
 
 ```yaml
 STR_LIBRARY_SORT_OLDEST: "Oldest first"
