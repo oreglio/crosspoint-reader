@@ -995,7 +995,11 @@ const char* LibraryListActivity::tabLabel(const int index) const {
   const char* base = tabLabelFor(index);
   if (base == nullptr || index != activeTab()) return base;
   // Only the active tab shows which way it runs; a row of arrows reads as noise.
-  static char withArrow[32];
+  // That invariant is what makes one shared buffer safe here:
+  // UiTabListActivity.cpp:121 collects every tab's pointer into one array and
+  // renders them together, so a second arrow-bearing tab would overwrite the
+  // first. The inactive tabs return stable tr() pointers instead.
+  static char withArrow[64];
   snprintf(withArrow, sizeof(withArrow), "%s %s", base, orderIsDescending(sSortOrder) ? "▾" : "▴");
   return withArrow;
 }
