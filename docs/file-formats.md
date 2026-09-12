@@ -726,12 +726,17 @@ impossible to open. That was a real defect, and it is why title has its own fiel
 `WALK_COMPLETE` no longer exists in the adopted format: there is no header flag
 for a walk that was capped or aborted.
 
-`RANKS_DEGRADED` says the author order fell back to walk order because the sort-key
-scratch allocation failed — a runtime heap condition, not a fixed book-count
-ceiling. `DEDUP_DEGRADED` says duplicate detection stopped early, either because its
-scratch array failed to allocate or because more than `LIBRARY_MAX_DEDUP_KEYS`
-(1024) distinct name+size keys turned up in one walk; past that point some
-duplicate books may survive in the index.
+`RANKS_DEGRADED` is one flag for three independent allocation failures, all
+runtime heap conditions rather than a fixed book-count ceiling. A failed
+title-sort key array falls back **both** the author order and the arrival
+order to walk order, since neither sort runs without it. A failed
+author-order sort-key array falls back only the author order. A failed
+canonical-spelling scratch array skips choosing one display spelling per
+author group, without touching either order. `DEDUP_DEGRADED` says duplicate
+detection stopped early, either because its scratch array failed to allocate
+or because more than `LIBRARY_MAX_DEDUP_KEYS` (1024) distinct name+size keys
+turned up in one walk; past that point some duplicate books may survive in
+the index.
 
 `selfSize` is the expected file size. Comparing it against the real one is a free
 truncation guard: a build cut short by a power failure cannot pass.
