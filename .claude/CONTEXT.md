@@ -46,6 +46,16 @@ Refer to https://freeink.org/llms.txt for guidance.
 ## Real Hardware / Storage
 
 - SdFat on hardware allows only one open reader per file path at a time. If a fallback needs to reopen the same file, close the first handle before reopening.
+- **Files written by the device carry modification date 0 on a device with no
+  RTC.** `HalStorage::installDateTimeCallback()` (`lib/hal/HalStorage.cpp:249`)
+  bails out at `:250` with `if (!halClock.isAvailable()) return;`, so the
+  `FsDateTime` callback is never installed and SdFat stamps every file it
+  creates with a zero date. Anything gated on a non-zero mtime therefore never
+  fires on such a device: the Library builder's `reuseMetadata` check is the
+  live example, so every book that arrived by web portal, WebDAV, OPDS, Calibre
+  or Raindrop is re-parsed on **every** index rebuild, however recent it is.
+  Only files written by a card reader on a PC carry a real date. Do not design a
+  cache or a skip-if-unchanged path around mtime alone.
 
 ## Rendering / Reader Pipeline
 
@@ -76,6 +86,11 @@ Refer to https://freeink.org/llms.txt for guidance.
   also carries an upright book for the Library rows). `fillRect`-drawn marks
   are unaffected — rect primitives go through the correct transform.
 
+- Built-in fonts carry no Geometric Shapes: `lib/EpdFont/scripts/fontconvert.py`
+  generates `0x2190-0x21FF` (Arrows) and `0x2200-0x22FF` (Math Operators) and
+  nothing in `0x25xx`, so `▾ ▴ ■ ●` and friends render as the replacement glyph.
+  Use `↓ ↑ ← →` for a direction marker, or draw the shape with `fillRect`.
+
 - POSIX TZ signs are inverted from ISO 8601 in `TimeStore::applyTimezone()`: `"UTC-1"` means UTC+1.
 - `LyraTheme::drawHeader()` does not call `BaseTheme::drawHeader()`, so header changes in the base theme must be duplicated in Lyra if needed.
 
@@ -96,11 +111,21 @@ Refer to https://freeink.org/llms.txt for guidance.
   (`persistGlobalSettings()`) quand des valeurs propres au livre sont en RAM.
 - Le noyau d'index Library (`LibraryBuilder`, `LibraryFormat`,
   `LibraryIndexFile`, `LibraryText`) vient **verbatim** de
-  `crosspoint/feat/library-view` et ne doit jamais être édité : c'est ce qui
-  rend les syncs suivantes gratuites. Nos ajouts vivent dans
-  `LibraryFavorites*`, `LibraryState*` et `LibraryListActivity`. Vérifier avec
-  `git diff crosspoint/feat/library-view -- lib/LibraryIndex/LibraryBuilder.cpp ...`
-  — la sortie doit être vide.
+  `crosspoint/feat/library-view` (épinglé à `ad949bdd`) et ne doit jamais être
+  édité : c'est ce qui rend les syncs suivantes gratuites. Les quatre suites de
+  tests adoptées — `test/library_{builder,format,index_file,text}/`, stubs et
+  `CMakeLists.txt` compris — sont soumises à la même règle. Nos ajouts vivent
+  dans `LibraryFavorites*`, `LibraryState*` et `LibraryListActivity`. Vérifier
+  l'ensemble d'un coup ; la sortie doit être vide :
+
+  ```bash
+  git diff crosspoint/feat/library-view -- \
+    lib/LibraryIndex/LibraryBuilder.cpp lib/LibraryIndex/LibraryBuilder.h \
+    lib/LibraryIndex/LibraryFormat.cpp lib/LibraryIndex/LibraryFormat.h \
+    lib/LibraryIndex/LibraryIndexFile.cpp lib/LibraryIndex/LibraryIndexFile.h \
+    lib/LibraryIndex/LibraryText.cpp lib/LibraryIndex/LibraryText.h \
+    test/library_builder test/library_format test/library_index_file test/library_text
+  ```
 - `lib/Epub/EpubQuickMetadata.{cpp,h}` est là plutôt que dans `lib/LibraryIndex`
   parce que le builder inclut `<Epub.h>` : l'inverse créerait un cycle.
 

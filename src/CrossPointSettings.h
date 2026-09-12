@@ -636,8 +636,12 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t fileBrowserDisplay = FILE_BROWSER_DISPLAY_1_LINE;
   // Defaults on: upstream's index derives an author only from the book's own
   // metadata -- it never parses a filename -- so with extraction off the shelf
-  // would have no authors at all. Affordable because Epub::loadMetadata keeps
-  // an 8 KB inflate bound and the builder re-parses only changed books.
+  // would have no authors at all. Affordable because Epub::loadMetadata answers
+  // from the book's own metadata cache once it has been opened, and otherwise
+  // keeps an 8 KB inflate bound. NOT because the builder skips unchanged books:
+  // its reuse gate needs a non-zero modification time, and a device without an
+  // RTC writes date 0 (see .claude/CONTEXT.md), so anything that arrived over
+  // the wire is re-parsed on every rebuild.
   uint8_t libraryUseMetadata = 1;
   // Remove a book from the Recent Books list when its End-of-Book screen is reached (0 = off, 1 = on)
   uint8_t removeReadBooksFromRecents = 0;
