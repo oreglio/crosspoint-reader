@@ -460,9 +460,13 @@ void LibraryListActivity::onTabLongPress(const int index) {
     openFavoritesSortMenu();
     return;
   }
-  // A hold on the tab you are already on flips its direction; a hold on
-  // another tab is just a slow tap, and onTabAction has already run for it.
-  if (index != activeTab()) return;
+  // A hold on the tab you are already on flips its direction. A hold on another
+  // tab is just a slow tap: UiTabListActivity.cpp:41-46 dispatches a long press
+  // INSTEAD of the tap, so without this the gesture would do nothing at all.
+  if (index != activeTab()) {
+    onTabAction(index);
+    return;
+  }
   sSortOrder = orderForTab(index, !orderIsDescending(sSortOrder));
   applyFilter();
   app.clearTapFlash();
