@@ -76,7 +76,7 @@ Ours, which upstream has no copy of:
 ```
 lib/LibraryIndex/LibraryFavorites{,File}.{cpp,h}
 lib/LibraryIndex/LibraryState.{cpp,h}
-lib/LibraryIndex/LibraryMeta.{cpp,h}          <- KEPT, see below
+lib/Epub/EpubQuickMetadata.{cpp,h}            <- KEPT, moved, see below
 src/activities/library/LibraryListActivity.{cpp,h}
 test/library_favorites/
 ```
@@ -119,12 +119,18 @@ Our `Epub.h:101` signature is `(bookMetadata, writeSpineEntries, collectCssFiles
 — no `metadataOnly`, no `sharedZip`. Porting their parser path means editing the
 OPF parser in the most diverged shared file in the repo.
 
-**Decision: keep `LibraryMeta` and delegate.** Add to `lib/Epub/Epub.h` one
+**Decision: keep the reader and delegate.** Add to `lib/Epub/Epub.h` one
 declaration and to `Epub.cpp` a body that forwards to
-`library::readEpubMetadata()`. Their builder then compiles unchanged.
+`epub::readBookMetadata()`. Their builder then compiles unchanged.
+
+The reader itself moves from `lib/LibraryIndex/LibraryMeta.{cpp,h}` to
+`lib/Epub/EpubQuickMetadata.{cpp,h}`, namespace `library` → `epub`. It has to:
+`LibraryBuilder.cpp` includes `<Epub.h>`, so defining the method against
+`lib/LibraryIndex` would make the two libraries depend on each other. The
+reader needs only `Logging`, `Memory`, `Print` and `ZipFile`, all independent.
 
 This is better than porting their path, not merely cheaper:
-`LibraryMeta.h:28-37` documents the 8 KB bound and the stop at `</metadata>` as
+`EpubQuickMetadata.h` documents the 8 KB bound and the stop at `</metadata>` as
 the fix for a real `abort()` — 96 KB contiguous requested against a ~69 KB
 largest free block on the C3. Adopting their parser would replace a measured
 C3 guarantee with an unmeasured one.
@@ -168,34 +174,63 @@ descending" becomes redundant. Drop it in the v2 layout.
 is computed at use from `readName()` and `record.fileSize`, both still present.
 Verified.
 
-## Author provenance collapses to two states
+## The author comes from the book's metadata, or there is none
 
-Ours records four (`FROM_FOLDER`, `FROM_CACHE`, `FROM_OPF`, `UNKNOWN`). Theirs
-records `metadataStatus` (`NOT_ATTEMPTED`, `EXTRACTED`, `FAILED`) and exposes
-`readSourceAuthor()`.
+**This section was rewritten during execution.** The original design assumed
+upstream's index derived an author from the filename as ours does, and that
+provenance merely collapsed from four states to two. That assumption was wrong,
+and the correction is the largest behavioural change in this work.
 
-`EXTRACTED` means the author came from the book itself; the other two mean it
-came from the filename. The Details line becomes **"from the book"** versus
-**"from the filename"**.
+Their `LibraryText.h` exports no `parseFilename`, no `looksLikeMetadata` and no
+`preferFilenameTitle`. Their `LibraryBuilder.cpp` never parses a filename for an
+author at all, and says why:
 
-**Decided: every book shows a provenance line.** Today `CLIX_AUTHOR_UNKNOWN`
-draws none at all (`LibraryListActivity.cpp:1078-1080`); after the collapse
-there is no unknown state, so the line is always drawn. This is a deliberate
-choice, confirmed on review, not an accepted side effect — and it is arguably a
-correction rather than a change: that code's own reason for staying silent is
-that "naming a source for it would claim more than the build knows", and "from
-the filename" is exactly what the build knows in that case.
+> An absent author is a fact, not a gap to fill: the row joins the Unknown
+> group rather than borrowing a name from its surroundings.
 
-A sidecar file storing one byte per book was considered and rejected: it
-reintroduces a file to maintain and a migration, for a distinction nobody
-reads.
+Ours derives the author from the filename (`parseFilename`, our
+`LibraryBuilder.cpp:167`) and from the folder
+(`CLIX_AUTHOR_FROM_FOLDER`, :238), filtered by `looksLikeMetadata` — a guard
+covering hex digests, ISBN prefixes, organisation credits and
+"publisher, year" shapes.
 
-### i18n is part of this change
+**Decided: adopt their model.** The author comes from the book's own metadata
+or the book has no author. The three parsing functions disappear with the file
+they live in; nothing outside the replaced set calls them (verified — the only
+other `parseFilename` in the tree is `SdCardFontRegistry`'s, an unrelated
+function for font filenames).
 
-`STR_LIBRARY_PROV_FOLDER` / `_CACHE` / `_OPF` become two keys. That touches all
-28 `lib/I18n/translations/*.yaml` files plus a `scripts/gen_i18n.py`
-regeneration. The X3/X4 build ships EN+FR only, but the S3 builds ship every
-language, so the other 26 files cannot be left stale.
+### `libraryUseMetadata` must default to on
+
+Their extraction is gated: `extractionExpected = st.readMetadata && hasEpubExtension`
+(`LibraryBuilder.cpp:306`), and `buildLibraryIndex`'s `readMetadata` defaults to
+false. Our `CrossPointSettings.h:640` has `libraryUseMetadata = 0`. Left alone,
+the two combine to a shelf with **no authors at all** — author sort, author
+section headings and the author line under every title all empty.
+
+So the setting defaults to 1. Two things make that affordable, and neither was
+true before this work:
+
+- `Epub::loadMetadata` delegates to `EpubQuickMetadata`, which keeps the 8 KB
+  inflate bound and stops at `</metadata>`. This is the fix for a real
+  `abort()` — 96 KB contiguous requested against a ~69 KB largest free block.
+- Their builder re-parses only books that actually changed: a prior record is
+  reused when file size, modification time, fold version, `metadataEnabled` and
+  `metadataStatus` all match (`LibraryBuilder.cpp:306-318`). The slow walk is a
+  one-time cost, not a per-rebuild one.
+
+The first Library entry on a large, never-opened library is still the slow
+path, and it is unmeasured on the C3. That is device verification step 1.
+
+### The provenance line is removed
+
+With one source, the line can only ever say the same thing, so it stops being
+information. It is deleted, and `STR_LIBRARY_PROV_FOLDER` / `_CACHE` / `_OPF`
+go with it. Only `english.yaml` and `french.yaml` carry those keys — the
+Library is a fork feature and other languages fall back to English.
+
+Books whose metadata carries no author show no author line at all, which is
+already what the Details page does today when the author string is empty.
 
 ### `ClixFormat` has to land somewhere
 
@@ -281,9 +316,10 @@ On an X4, in this order — each step tests one assumption of this design:
    the arrow follows, and the choice survives a power cycle.
 4. Search on an accented title; then, on a Cyrillic or CJK book if one is
    available, the same search — the previously dead case.
-5. Details on a book whose author came from its filename, then on one with real
-   metadata: the two states must read differently, and every book must now show
-   a line.
+5. Details on a book with real metadata shows its author and no provenance
+   line; a book whose metadata carries no author shows no author line at all.
+   A book whose author used to come from its filename now shows none — that is
+   the accepted consequence of the metadata-only model, not a defect.
 6. Delete a book and return to the shelf: no ghost row.
 7. With `libraryUseMetadata` ON, rebuild over a large library and confirm no
    watchdog reboot.
@@ -297,8 +333,9 @@ for a reading session, not an index build. Step 1 is where both get a number. A
 regression there is a finding to take upstream rather than a reason to fork the
 core again.
 
-`LibraryMeta` staying in place means the metadata path keeps its measured 8 KB
-bound, so the riskiest part of the rebuild is the part we are *not* changing.
+Keeping our own metadata reader means that path holds its measured 8 KB bound,
+so the riskiest part of the rebuild is the part we are *not* changing — and it
+is what makes defaulting extraction on affordable at all.
 
 ## Non-goals
 

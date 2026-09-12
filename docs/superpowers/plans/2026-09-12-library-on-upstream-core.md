@@ -597,56 +597,63 @@ in the SortOrder value itself."
 
 ---
 
-### Task 4: Two provenance strings
+### Task 4: Delete the provenance strings and default metadata on
+
+The author now comes from the book's metadata or nowhere, so the provenance
+line can only say one thing and is removed. The setting that gates extraction
+must default to on, or the shelf has no authors at all.
 
 **Files:**
 - Modify: `lib/I18n/translations/english.yaml:279-281`
 - Modify: `lib/I18n/translations/french.yaml:171-173`
-
-Only these two files carry the keys — the Library is a fork feature and other
-languages fall back to English.
+- Modify: `src/CrossPointSettings.h:640`
 
 **Interfaces:**
-- Produces: `StrId::STR_LIBRARY_AUTHOR_FROM_BOOK`, `StrId::STR_LIBRARY_AUTHOR_FROM_FILENAME`.
+- Produces: `StrId::STR_LIBRARY_PROV_FOLDER`, `_CACHE` and `_OPF` no longer exist;
+  `CrossPointSettings::libraryUseMetadata` defaults to 1.
 
-- [ ] **Step 1: Replace the three keys with two, in English**
+- [ ] **Step 1: Delete the three keys**
 
-In `lib/I18n/translations/english.yaml`, replace lines 279-281:
+Remove lines 279-281 of `lib/I18n/translations/english.yaml`
+(`STR_LIBRARY_PROV_FOLDER`, `STR_LIBRARY_PROV_CACHE`, `STR_LIBRARY_PROV_OPF`)
+and lines 171-173 of `lib/I18n/translations/french.yaml`. Only these two files
+carry them.
 
-```yaml
-STR_LIBRARY_AUTHOR_FROM_BOOK: "Author from the book's own metadata"
-STR_LIBRARY_AUTHOR_FROM_FILENAME: "Author from the file name"
+- [ ] **Step 2: Default metadata extraction on**
+
+In `src/CrossPointSettings.h`, line 640:
+
+```cpp
+  // Defaults on: upstream's index derives an author only from the book's own
+  // metadata -- it never parses a filename -- so with extraction off the shelf
+  // would have no authors at all. Affordable because Epub::loadMetadata keeps
+  // an 8 KB inflate bound and the builder re-parses only changed books.
+  uint8_t libraryUseMetadata = 1;
 ```
 
-- [ ] **Step 2: Replace them in French**
-
-In `lib/I18n/translations/french.yaml`, replace lines 171-173:
-
-```yaml
-STR_LIBRARY_AUTHOR_FROM_BOOK: "Auteur d'après les métadonnées du livre"
-STR_LIBRARY_AUTHOR_FROM_FILENAME: "Auteur d'après le nom du fichier"
-```
-
-- [ ] **Step 3: Regenerate and confirm the old keys are gone**
+- [ ] **Step 3: Regenerate and confirm the keys are gone**
 
 ```bash
 python3 scripts/gen_i18n.py
-grep -rn "STR_LIBRARY_PROV" lib/I18n/ || echo "old keys gone"
-grep -n "STR_LIBRARY_AUTHOR_FROM_BOOK\|STR_LIBRARY_AUTHOR_FROM_FILENAME" lib/I18n/I18nKeys.h
+grep -rn "STR_LIBRARY_PROV" lib/I18n/ src/ || echo "provenance keys gone"
 ```
 
-Expected: "old keys gone", and both new keys present in the generated header.
+Expected: "provenance keys gone". If `src/` still references one, Task 5 has
+not run yet — that is expected at this point and is not a failure of this task.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add lib/I18n
-git commit -m "i18n(library): collapse author provenance to two strings
+git add lib/I18n src/CrossPointSettings.h
+git commit -m "feat(library): author comes from metadata, so default extraction on
 
-Upstream's index records metadataStatus (not attempted / extracted / failed)
-rather than our four-way folder/cache/OPF provenance. Extracted means the book
-said so; the other two mean the file name did. Only english and french carried
-these keys."
+Upstream's index never parses a filename for an author -- \"an absent author is
+a fact, not a gap to fill\". Their extraction is gated on readMetadata, and our
+libraryUseMetadata defaulted to 0, so the two together would have produced a
+shelf with no authors at all.
+
+The provenance line goes with the filename source: with one source left it
+could only ever say the same thing."
 ```
 
 ---
@@ -690,22 +697,14 @@ ShelfFormat shelfFormatForName(const std::string_view name) {
 }
 ```
 
-- [ ] **Step 2: Rewrite the Details provenance and format blocks**
+- [ ] **Step 2: Delete the provenance block, keep the format label**
 
-In `LibraryListActivity.cpp`, replace the provenance `switch` (lines 1067-1083)
-with:
+In `LibraryListActivity.cpp`, delete the whole provenance `switch` and its
+`drawBlock` (lines 1067-1083) — everything between the author `drawBlock` and
+the closing brace of `if (!author.empty())`. The author line itself stays; only
+the line naming where it came from goes.
 
-```cpp
-    // Two states, because that is what the index knows: EXTRACTED means the
-    // book carried the author itself, anything else means the file name did.
-    // Every book gets a line — saying "from the file name" claims no more than
-    // the build actually established.
-    const bool fromBook = record.metadataStatus == library::CLIX_METADATA_EXTRACTED;
-    drawBlock(fromBook ? tr(STR_LIBRARY_AUTHOR_FROM_BOOK) : tr(STR_LIBRARY_AUTHOR_FROM_FILENAME),
-              screen.theme().smallText);
-```
-
-and replace `switch (library::recordFormat(record))` (line 1094) with
+Then replace `switch (library::recordFormat(record))` (line 1094) with
 `switch (shelfFormatForName(name))`, renaming each case label from
 `library::CLIX_FORMAT_EPUB` to `ShelfFormat::Epub` and so on.
 
@@ -837,8 +836,8 @@ git add src/activities/library src/activities/settings/SettingsActivity.cpp
 git commit -m "feat(library): run the shelf on upstream's index core
 
 SortOrder::DateDesc becomes AddedDesc; the format label is derived from the
-file name now that the record has no format field; author provenance collapses
-to 'from the book' or 'from the file name'.
+file name now that the record has no format field; the provenance line is gone
+with the filename-derived author it used to describe.
 
 Both builder call sites lose their progress callback and firstSeen preamble.
 The callback was our only watchdog feed — upstream's builder feeds it itself
@@ -1066,7 +1065,29 @@ Append to the "Divergences assumées vis-à-vis d'upstream" section of
   parce que le builder inclut `<Epub.h>` : l'inverse créerait un cycle.
 ```
 
-- [ ] **Step 3: Measure the flash delta**
+- [ ] **Step 3: Add the CHANGELOG entry**
+
+`CLAUDE.md` requires a user-facing entry for every feature change. Add under
+`## [Unreleased]`, in the existing `### Changed` and `### Removed` sections:
+
+```markdown
+- The Library now takes a book's author from the book's own metadata rather
+  than guessing it from the file name, and reads that metadata by default. A
+  book that carries no author of its own joins the Unknown group instead of
+  borrowing a name from its file name or its folder. Searching and sorting now
+  work on Greek, Cyrillic and CJK libraries, which they never did before.
+- The Library sort strip is four tabs instead of five: ★, Time, Title and
+  Author. Hold the tab you are already on to reverse its direction — the arrow
+  on the tab shows which way it runs.
+```
+
+```markdown
+- The Library book details no longer name where the author came from. With the
+  author now taken only from the book itself, the line could only ever say one
+  thing.
+```
+
+- [ ] **Step 4: Measure the flash delta**
 
 ```bash
 pio run -e x4-pro 2>&1 | grep "Flash:"
@@ -1076,10 +1097,10 @@ Record the number in the commit message against the pre-change 94.2 %
 (6,171,977 of 6,553,600 bytes). The two-screen alternative was rejected partly
 on flash headroom, so the real delta belongs on the record.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add docs/file-formats.md .claude/CONTEXT.md
+git add docs/file-formats.md .claude/CONTEXT.md CHANGELOG.md
 git commit -m "docs(library): CLX1 is version 2 now, and the core is upstream's
 
 The adopted core writes format version 2 where this fork wrote 3. Validation is
