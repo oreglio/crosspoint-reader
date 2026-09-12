@@ -925,7 +925,36 @@ at LibraryBuilder.cpp:86, which is the only reason dropping it is safe."
 - Consumes: `library::SortOrder` with both directions per order.
 - Produces: a four-slot strip, `★ | Time | Title ▾ | Author`.
 
-- [ ] **Step 1: Replace the tab constants**
+- [ ] **Step 1: Give the two new sort labels the prefix their neighbours carry**
+
+Task 5 added `STR_LIBRARY_SORT_OLDEST` and `STR_LIBRARY_SORT_AUTHOR_ZA` with
+the exact strings the plan named, and the plan named them wrong: every other
+value `sortOrderLabel()` can return carries a `Library · ` prefix, because that
+function feeds the **header title** at `LibraryListActivity.cpp:1231`.
+
+Today the mismatch is invisible — `orderForTab()` never returns `AddedAsc` or
+`AuthorDesc`, so neither label is reachable. This task is what makes them
+reachable, so fix them here, before the header starts reading `Oldest first`
+where it used to read `Library · Recently added`.
+
+In `lib/I18n/translations/english.yaml`:
+
+```yaml
+STR_LIBRARY_SORT_OLDEST: "Library · Oldest first"
+STR_LIBRARY_SORT_AUTHOR_ZA: "Library · Author Z-A"
+```
+
+In `lib/I18n/translations/french.yaml`:
+
+```yaml
+STR_LIBRARY_SORT_OLDEST: "Bibliothèque · Les plus anciens d'abord"
+STR_LIBRARY_SORT_AUTHOR_ZA: "Bibliothèque · Auteur Z-A"
+```
+
+Then `python3 scripts/gen_i18n.py`. It succeeds now — Task 5 removed the last
+source reference to a deleted key.
+
+- [ ] **Step 2: Replace the tab constants**
 
 In `LibraryListActivity.cpp`, replace lines 62-67:
 
@@ -948,7 +977,7 @@ constexpr int kAuthorTab = 3;
 constexpr int kTabSlots = kAuthorTab + 1;
 ```
 
-- [ ] **Step 2: Fold direction into the tab, not into a slot**
+- [ ] **Step 3: Fold direction into the tab, not into a slot**
 
 Replace `sortTabIndex` (lines 69-80) and `orderForTab` (lines 83-88):
 
@@ -982,7 +1011,7 @@ bool orderIsDescending(const library::SortOrder order) {
 }
 ```
 
-- [ ] **Step 3: Label the tabs and carry the arrow**
+- [ ] **Step 4: Label the tabs and carry the arrow**
 
 Replace `tabLabelFor` (lines 92-98):
 
@@ -1014,7 +1043,7 @@ const char* LibraryListActivity::tabLabel(const int index) const {
 }
 ```
 
-- [ ] **Step 4: Give each tab a resting direction when it is activated**
+- [ ] **Step 5: Give each tab a resting direction when it is activated**
 
 `onTabAction` (line 413) calls the old single-argument `orderForTab`. Replace
 that call:
@@ -1028,7 +1057,7 @@ reader; Title and Author rest ascending. Leave the rest of `onTabAction`
 untouched — `applyFilter()`, the nav reset, `app.clearTapFlash()` and
 `requestUpdate()` all still apply.
 
-- [ ] **Step 5: Make a hold on the focused tab flip its direction**
+- [ ] **Step 6: Make a hold on the focused tab flip its direction**
 
 Replace `LibraryListActivity::onTabLongPress` (line 430) in full:
 
@@ -1051,7 +1080,7 @@ void LibraryListActivity::onTabLongPress(const int index) {
 Nothing writes the state here: `onExit()` is the single write per visit, and it
 reads `sSortOrder` directly.
 
-- [ ] **Step 6: Remove the gap above the strip**
+- [ ] **Step 7: Remove the gap above the strip**
 
 Replace lines 1202-1204:
 
@@ -1071,7 +1100,7 @@ with:
                   static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
 ```
 
-- [ ] **Step 7: Build and run the simulator**
+- [ ] **Step 8: Build and run the simulator**
 
 ```bash
 pio run -e default && pio run -e simulator
@@ -1079,7 +1108,7 @@ pio run -e default && pio run -e simulator
 
 Expected: SUCCESS on both.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 clang-format -i src/activities/library/LibraryListActivity.cpp
