@@ -719,11 +719,34 @@ sed -i '' 's/SortOrder::DateDesc/SortOrder::AddedDesc/g' \
   src/activities/library/LibraryListActivity.cpp src/activities/library/LibraryListActivity.h
 ```
 
-- [ ] **Step 4: Make `sortOrderLabel()` exhaustive again**
+- [ ] **Step 4: Make both `SortOrder` switches exhaustive again**
 
-The enum grew from four values to six, and this switch has no `default:` on
-purpose, so `-Werror=switch` will reject it. Replace the body of
-`LibraryListActivity::sortOrderLabel()` (around line 438):
+The enum grew from four values to six, and neither switch has a `default:` on
+purpose, so `-Werror=switch` will reject both.
+
+First `sortTabIndex` (line 69). The five-slot strip is still in place here —
+Task 6 is what collapses it — so the two new orders map onto the existing
+tabs:
+
+```cpp
+int sortTabIndex(const library::SortOrder order) {
+  switch (order) {
+    case library::SortOrder::TitleAsc:
+      return kTitleAscTab;
+    case library::SortOrder::TitleDesc:
+      return kTitleDescTab;
+    case library::SortOrder::AuthorAsc:
+    case library::SortOrder::AuthorDesc:
+      return kAuthorTab;
+    case library::SortOrder::AddedAsc:
+    case library::SortOrder::AddedDesc:
+      return kRecentTab;
+  }
+  return kRecentTab;
+}
+```
+
+Then `LibraryListActivity::sortOrderLabel()` (around line 438):
 
 ```cpp
 const char* LibraryListActivity::sortOrderLabel() const {
