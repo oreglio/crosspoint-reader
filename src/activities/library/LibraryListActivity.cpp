@@ -105,6 +105,18 @@ bool orderIsDescending(const library::SortOrder order) {
          order == library::SortOrder::AuthorDesc;
 }
 
+// Which key the shelf is ordered BY, independent of the direction it runs in.
+// Everything that follows the key — the letter the jump reads, the author
+// headings, the given-name/surname modes — must ask these rather than name one
+// order, or flipping a tab silently changes what the screen is grouped by.
+bool orderIsByAuthor(const library::SortOrder order) {
+  return order == library::SortOrder::AuthorAsc || order == library::SortOrder::AuthorDesc;
+}
+
+bool orderIsByTime(const library::SortOrder order) {
+  return order == library::SortOrder::AddedAsc || order == library::SortOrder::AddedDesc;
+}
+
 // The arrow is appended by tabLabel(), which knows the active order; this
 // returns the bare mode so an inactive tab stays quiet.
 const char* tabLabelFor(const int tab) {
@@ -559,11 +571,11 @@ char LibraryListActivity::letterOf(const library::ClixRecord& record) {
   // words so that "George Sand" and "Sand George" group as one person; reading
   // the display letter there gives S, the scan meets it early, and every letter
   // between G and S stops on that one row.
-  if (currentOrder() == library::SortOrder::AuthorAsc) {
+  if (orderIsByAuthor(currentOrder())) {
     // The shelf is ordered by surname now, so the jump reads the same key. It is
     // derived from the displayed name, which after harmonisation is one string
-    // per author — so the letters ascend down the list, which is what makes the
-    // scan valid.
+    // per author — so the letters run monotonically down the list, ascending in
+    // A-Z and descending in Z-A, which is what makes the scan valid.
     std::string author;
     if (!index.readAuthor(record, author)) return '\0';
     if (jumpByGivenName) {
@@ -592,21 +604,22 @@ void LibraryListActivity::computeLettersPresent() {
 // lands under O and "Éluard" under E — which is what a reader looking under a
 // letter expects, and what the raw title would get wrong.
 void LibraryListActivity::jumpToLetter(const char letter) {
-  const bool descending = currentOrder() == library::SortOrder::TitleDesc;
+  const bool descending = orderIsDescending(currentOrder());
   const int total = rowCount();
   for (int entry = 0; entry < total; entry++) {
     const uint16_t ordinal = index.ordinalForRow(currentOrder(), static_cast<uint16_t>(rowFor(entry)));
     library::ClixRecord record{};
     if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) continue;
-    // Ordered by surname, the letters ascend, so "at or past" lands correctly
-    // even on a letter no book has. Jumping by GIVEN name they do not ascend at
-    // all — the As are scattered down the whole shelf — so that mode must match
-    // exactly, and lands on the first such book in shelf order.
+    // Ordered by surname, the letters run monotonically, so "at or past" lands
+    // correctly even on a letter no book has. Jumping by GIVEN name they do not
+    // order at all — the As are scattered down the whole shelf — so that mode
+    // must match exactly, and lands on the first such book in shelf order.
     const char c = letterOf(record);
-    // The scan has to follow the direction the shelf runs in. Title Z-A descends,
-    // so "at or past" stopped on the very first row every time — its letter is
-    // always at or past anything asked for. Given-name order does not run
-    // alphabetically at all, so that one matches exactly.
+    // The scan has to follow the direction the shelf runs in. A Z-A shelf —
+    // Title or Author — descends, so "at or past" stopped on the very first row
+    // every time: its letter is always at or past anything asked for.
+    // Given-name order does not run alphabetically at all, so that one matches
+    // exactly.
     const bool hit = jumpByGivenName ? c == letter : descending ? c <= letter : c >= letter;
     if (hit) {
       auto& n = activeNav();
@@ -636,7 +649,7 @@ void LibraryListActivity::openLetterGrid() {
 }
 
 void LibraryListActivity::toggleLetterGridMode() {
-  if (currentOrder() != library::SortOrder::AuthorAsc) return;
+  if (!orderIsByAuthor(currentOrder())) return;
   jumpByGivenName = !jumpByGivenName;
   computeLettersPresent();
   requestUpdate();
@@ -656,7 +669,7 @@ void LibraryListActivity::letterActionTrampoline(const fui::ActionEvent& event, 
 void LibraryListActivity::letterModeActionTrampoline(const fui::ActionEvent& event, void* user) {
   auto* self = static_cast<LibraryListActivity*>(user);
   if (!self->letterGrid) return;
-  if (currentOrder() != library::SortOrder::AuthorAsc) return;
+  if (!orderIsByAuthor(currentOrder())) return;
   const int active = self->jumpByGivenName ? 0 : 1;
   if (event.value == active) return;
   self->toggleLetterGridMode();
@@ -788,7 +801,7 @@ bool LibraryListActivity::handleCustomInput() {
     if (mappedInput.wasReleased(MappedInputManager::Button::Down)) delta = kLetterCols;
     if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
       if (letterCursor < kLetterCols) {
-        if (currentOrder() == library::SortOrder::AuthorAsc) {
+        if (orderIsByAuthor(currentOrder())) {
           letterCursor = -1;
           requestUpdate();
         }
@@ -865,7 +878,7 @@ bool LibraryListActivity::handleButtons() {
       return true;
     }
     if (tabsFocused()) {
-      if (currentOrder() != library::SortOrder::AddedDesc) openLetterGrid();
+      if (!orderIsByTime(currentOrder())) openLetterGrid();
       return true;
     }
     if (count > 0) openSelectedBook();
@@ -980,7 +993,7 @@ void LibraryListActivity::buildSearchAction(UiScreen& screen) {
 void LibraryListActivity::buildRows(UiScreen& screen) {
   auto& nav = activeNav();
   const int count = rowCount();
-  const bool grouped = currentOrder() == library::SortOrder::AuthorAsc;
+  const bool grouped = orderIsByAuthor(currentOrder());
 
   fui::ListProps props;
   props.count = static_cast<uint16_t>(count);
@@ -1135,7 +1148,7 @@ void LibraryListActivity::buildLetterGrid(UiScreen& screen) {
   auto& target = screen.target();
   const int cell = (body.width - 2 * LIBRARY_SIDE_PADDING) / kLetterCols;
   const int rows = (kLetterCount + kLetterCols - 1) / kLetterCols;
-  const bool hasNameMode = currentOrder() == library::SortOrder::AuthorAsc;
+  const bool hasNameMode = orderIsByAuthor(currentOrder());
   const int cellH = body.height / (rows + (hasNameMode ? 1 : 0));
 
   if (hasNameMode) {
