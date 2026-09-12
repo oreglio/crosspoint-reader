@@ -859,7 +859,22 @@ In `src/activities/settings/SettingsActivity.cpp`, replace the call at lines
 
 and delete its `carried` preamble.
 
-- [ ] **Step 8: Build all three targets**
+- [ ] **Step 8: Prove no reference to a removed symbol survives**
+
+The deletions above are described by content, not by symbol. This turns them
+into something checkable. Every one of these names something the new core no
+longer has, or that this task removes:
+
+```bash
+grep -n "recordAuthorProvenance\|recordFormat\|CLIX_FORMAT_\|CLIX_AUTHOR_\|SortOrder::DateDesc\|titleDescending\|nextFirstSeen\|STR_LIBRARY_PROV\|BuildProgressFn" \
+  src/activities/library/LibraryListActivity.cpp src/activities/library/LibraryListActivity.h \
+  src/activities/settings/SettingsActivity.cpp
+```
+
+Expected: **no output**. Any hit is a deletion you made partially — finish it
+before building, because the compiler will only report the first few.
+
+- [ ] **Step 9: Build all three targets**
 
 ```bash
 pio run -e default && pio run -e sticky && pio run -e x4-pro
@@ -868,12 +883,12 @@ pio run -e default && pio run -e sticky && pio run -e x4-pro
 Expected: SUCCESS on all three. Fix whatever the compiler names; do **not**
 resolve anything by editing the eight adopted core files.
 
-- [ ] **Step 9: Run the host tests**
+- [ ] **Step 10: Run the host tests**
 
 Run: `cmake --build test/build -j8 && (cd test/build && ctest -j8)`
 Expected: only the two known `SectionPersistenceTest` failures.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 clang-format -i src/activities/library/LibraryListActivity.h src/activities/library/LibraryListActivity.cpp src/activities/settings/SettingsActivity.cpp
