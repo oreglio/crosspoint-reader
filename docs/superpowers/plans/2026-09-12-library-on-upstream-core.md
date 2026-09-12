@@ -1116,10 +1116,21 @@ version 3 index written by an older build of this firmware fails it and is
 rebuilt — which is the entire migration mechanism.
 ```
 
-Then reconcile the record layout table in that section with the adopted
-`ClixRecord`: `authorRank`, `dateRank` and `flags` are gone; `metadataStatus`
-and `modificationTime` are new. Read
-`lib/LibraryIndex/LibraryFormat.h` and describe what is actually there.
+Then reconcile the rest of the section. These are the five differences between
+what the document describes and the adopted format — all verified against
+`lib/LibraryIndex/LibraryFormat.h` and `LibraryIndexFile.h`:
+
+| Document says | Adopted format |
+|---|---|
+| Permutations are `authorOrder` then **date order** | `authorOrder` then **`arrivalOrder`** |
+| Name blob holds **name, author, title** | **path hash, filename, display author, title, source author** |
+| Header flags `WALK_COMPLETE` and `RANKS_DEGRADED` | `RANKS_DEGRADED` and **`DEDUP_DEGRADED`**; `WALK_COMPLETE` no longer exists |
+| Record carries `authorRank`, `dateRank`, `flags` | none of those; it carries **`metadataStatus`** and **`modificationTime`** |
+| Author provenance is stored in `flags` bits 3-4 | not stored at all — `metadataStatus` says only whether extraction was attempted, succeeded or failed |
+
+The `### Records are exactly 128 bytes` prose still holds: `fold[96]` and
+`authorKey[12]` are unchanged, and the fixed stride is still what lets the
+reader seek to record *n* without an offset table.
 
 - [ ] **Step 2: Record the boundary where the next session will look**
 
