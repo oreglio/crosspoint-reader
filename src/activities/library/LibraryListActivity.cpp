@@ -1230,7 +1230,7 @@ void LibraryListActivity::buildScreen(UiScreen& screen) {
   // rather than overlaying it.
   // No topPadding: the header band already ends where the strip begins, and
   // the extra pad read as a stray gap above the tabs on the device.
-  screen.setContentMargin(fui::Insets{TouchHeaderBackButton::height(metrics, mappedInput), 0,
+  screen.setContentMargin(fui::Insets{static_cast<int16_t>(TouchHeaderBackButton::height(metrics, mappedInput)), 0,
                                       static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
   buildSearchAction(screen);
 
