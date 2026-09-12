@@ -673,8 +673,11 @@ Written by `lib/LibraryIndex/LibraryBuilder.cpp`, read by `LibraryIndexFile`. On
 file describing every book on the card, so the shelf can sort and search several
 hundred titles without opening any of them.
 
-Format version 3. An index written by an older version fails validation on open
-and is rebuilt; that is the entire migration mechanism.
+Format version 2, and deliberately lower than the 3 this fork used to write:
+the core now comes verbatim from upstream (crosspoint `feat/library-view`), so
+its version line is theirs, not ours. Validation is an equality test, so a
+version 3 index written by an older build of this firmware fails it and is
+rebuilt — which is the entire migration mechanism.
 
 ### Layout
 
@@ -683,8 +686,8 @@ and is rebuilt; that is the entire migration mechanism.
 | Header | 0 | 64 bytes, `ClixHeader` |
 | Folders | `folderStart` | length-prefixed paths, one per folder |
 | Records | `recordStart` | `bookCount` × 128-byte `ClixRecord` |
-| Permutations | `permStart` | `bookCount` u16 author order, then `bookCount` u16 date order |
-| Name blob | `nameStart` | per record: name, author, title (see below) |
+| Permutations | `permStart` | `bookCount` u16 `authorOrder`, then `bookCount` u16 `arrivalOrder` |
+| Name blob | `nameStart` | per record: path hash, filename, display author, title, source author (see below) |
 
 Sections are 512-byte aligned so each starts on an SD block boundary.
 
@@ -704,23 +707,31 @@ surname, derived separately from the display name.
 Per record, at `nameStart + nameOff`:
 
 ```
-[nameLen bytes]  filename, without the directory
-[u8][author]     display author, one spelling chosen per authorKey across the library
-[u8][title]      the book's own title, or length 0 if it never gave one
+[u64]                path hash, `fnv1a64` of the full path — the identity a rebuild
+                     reconciles against; `readPathHash` reads only this field
+[nameLen bytes]      filename, without the directory (nameLen is the record field,
+                     not a length byte in the blob)
+[u8 len][author]     display author, one spelling chosen per authorKey across the library
+[u8 len][title]      the book's own title, or length 0 if it never gave one
+[u8 len][srcAuthor]  the cleaned author spelling before the library-wide spelling
+                     vote; length 0 is a valid value here, not a failure
 ```
 
-The filename must stay first and stay the filename: `readPath` rebuilds a book's
-path from it, so writing the display title there makes the book impossible to open.
-That was a real defect, and it is why title has its own field.
+The filename comes right after the path hash and must stay the filename: `readPath`
+rebuilds a book's path from it, so writing the display title there makes the book
+impossible to open. That was a real defect, and it is why title has its own field.
 
 ### Header flags
 
-`WALK_COMPLETE` is only set when the walk finished without hitting the record cap
-or being aborted, and it is written with the final header rather than the
-placeholder — an index that saw part of the card must not claim otherwise.
-`RANKS_DEGRADED` says the author and date orders fell back to walk order, which
-happens past `LIBRARY_MAX_SORTED` books, where the sort arrays would not fit in
-RAM.
+`WALK_COMPLETE` no longer exists in the adopted format: there is no header flag
+for a walk that was capped or aborted.
+
+`RANKS_DEGRADED` says the author order fell back to walk order because the sort-key
+scratch allocation failed — a runtime heap condition, not a fixed book-count
+ceiling. `DEDUP_DEGRADED` says duplicate detection stopped early, either because its
+scratch array failed to allocate or because more than `LIBRARY_MAX_DEDUP_KEYS`
+(1024) distinct name+size keys turned up in one walk; past that point some
+duplicate books may survive in the index.
 
 `selfSize` is the expected file size. Comparing it against the real one is a free
 truncation guard: a build cut short by a power failure cannot pass.

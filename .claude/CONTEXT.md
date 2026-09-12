@@ -94,6 +94,15 @@ Refer to https://freeink.org/llms.txt for guidance.
 - `CrossPointSettings::saveToFile()` est **privée**. Tout appel amont ajouté
   doit devenir `saveGlobalDefaults()`, ou passer par l'indirection du lecteur
   (`persistGlobalSettings()`) quand des valeurs propres au livre sont en RAM.
+- Le noyau d'index Library (`LibraryBuilder`, `LibraryFormat`,
+  `LibraryIndexFile`, `LibraryText`) vient **verbatim** de
+  `crosspoint/feat/library-view` et ne doit jamais être édité : c'est ce qui
+  rend les syncs suivantes gratuites. Nos ajouts vivent dans
+  `LibraryFavorites*`, `LibraryState*` et `LibraryListActivity`. Vérifier avec
+  `git diff crosspoint/feat/library-view -- lib/LibraryIndex/LibraryBuilder.cpp ...`
+  — la sortie doit être vide.
+- `lib/Epub/EpubQuickMetadata.{cpp,h}` est là plutôt que dans `lib/LibraryIndex`
+  parce que le builder inclut `<Epub.h>` : l'inverse créerait un cycle.
 
 ## Langues et build
 

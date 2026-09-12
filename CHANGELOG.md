@@ -39,11 +39,22 @@
 - The Library shelf now renders through the same FreeInkUI components as the rest of the interface, which is what brings touch to it: on touch devices, tap a book to open it, hold it for its menu, tap the Added/A-Z/Z-A/Author tabs to switch order, hold the ★ tab for the favorites sort menu, use the header search icon, tap a letter in the A-Z grid to jump, and swipe to page the list. Button navigation, search, favorites, details, deletion and the remembered shelf posture all behave as before.
 - The File Manager becomes cards on phone-sized screens: tap a card to select it, serif titles that wrap instead of crushing the table, and a download button on each card.
 - Opening a folder in the File Manager no longer reloads the whole page. Only the folder's listing is fetched, so browsing lands in a moment instead of downloading the page again each time; `Back` and `Forward` still walk through the folders you visited, and a link opened in a new tab still works. Pages now carry a validator, so reopening the portal costs nothing when nothing has changed.
+- The Library now takes a book's author from the book's own metadata rather
+  than guessing it from the file name, and reads that metadata by default. A
+  book that carries no author of its own joins the Unknown group instead of
+  borrowing a name from its file name or its folder. Searching and sorting now
+  work on Greek, Cyrillic and CJK libraries, which they never did before.
+- The Library sort strip is four tabs instead of five: ★, Time, Title and
+  Author. Hold the tab you are already on to reverse its direction — the arrow
+  on the tab shows which way it runs.
 
 ### Removed
 
 - The `Bitter` family and the 14 pt built-in reading sizes are no longer baked into the X3/X4 firmware, which is why the font picker offers fewer entries than before. That space is what pays for the rest of this release. SD-card fonts are untouched: a Bitter or a 14 pt family installed on the card reads exactly as it did.
 - X3/X4 firmware now carries English and French only. A device set to any other language falls back to English on this update and cannot be set back to it from Settings — the other translations are simply not in the build.
+- The Library book details no longer name where the author came from. With the
+  author now taken only from the book itself, the line could only ever say one
+  thing.
 
 ### Fixed
 
