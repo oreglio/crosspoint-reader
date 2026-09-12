@@ -1025,10 +1025,9 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
   }
 }
 
-// The Details page: where the stored author provenance finally reaches the
-// reader. Every record has carried "where this author string came from" since
-// the first build — folder name, the book's own reading cache, or the EPUB
-// package document — and this is the screen honest enough to say it.
+// The Details page: what the index knows about one book, in the order a reader
+// asks for it. The title, the author when the book carries one, then the file's
+// own facts — name, folder, and size with the format derived from the name.
 void LibraryListActivity::buildDetails(UiScreen& screen) {
   const uint16_t ordinal = index.ordinalForRow(currentOrder(), static_cast<uint16_t>(rowFor(selectedEntry())));
   library::ClixRecord record{};
