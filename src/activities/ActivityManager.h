@@ -13,6 +13,7 @@
 #include "CrossPointSettings.h"
 #include "GfxRenderer.h"
 #include "MappedInputManager.h"
+#include "util/QuickLockTrigger.h"
 #include "util/ScreenshotInfo.h"
 
 #ifndef portMUX_INITIALIZER_UNLOCKED
@@ -59,7 +60,12 @@ class ActivityManager {
   PendingAction pendingAction = PendingAction::None;
   // Set when an overlay is closed specifically to hand control back to the
   // reader's menu. It must wait until the reader is current again.
-  bool openReaderMenuAfterPop = false;
+  int16_t pendingReaderMenuAction = -1;
+
+  // A one-shot Home selection to restore after Settings replaces Home. This
+  // is intentionally not persisted as recent-book order.
+  std::string preferredHomeBookPath;
+  bool returningHomeThroughSettings = false;
 
   // Task to render and display the activity
   TaskHandle_t renderTaskHandle = nullptr;
@@ -78,9 +84,14 @@ class ActivityManager {
   // Whether to trigger a render after the current loop()
   // This variable must only be set by the main loop, to avoid race conditions
   std::atomic<bool> requestedUpdate{false};
+  // A popped full-screen child leaves its pixels in the framebuffer until the
+  // restored activity renders. Partial-screen overlays must not preserve that
+  // stale child as their backdrop.
+  std::atomic<bool> restoredActivityNeedsRender{false};
 
+  Activity* findEpubReader() const;
   bool handleGlobalHomeGesture();
-  bool handleReaderPowerButtonSettingsOverride();
+  bool restoreBackdropBehindCurrentOverlay();
 
  public:
   explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -104,7 +115,7 @@ class ActivityManager {
   void goToUsbDrive();
   bool resumeFileTransferFromNetworkBoot(uint32_t payload);
   void goToNearbyStatsSync();
-  void goToNearbyBookSend(std::string path, bool returnToReader);
+  bool goToNearbyBookSend(std::string path, bool returnToReader);
   // Back depuis un article lu via /Articles retourne a la liste, pas au Home.
   bool returnToArticlesOnReaderExit = false;
   void goToNearbyBookReceive();
@@ -119,11 +130,13 @@ class ActivityManager {
   bool goToOpdsServer(uint32_t serverIndex, bool networkBootReady = false);
   void goToReader(std::string path, bool suppressBackRelease = false, bool allowFastInitialRefresh = false,
                   bool cleanImageBaseOnEntry = false);
+  void goToReaderAndRunMenuAction(std::string path, uint8_t action);
   void goToSleep(bool fromTimeout = false);
   void goToBoot();
   void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR);
   void goToCrashReport();
-  void goHome(HomeMenuItem initialMenuItem = HomeMenuItem::NONE, bool initialFullRefresh = false);
+  void goHome(HomeMenuItem initialMenuItem = HomeMenuItem::NONE,
+              HalDisplay::RefreshMode initialRefreshMode = HalDisplay::FAST_REFRESH);
 
   // This will move current activity to stack instead of deleting it
   void pushActivity(std::unique_ptr<Activity>&& activity);
@@ -135,12 +148,14 @@ class ActivityManager {
   bool preventAutoSleep() const;
   bool allowPowerSavingWhileAwake() const;
   bool requiresExclusiveStorageLoop() const;
+  // The active activity has an open modal that owns all global shortcuts and
+  // gestures until it is dismissed.
+  bool blocksGlobalInput() const;
   bool isHomeActivity() const;
   bool isReaderActivity() const;
-  bool readerPowerButtonOpensSettings() const;
+  bool openReaderSettingsForTouchscreenEscapeHatch();
   bool handleHomeButtonBackOrHome();
   bool openReaderMenuFromShortcut();
-  bool openReaderMenuAfterClosingOverlay();
   bool handleShortcutAction(uint8_t action);
   bool hasActivityNamed(const char* activityName) const;
 #ifdef SIMULATOR
@@ -149,7 +164,12 @@ class ActivityManager {
   bool canSnapshotForSleepOverlay() const;
   bool requestManualReaderRefresh();
   bool handleShortcutAction(CrossPointSettings::SHORT_PWRBTN action);
+  bool handleQuickLockUnlock(QuickLockTrigger trigger);
+  void persistGlobalSettings();
+  bool beginGlobalSettingsEdit();
+  void endGlobalSettingsEdit();
   void notifyInputLockChanged(bool locked);
+  void notifyUserInput();
   bool skipLoopDelay() const;
   std::string getCurrentBookPath() const;
   ScreenshotInfo getScreenshotInfo() const;

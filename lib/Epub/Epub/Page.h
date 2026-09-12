@@ -95,7 +95,27 @@ struct TableFragmentRow {
   static bool deserialize(FsFile& file, TableFragmentRow& outRow);
 };
 
+struct PageTextLine {
+  const TextBlock* block = nullptr;
+  int xPos = 0;
+  int yPos = 0;
+  int clipX = 0;
+  int clipY = 0;
+  int clipWidth = 0;
+  int clipHeight = 0;
+  int lineHeight = 0;
+  bool isTableText = false;
+  // Identifies a logical table column within this page layout. Normal text and
+  // unsupported table shapes use the sentinel, so their selection behavior is
+  // unchanged.
+  uint16_t tableSelection = UINT16_MAX;
+};
+
+using PageTextLineVisitor = bool (*)(const PageTextLine& line, void* context);
+
 class PageTableFragment final : public PageElement {
+  friend class Page;
+
  public:
   static constexpr uint8_t MAX_SERIALIZED_ROWS = 64;
 
@@ -176,6 +196,7 @@ class Page {
   void renderImages(GfxRenderer& renderer, int fontId, int xOffset, int yOffset, bool foregroundBlack = true) const;
   void renderWithImagePlaceholders(GfxRenderer& renderer, int fontId, int xOffset, int yOffset,
                                    bool foregroundBlack = true) const;
+  bool forEachTextLine(PageTextLineVisitor visitor, void* context) const;
   bool serialize(FsFile& file) const;
   static std::unique_ptr<Page> deserialize(FsFile& file);
 
@@ -189,6 +210,8 @@ class Page {
     return std::any_of(elements.begin(), elements.end(),
                        [](const std::unique_ptr<PageElement>& el) { return el->getTag() == TAG_PageImage; });
   }
+
+  void prepareImageCaches() const;
 
   bool hasImagesNeedingDecode() const {
     return std::any_of(elements.begin(), elements.end(), [](const std::unique_ptr<PageElement>& element) {

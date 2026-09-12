@@ -218,12 +218,16 @@ void WifiSelectionActivity::onEnter() {
   Activity::onEnter();
   LOG_INF("WIFI", "selection enter free=%u maxAlloc=%u stack=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
           static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
-  sdFontSystem.releaseLoadedFont(renderer);
+  // WiFi startup needs several contiguous driver buffers. Release the SD-font
+  // catalog as well as the active font before the radio allocates them.
+  sdFontSystem.releaseForNetwork(renderer);
   ensureWifiEventLoggingRegistered();
   LOG_INF("WIFI", "event logging registered free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
   // Reset state
   selectedNetworkIndex = 0;
+  networkRowItems.clear();
+  networkStatuses.clear();
   networks.clear();
   realNetworkCount = 0;
   state = WifiSelectionState::SCANNING;
@@ -302,24 +306,67 @@ void WifiSelectionActivity::onExit() {
   LOG_DBG("WIFI", "Free heap at onExit end: %d bytes", ESP.getFreeHeap());
 }
 
+void WifiSelectionActivity::releaseWifiForNetworkList() {
+  LOG_INF("WIFI", "Releasing WiFi before network list free=%u maxAlloc=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
+  WiFi.scanDelete();
+  if (!WiFi.disconnect(false)) {
+    LOG_DBG("WIFI", "WiFi disconnect before network list did not report success");
+  }
+  delay(30);
+
+  const bool modeOff = WiFi.mode(WIFI_OFF);
+  if (!modeOff) {
+    LOG_ERR("WIFI", "Failed to switch WiFi off before network list");
+  }
+
+  LOG_INF("WIFI", "WiFi released before network list mode=%d free=%u maxAlloc=%u", static_cast<int>(WiFi.getMode()),
+          ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  rebuildNetworkRowItems();
+}
+
+void WifiSelectionActivity::showWifiScanFailure() {
+  networkRowItems.clear();
+  networkStatuses.clear();
+  networks.clear();
+  realNetworkCount = 0;
+  appendHiddenNetworkEntry();
+  autoConnecting = false;
+  manualNetworkListRequested = false;
+  releaseWifiForNetworkList();
+  state = WifiSelectionState::NETWORK_LIST;
+  selectedNetworkIndex = 0;
+  requestUpdate();
+}
+
 void WifiSelectionActivity::startWifiScan(const bool autoScan) {
   autoConnecting = autoScan;
   manualNetworkListRequested = false;
   topIndex = 0;
   state = WifiSelectionState::SCANNING;
+  networkRowItems.clear();
+  networkStatuses.clear();
   networks.clear();
   requestUpdate();
 
   // Set WiFi mode to station
   LOG_INF("WIFI", "Starting WiFi scan (mode=%d status=%d/%s heap=%u maxAlloc=%u)", static_cast<int>(WiFi.getMode()),
           static_cast<int>(WiFi.status()), wifiStatusName(WiFi.status()), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-  WiFi.mode(WIFI_STA);
+  if (!WiFi.mode(WIFI_STA)) {
+    LOG_ERR("WIFI", "Failed to set station mode before WiFi scan");
+    showWifiScanFailure();
+    return;
+  }
   WiFi.disconnect();
   delay(100);
 
   // Start async scan
   const int scanStartResult = WiFi.scanNetworks(true);  // true = async scan
   LOG_INF("WIFI", "WiFi scan requested (result=%d)", scanStartResult);
+  if (scanStartResult != WIFI_SCAN_RUNNING) {
+    LOG_ERR("WIFI", "WiFi scan did not start (result=%d)", scanStartResult);
+    showWifiScanFailure();
+  }
 }
 
 void WifiSelectionActivity::processWifiScanResults() {
@@ -332,20 +379,15 @@ void WifiSelectionActivity::processWifiScanResults() {
 
   if (scanResult == WIFI_SCAN_FAILED) {
     LOG_INF("WIFI", "WiFi scan failed");
-    networks.clear();
-    realNetworkCount = 0;
-    appendHiddenNetworkEntry();
-    autoConnecting = false;
-    manualNetworkListRequested = false;
-    state = WifiSelectionState::NETWORK_LIST;
-    selectedNetworkIndex = 0;
-    requestUpdate();
+    showWifiScanFailure();
     return;
   }
 
   LOG_INF("WIFI", "WiFi scan complete: rawNetworks=%d", scanResult);
 
   // Scan complete, process results: deduplicate in-place, keeping strongest signal
+  networkRowItems.clear();
+  networkStatuses.clear();
   networks.clear();
   networks.reserve(scanResult);
   int hiddenNetworks = 0;
@@ -402,6 +444,7 @@ void WifiSelectionActivity::processWifiScanResults() {
 
   autoConnecting = false;
   manualNetworkListRequested = false;
+  releaseWifiForNetworkList();
   state = WifiSelectionState::NETWORK_LIST;
   selectedNetworkIndex = 0;
   requestUpdate();
@@ -416,6 +459,35 @@ void WifiSelectionActivity::appendHiddenNetworkEntry() {
   placeholder.hasSavedPassword = false;
   placeholder.isHiddenPlaceholder = true;
   networks.push_back(std::move(placeholder));
+}
+
+void WifiSelectionActivity::rebuildNetworkRowItems() {
+  networkRowItems.clear();
+  networkStatuses.clear();
+  networkStatuses.reserve(networks.size());
+  networkStatuses.resize(networks.size());
+
+  networkRowItems.reserve(networks.size());
+
+  // Build all strings before taking their c_str() pointers. The vectors keep
+  // their capacity for the lifetime of the rendered list, so these borrowed
+  // pointers remain valid until the next cache invalidation.
+  for (size_t i = 0; i < networks.size(); i++) {
+    const auto& network = networks[i];
+    if (!network.isHiddenPlaceholder) {
+      networkStatuses[i] = std::string(network.hasSavedPassword ? "+ " : "") + (network.isEncrypted ? "* " : "") +
+                           getSignalStrengthIndicator(network.rssi);
+    }
+  }
+
+  for (size_t i = 0; i < networks.size(); i++) {
+    const auto& network = networks[i];
+    fui::ListItem item;
+    item.label = network.isHiddenPlaceholder ? tr(STR_ADD_HIDDEN_NETWORK) : network.ssid.c_str();
+    if (!networkStatuses[i].empty()) item.value = networkStatuses[i].c_str();
+    item.actionValue = static_cast<int16_t>(i);
+    networkRowItems.push_back(item);
+  }
 }
 
 void WifiSelectionActivity::selectNetwork(const int index) {
@@ -547,6 +619,7 @@ void WifiSelectionActivity::handleAutoConnectFailure() {
       return;
     }
     autoConnecting = false;
+    releaseWifiForNetworkList();
     state = WifiSelectionState::NETWORK_LIST;
     selectedNetworkIndex = 0;
     requestUpdate();
@@ -566,6 +639,7 @@ void WifiSelectionActivity::showNetworkListFromAutoConnect() {
     return;
   }
 
+  releaseWifiForNetworkList();
   state = WifiSelectionState::NETWORK_LIST;
   selectedNetworkIndex = 0;
   requestUpdate();
@@ -589,7 +663,20 @@ void WifiSelectionActivity::attemptConnection() {
           ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
   WiFi.persistent(false);  // Credentials are managed by WifiCredentialStore; suppress SDK NVS auto-connect
-  WiFi.mode(WIFI_STA);
+  if (!WiFi.mode(WIFI_STA)) {
+    LOG_ERR("WIFI", "Failed to set station mode before connecting to %s", selectedSSID.c_str());
+    connectionError = tr(STR_ERROR_GENERAL_FAILURE);
+#ifndef SIMULATOR
+    sConnectionAttemptLoggingActive = false;
+#endif
+    if (autoConnecting) {
+      handleAutoConnectFailure();
+    } else {
+      state = WifiSelectionState::CONNECTION_FAILED;
+      requestUpdate();
+    }
+    return;
+  }
   // Abort any in-progress SDK auto-connect before our explicit begin().
   // Do not erase the AP config or power-cycle the radio; some routers fail the
   // next WPA handshake after that heavier reset.
@@ -771,6 +858,7 @@ void WifiSelectionActivity::loop() {
         startWifiScan();
         return;
       case WifiSelectionState::CONNECTION_FAILED:
+        releaseWifiForNetworkList();
         if (autoConnecting || usedSavedPassword) {
           autoConnecting = false;
           state = WifiSelectionState::FORGET_PROMPT;
@@ -993,11 +1081,13 @@ void WifiSelectionActivity::loop() {
       // If we were auto-connecting or using a saved credential, offer to forget
       // the network
       if (autoConnecting || usedSavedPassword) {
+        releaseWifiForNetworkList();
         autoConnecting = false;
         state = WifiSelectionState::FORGET_PROMPT;
         forgetPromptSelection = 0;  // Default to "Cancel"
       } else {
         // Go back to network list on failure for non-saved credentials
+        releaseWifiForNetworkList();
         state = WifiSelectionState::NETWORK_LIST;
       }
       requestUpdate();
@@ -1181,27 +1271,12 @@ void WifiSelectionActivity::buildListScreen(UiApp::ScreenType& screen) {
     return;
   }
 
-  // Per-render owned status strings ("+ * ||||"); items point into them for
-  // the draw only.
-  std::vector<std::string> statuses(networks.size());
-  std::vector<fui::ListItem> items;
-  items.reserve(networks.size());
-  for (size_t i = 0; i < networks.size(); i++) {
-    const auto& network = networks[i];
-    if (!network.isHiddenPlaceholder) {
-      statuses[i] = std::string(network.hasSavedPassword ? "+ " : "") + (network.isEncrypted ? "* " : "") +
-                    getSignalStrengthIndicator(network.rssi);
-    }
-    fui::ListItem item;
-    item.label = network.isHiddenPlaceholder ? tr(STR_ADD_HIDDEN_NETWORK) : network.ssid.c_str();
-    if (!statuses[i].empty()) item.value = statuses[i].c_str();
-    item.actionValue = static_cast<int16_t>(i);
-    items.push_back(item);
-  }
-
+  // networkStatuses/networkRowItems are built after scan data changes and WiFi
+  // teardown, then reused for every repaint. The cached strings outlive the
+  // ListItems that borrow their c_str() pointers.
   fui::ListProps props;
-  props.items = items.data();
-  props.count = static_cast<uint16_t>(items.size());
+  props.items = networkRowItems.data();
+  props.count = static_cast<uint16_t>(networkRowItems.size());
   props.selectedIndex = static_cast<int16_t>(selectedNetworkIndex);
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch | fui::InputLongPress;
@@ -1231,7 +1306,8 @@ void WifiSelectionActivity::renderNetworkList(const Rect* screen, const ThemeMet
   const bool hasSavedPassword = !networks.empty() && networks[selectedNetworkIndex].hasSavedPassword;
   const char* forgetLabel = hasSavedPassword ? tr(STR_FORGET_BUTTON) : "";
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_CONNECT), forgetLabel, tr(STR_RETRY));
+  const auto labels =
+      mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), tr(STR_CONNECT), forgetLabel, tr(STR_RETRY));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, useReaderButtonHints);
 }
 
@@ -1262,7 +1338,7 @@ void WifiSelectionActivity::renderConnecting(const Rect* screen, const ThemeMetr
   }
 
   if (!autoConnecting) {
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+    const auto labels = mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, useReaderButtonHints);
   }
 }
@@ -1305,6 +1381,27 @@ void WifiSelectionActivity::renderSavePrompt(const Rect* screen, const ThemeMetr
     const auto actions = promptActionLayout(*screen, *metrics, height);
     const char* labels[] = {tr(STR_YES), tr(STR_NO)};
     TouchActionButtons::draw(renderer, actions, labels, 0, savePromptSelection, UI_10_FONT_ID);
+  } else {
+    // Button-only readers still need visible choices for Left/Right selection.
+    const int buttonY = top + 80;
+    constexpr int buttonWidth = 60;
+    constexpr int buttonSpacing = 30;
+    constexpr int totalWidth = buttonWidth * 2 + buttonSpacing;
+    const int startX = screen->x + (screen->width - totalWidth) / 2;
+
+    if (savePromptSelection == 0) {
+      const std::string text = "[" + std::string(tr(STR_YES)) + "]";
+      renderer.drawText(UI_10_FONT_ID, startX, buttonY, text.c_str());
+    } else {
+      renderer.drawText(UI_10_FONT_ID, startX + 4, buttonY, tr(STR_YES));
+    }
+
+    if (savePromptSelection == 1) {
+      const std::string text = "[" + std::string(tr(STR_NO)) + "]";
+      renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing, buttonY, text.c_str());
+    } else {
+      renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing + 4, buttonY, tr(STR_NO));
+    }
   }
 
   // Use centralized button hints
@@ -1325,7 +1422,7 @@ void WifiSelectionActivity::renderConnectionFailed(const Rect* screen, const The
   UITheme::drawCenteredWrappedText(renderer, textArea, UI_10_FONT_ID, top + height + 10, connectionError.c_str(), 3);
 
   // Use centralized button hints
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), "", "");
+  const auto labels = mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), tr(STR_DONE), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, useReaderButtonHints);
 }
 
@@ -1349,10 +1446,32 @@ void WifiSelectionActivity::renderForgetPrompt(const Rect* screen, const ThemeMe
     const char* labels[] = {tr(STR_FORGET_BUTTON), tr(STR_CANCEL)};
     const int selectedVisualIndex = forgetPromptSelection == 1 ? 0 : 1;
     TouchActionButtons::draw(renderer, actions, labels, 0, selectedVisualIndex, UI_10_FONT_ID);
+  } else {
+    // Button-only readers still need visible choices for Left/Right selection.
+    const int buttonY = top + 80;
+    constexpr int buttonWidth = 120;
+    constexpr int buttonSpacing = 30;
+    constexpr int totalWidth = buttonWidth * 2 + buttonSpacing;
+    const int startX = screen->x + (screen->width - totalWidth) / 2;
+
+    if (forgetPromptSelection == 0) {
+      const std::string text = "[" + std::string(tr(STR_CANCEL)) + "]";
+      renderer.drawText(UI_10_FONT_ID, startX, buttonY, text.c_str());
+    } else {
+      renderer.drawText(UI_10_FONT_ID, startX + 4, buttonY, tr(STR_CANCEL));
+    }
+
+    if (forgetPromptSelection == 1) {
+      const std::string text = "[" + std::string(tr(STR_FORGET_BUTTON)) + "]";
+      renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing, buttonY, text.c_str());
+    } else {
+      renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing + 4, buttonY, tr(STR_FORGET_BUTTON));
+    }
   }
 
   // Use centralized button hints
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  const auto labels = mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), tr(STR_SELECT), tr(STR_DIR_LEFT),
+                                            tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, useReaderButtonHints);
 }
 

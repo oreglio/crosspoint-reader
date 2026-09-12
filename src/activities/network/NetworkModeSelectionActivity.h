@@ -1,13 +1,10 @@
 #pragma once
 
-#include <FreeInkApp.h>
-#include <FreeInkUIGfxRenderer.h>
-
-#include <atomic>
 #include <functional>
 
 #include "activities/Activity.h"
 #include "activities/ScreenTransitionRefresh.h"
+#include "components/UiAppHost.h"
 #include "util/ButtonNavigator.h"
 
 enum class NetworkMode {
@@ -33,19 +30,17 @@ enum class NetworkMode {
 class NetworkModeSelectionActivity final : public Activity {
   // FreeInkApp hosts the mode list (themed rows, icons, touch routing); the
   // header stays on GUI.drawHeader for the battery indicator.
-  using UiApp = freeink::ui::FreeInkApp<12, 4>;
+  using UiHost = UiAppHost;
+  using UiApp = UiHost::App;
 
   ButtonNavigator buttonNavigator;
 
   int selectedIndex = 0;
 
-  freeink::ui::GfxRendererTarget uiTarget;  // must precede `app`: the app holds a reference to it
-  UiApp app;
-  // render() rebuilds the app's interaction table; loop() only routes touch
-  // snapshots against it while this is true (the two run on different tasks).
-  std::atomic<bool> uiReady{false};
+  UiHost ui;
   int visibleRows = 1;  // rows per page at the current scale; set by the screen builder
   int topIndex = 0;     // viewport scroll position, decoupled from the selection
+  freeink::ui::ListNav listNav;
   ScreenTransitionRefresh screenTransitionRefresh;
 
   static void listScreen(UiApp::ScreenType& screen, void* user);

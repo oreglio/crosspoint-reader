@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "MappedInputManager.h"
+#include "ReaderUtils.h"
 #include "components/TouchHeaderBackButton.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
@@ -13,7 +14,6 @@
 
 namespace fui = freeink::ui;
 namespace {
-constexpr unsigned long BOOKMARK_DELETE_HOLD_MS = 1000;
 constexpr fui::ActionId ACTION_ROW = 1;
 }  // namespace
 
@@ -103,7 +103,7 @@ void EpubReaderBookmarkListActivity::loop() {
     return;
   }
   if (!bookmarks.empty() && mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
-      mappedInput.getHeldTime() >= BOOKMARK_DELETE_HOLD_MS) {
+      mappedInput.getHeldTime() >= ReaderUtils::DELETE_HOLD_MS) {
     showBookmarkDeletePopup();
     return;
   }
@@ -207,8 +207,8 @@ void EpubReaderBookmarkListActivity::render(RenderLock&&) {
   app.render();
   uiReady = true;
   if (confirmPopup.processRender(renderer, mappedInput)) return;
-  const auto labels =
-      mappedInput.mapLabels(tr(STR_BACK), bookmarks.empty() ? "" : tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels = mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)),
+                                            bookmarks.empty() ? "" : tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, true);
   renderer.displayBuffer();
 }

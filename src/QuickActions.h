@@ -27,6 +27,7 @@ enum class Trigger : uint8_t {
   TapHome,
   LongPressHome,
   DoubleTapHome,
+  UpDown,
 };
 
 inline constexpr std::array<StrId, CrossPointSettings::QUICK_ACTION_SLOT_ACTION_COUNT> actionLabels = {
@@ -36,7 +37,7 @@ inline constexpr std::array<StrId, CrossPointSettings::QUICK_ACTION_SLOT_ACTION_
     StrId::STR_FORCE_REFRESH,
     StrId::STR_CHANGE_FONT,
     StrId::STR_TOGGLE_GUIDE_DOTS,
-    StrId::STR_TOGGLE_BIONIC_READING,
+    StrId::STR_TOGGLE_FOCUS_READING,
     StrId::STR_TOGGLE_BOOKMARK,
     StrId::STR_SYNC_PROGRESS,
     StrId::STR_MARK_FINISHED,
@@ -56,20 +57,22 @@ inline constexpr std::array<StrId, CrossPointSettings::QUICK_ACTION_SLOT_ACTION_
 
 // Shared display order for shortcut pickers. The values remain the persisted
 // SHORT_PWRBTN IDs; only their presentation order is centralized here.
-inline constexpr std::array<CrossPointSettings::SHORT_PWRBTN, 29> shortcutActionOrder = {
+inline constexpr std::array<CrossPointSettings::SHORT_PWRBTN, 31> shortcutActionOrder = {
     CrossPointSettings::IGNORE,
     CrossPointSettings::SLEEP,
     CrossPointSettings::PAGE_TURN,
+    CrossPointSettings::PREVIOUS_PAGE,
     CrossPointSettings::TOGGLE_BOOKMARK,
     CrossPointSettings::READING_STATS,
     CrossPointSettings::MARK_FINISHED,
     CrossPointSettings::FORCE_REFRESH,
     CrossPointSettings::TOGGLE_FONT,
     CrossPointSettings::TOGGLE_GUIDE_DOTS,
-    CrossPointSettings::TOGGLE_BIONIC_READING,
+    CrossPointSettings::TOGGLE_FOCUS_READING,
     CrossPointSettings::CYCLE_PAGE_TURN,
     CrossPointSettings::TOGGLE_TILT_PAGE_TURN,
     CrossPointSettings::SYNC_PROGRESS,
+    CrossPointSettings::NEARBY_POSITION_SYNC,
     CrossPointSettings::FILE_TRANSFER,
     CrossPointSettings::CALIBRE_WIRELESS,
     CrossPointSettings::JOIN_NETWORK,
@@ -91,6 +94,8 @@ inline constexpr std::array<CrossPointSettings::SHORT_PWRBTN, 29> shortcutAction
 inline bool supportsTiltPageTurn() { return halTiltSensor.isAvailable(); }
 
 inline bool isActionAvailable(const uint8_t action) {
+  if (action == CrossPointSettings::PREVIOUS_PAGE || action == CrossPointSettings::NEARBY_POSITION_SYNC) return true;
+  if (action == CrossPointSettings::QUICK_ACTIONS || action == CrossPointSettings::QUICK_LOCK) return true;
   if (action == CrossPointSettings::TOGGLE_FRONTLIGHT) return Frontlight.present();
   if (action == CrossPointSettings::TOGGLE_TOUCHSCREEN) return gpio.hasTouch();
   if (action < CrossPointSettings::QUICK_ACTION_SLOT_ACTION_COUNT) {
@@ -100,13 +105,24 @@ inline bool isActionAvailable(const uint8_t action) {
   return action == CrossPointSettings::TOGGLE_HOME_BUTTON_IN_READER && gpio.hasHomeKey();
 }
 
+// Quick Lock needs a single physical shortcut to unlock. Quick Actions opens
+// this same menu, so neither belongs in a menu slot.
+inline bool isQuickActionSlotActionAvailable(const uint8_t action) {
+  return action != CrossPointSettings::QUICK_LOCK && action != CrossPointSettings::QUICK_ACTIONS &&
+         isActionAvailable(action);
+}
+
 inline StrId actionLabel(const uint8_t action) {
+  // Use the directional label for the legacy page-turn action ID.
+  if (action == CrossPointSettings::PAGE_TURN) return StrId::STR_NEXT_PAGE;
   if (action < CrossPointSettings::QUICK_ACTION_SLOT_ACTION_COUNT) return actionLabels[action];
   if (action == CrossPointSettings::QUICK_ACTIONS) return StrId::STR_QUICK_ACTIONS;
   if (action == CrossPointSettings::TOGGLE_FRONTLIGHT) return StrId::STR_TOGGLE_FRONTLIGHT;
   if (action == CrossPointSettings::TOGGLE_TOUCHSCREEN) return StrId::STR_TOGGLE_TOUCHSCREEN;
   if (action == CrossPointSettings::QUICK_LOCK) return StrId::STR_QUICK_LOCK;
   if (action == CrossPointSettings::SHORTCUT_LIBRARY) return StrId::STR_LIBRARY;
+  if (action == CrossPointSettings::PREVIOUS_PAGE) return StrId::STR_PREV_PAGE;
+  if (action == CrossPointSettings::NEARBY_POSITION_SYNC) return StrId::STR_NEARBY_POSITION_SYNC;
   return StrId::STR_HOME_BUTTON_LOCK;
 }
 
@@ -116,6 +132,7 @@ inline void synchronize(CrossPointSettings& settings, Trigger preferred = Trigge
   const bool longBack = settings.longPressBackAction == CrossPointSettings::LONG_MENU_QUICK_ACTIONS;
   const bool longMenu = settings.longPressMenuAction == CrossPointSettings::LONG_MENU_QUICK_ACTIONS;
   const bool powerUp = settings.powerChordAction == CrossPointSettings::CHORD_QUICK_ACTIONS;
+  const bool upDown = settings.sideButtonChordAction == CrossPointSettings::CHORD_QUICK_ACTIONS;
   const bool tapHome = settings.homeButtonTapAction == CrossPointSettings::QUICK_ACTIONS;
   const bool longPressHome = settings.homeButtonLongPressAction == CrossPointSettings::QUICK_ACTIONS;
   const bool doubleTapHome = settings.homeButtonDoubleTapAction == CrossPointSettings::QUICK_ACTIONS;
@@ -132,6 +149,8 @@ inline void synchronize(CrossPointSettings& settings, Trigger preferred = Trigge
       owner = Trigger::LongMenu;
     else if (powerUp)
       owner = Trigger::PowerUp;
+    else if (upDown)
+      owner = Trigger::UpDown;
     else if (tapHome)
       owner = Trigger::TapHome;
     else if (longPressHome)
@@ -145,6 +164,7 @@ inline void synchronize(CrossPointSettings& settings, Trigger preferred = Trigge
   if (owner != Trigger::LongBack && longBack) settings.longPressBackAction = CrossPointSettings::LONG_MENU_OFF;
   if (owner != Trigger::LongMenu && longMenu) settings.longPressMenuAction = CrossPointSettings::LONG_MENU_OFF;
   if (owner != Trigger::PowerUp && powerUp) settings.powerChordAction = CrossPointSettings::CHORD_DISABLED;
+  if (owner != Trigger::UpDown && upDown) settings.sideButtonChordAction = CrossPointSettings::CHORD_DISABLED;
   if (owner != Trigger::TapHome && tapHome) settings.homeButtonTapAction = CrossPointSettings::HOME_BUTTON_BACK_HOME;
   if (owner != Trigger::LongPressHome && longPressHome) {
     settings.homeButtonLongPressAction = CrossPointSettings::HOME_BUTTON_READER_MENU;
@@ -167,6 +187,9 @@ inline void applyTrigger(CrossPointSettings& settings, const Trigger trigger) {
   if (settings.powerChordAction == CrossPointSettings::CHORD_QUICK_ACTIONS) {
     settings.powerChordAction = CrossPointSettings::CHORD_DISABLED;
   }
+  if (settings.sideButtonChordAction == CrossPointSettings::CHORD_QUICK_ACTIONS) {
+    settings.sideButtonChordAction = CrossPointSettings::CHORD_DISABLED;
+  }
   if (settings.homeButtonTapAction == CrossPointSettings::QUICK_ACTIONS) {
     settings.homeButtonTapAction = CrossPointSettings::HOME_BUTTON_BACK_HOME;
   }
@@ -182,6 +205,7 @@ inline void applyTrigger(CrossPointSettings& settings, const Trigger trigger) {
   if (trigger == Trigger::LongBack) settings.longPressBackAction = CrossPointSettings::LONG_MENU_QUICK_ACTIONS;
   if (trigger == Trigger::LongMenu) settings.longPressMenuAction = CrossPointSettings::LONG_MENU_QUICK_ACTIONS;
   if (trigger == Trigger::PowerUp) settings.powerChordAction = CrossPointSettings::CHORD_QUICK_ACTIONS;
+  if (trigger == Trigger::UpDown) settings.sideButtonChordAction = CrossPointSettings::CHORD_QUICK_ACTIONS;
   if (trigger == Trigger::TapHome) settings.homeButtonTapAction = CrossPointSettings::QUICK_ACTIONS;
   if (trigger == Trigger::LongPressHome) settings.homeButtonLongPressAction = CrossPointSettings::QUICK_ACTIONS;
   if (trigger == Trigger::DoubleTapHome) settings.homeButtonDoubleTapAction = CrossPointSettings::QUICK_ACTIONS;
@@ -194,6 +218,7 @@ inline Trigger triggerForSetting(uint8_t CrossPointSettings::* member) {
   if (member == &CrossPointSettings::longPressBackAction) return Trigger::LongBack;
   if (member == &CrossPointSettings::longPressMenuAction) return Trigger::LongMenu;
   if (member == &CrossPointSettings::powerChordAction) return Trigger::PowerUp;
+  if (member == &CrossPointSettings::sideButtonChordAction) return Trigger::UpDown;
   if (member == &CrossPointSettings::homeButtonTapAction) return Trigger::TapHome;
   if (member == &CrossPointSettings::homeButtonLongPressAction) return Trigger::LongPressHome;
   if (member == &CrossPointSettings::homeButtonDoubleTapAction) return Trigger::DoubleTapHome;
@@ -205,8 +230,9 @@ inline void settingChanged(CrossPointSettings& settings, uint8_t CrossPointSetti
   if (trigger == Trigger::None) return;
   const bool selected = trigger == Trigger::LongBack || trigger == Trigger::LongMenu
                             ? settings.*member == CrossPointSettings::LONG_MENU_QUICK_ACTIONS
-                        : trigger == Trigger::PowerUp ? settings.*member == CrossPointSettings::CHORD_QUICK_ACTIONS
-                                                      : settings.*member == CrossPointSettings::QUICK_ACTIONS;
+                        : (trigger == Trigger::PowerUp || trigger == Trigger::UpDown)
+                            ? settings.*member == CrossPointSettings::CHORD_QUICK_ACTIONS
+                            : settings.*member == CrossPointSettings::QUICK_ACTIONS;
   synchronize(settings, selected ? trigger : Trigger::None);
 }
 

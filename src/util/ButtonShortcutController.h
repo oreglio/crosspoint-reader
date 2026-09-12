@@ -3,8 +3,9 @@
 #include <cstdint>
 
 #include "QuickLockState.h"
+#include "QuickLockTrigger.h"
 
-// Owns the Power + side-button chord latch.  Once a chord fires, both buttons
+// Owns the Power + side-button chord latches. Once a chord fires, both buttons
 // must be released before another shortcut can fire from the same hold.
 class ButtonShortcutController {
  public:
@@ -20,7 +21,7 @@ class ButtonShortcutController {
     ForceRefresh = 10,
     ToggleFont = 11,
     ToggleGuideDots = 12,
-    ToggleBionicReading = 13,
+    ToggleFocusReading = 13,
     CyclePageTurn = 14,
     SyncProgress = 15,
     FileTransfer = 16,
@@ -36,9 +37,11 @@ class ButtonShortcutController {
     QuickActions = 26,
     ToggleFrontlight = 27,
     ToggleTouchscreen = 28,
+    PreviousPage = 29,
+    NearbyPositionSync = 30,
   };
 
-  enum class Event : uint8_t { None, QuickLockChanged, Screenshot, PageTurn, ConfiguredAction };
+  enum class Event : uint8_t { None, QuickLockChanged, Screenshot, PageTurn, ConfiguredAction, TouchscreenEscapeHatch };
 
   struct Result {
     Event event = Event::None;
@@ -47,48 +50,122 @@ class ButtonShortcutController {
   };
 
   Result update(uint32_t nowMs, bool powerPressed, bool chordButtonPressed, bool shortPowerRelease,
-                bool quickLockOnShortPower, ChordAction action) {
+                bool quickLockOnShortPower, ChordAction action, bool modalOwnsInput = false) {
     if (chordActive_) {
       if (!powerPressed && !chordButtonPressed) chordActive_ = false;
       return {Event::None, true};
     }
 
-    if (powerPressed && chordButtonPressed && action != ChordAction::Disabled) {
+    if (powerPressed && chordButtonPressed && (modalOwnsInput || action != ChordAction::Disabled)) {
       chordActive_ = true;
-      if (quickLockState_.isLocked() && action != ChordAction::QuickLock) return {Event::None, true};
-      switch (action) {
-        case ChordAction::Screenshot:
-          return {Event::Screenshot, true};
-        case ChordAction::QuickLock:
-          (void)quickLockState_.toggle(nowMs);
-          return {Event::QuickLockChanged, true};
-        case ChordAction::PageTurn:
-          return {Event::PageTurn, true};
-        case ChordAction::Disabled:
-          break;
-        default:
-          return {Event::ConfiguredAction, true, action};
+      if (modalOwnsInput) return {Event::None, true};
+      if (quickLockState_.isLocked() && !canRunChordWhileQuickLocked(action, QuickLockTrigger::PowerUp)) {
+        return {Event::None, true};
       }
+      return dispatchChord(nowMs, action, QuickLockTrigger::PowerUp);
     }
 
-    if (shortPowerRelease && (quickLockState_.isLocked() || quickLockOnShortPower)) {
-      (void)quickLockState_.toggle(nowMs);
-      return {Event::QuickLockChanged, true};
+    if (shortPowerRelease) {
+      if ((quickLockState_.isLocked() && quickLockTrigger_ == QuickLockTrigger::ShortPower) ||
+          (!quickLockState_.isLocked() && quickLockOnShortPower)) {
+        toggleQuickLock(nowMs, QuickLockTrigger::ShortPower);
+        return {Event::QuickLockChanged, true};
+      }
     }
     return {Event::None, quickLockState_.isLocked()};
   }
 
+  Result updatePowerDown(bool powerPressed, bool downPressed, bool blockAction) {
+    if (powerDownChordActive_) {
+      if (!powerPressed && !downPressed) powerDownChordActive_ = false;
+      return {Event::None, true};
+    }
+
+    if (!powerPressed || !downPressed) return {};
+
+    powerDownChordActive_ = true;
+    return blockAction ? Result{Event::None, true} : Result{Event::Screenshot, true};
+  }
+
+  Result updateUpDown(uint32_t nowMs, bool upPressed, bool downPressed, ChordAction action, bool touchscreenEscapeHatch,
+                      bool modalOwnsInput = false) {
+    if (upDownChordActive_) {
+      if (!upPressed && !downPressed) upDownChordActive_ = false;
+      return {Event::None, true};
+    }
+
+    if (!upPressed || !downPressed || (!modalOwnsInput && !touchscreenEscapeHatch && action == ChordAction::Disabled)) {
+      // An idle Up + Down controller must not preempt the reader's permitted
+      // Quick Lock unlock trigger (for example, long-press Menu or Back).
+      // Locked input is consumed by the main Quick Lock path after it has
+      // given that trigger a chance to run.
+      return {};
+    }
+
+    upDownChordActive_ = true;
+    if (modalOwnsInput) return {Event::None, true};
+    if (quickLockState_.isLocked() && !canRunChordWhileQuickLocked(action, QuickLockTrigger::UpDown)) {
+      return {Event::None, true};
+    }
+    if (touchscreenEscapeHatch) return {Event::TouchscreenEscapeHatch, true};
+    return dispatchChord(nowMs, action, QuickLockTrigger::UpDown);
+  }
+
   bool isQuickLocked() const { return quickLockState_.isLocked(); }
+  QuickLockTrigger quickLockTrigger() const { return quickLockTrigger_; }
   bool isChordActive() const { return chordActive_; }
-  void toggleQuickLock(uint32_t nowMs) { (void)quickLockState_.toggle(nowMs); }
-  void restoreQuickLock(uint32_t nowMs) {
-    if (!quickLockState_.isLocked()) (void)quickLockState_.toggle(nowMs);
+  void toggleQuickLock(uint32_t nowMs, QuickLockTrigger trigger, bool requireRelease = false) {
+    const bool locked = quickLockState_.toggle(nowMs);
+    quickLockTrigger_ = locked ? trigger : QuickLockTrigger::None;
+    unlockTriggerReleased_ = !locked || !requireRelease;
+  }
+  bool tryUnlockLongPower(uint32_t nowMs, bool longPowerPressed) {
+    if (!quickLockState_.isLocked() || quickLockTrigger_ != QuickLockTrigger::LongPower) return false;
+    if (!unlockTriggerReleased_) {
+      unlockTriggerReleased_ = !longPowerPressed;
+      return false;
+    }
+    if (!longPowerPressed) return false;
+    toggleQuickLock(nowMs, QuickLockTrigger::LongPower, true);
+    return true;
+  }
+  bool tryUnlockWithTrigger(uint32_t nowMs, QuickLockTrigger trigger) {
+    if (trigger == QuickLockTrigger::None || trigger == QuickLockTrigger::LongPower || !quickLockState_.isLocked() ||
+        quickLockTrigger_ != trigger) {
+      return false;
+    }
+    toggleQuickLock(nowMs, trigger);
+    return true;
   }
   bool shouldQuickLockSleep(uint32_t nowMs, uint32_t timeoutMs) const {
     return quickLockState_.shouldSleep(nowMs, timeoutMs);
   }
 
  private:
+  bool canRunChordWhileQuickLocked(ChordAction action, QuickLockTrigger trigger) const {
+    return action == ChordAction::QuickLock && quickLockTrigger_ == trigger;
+  }
+
+  Result dispatchChord(uint32_t nowMs, ChordAction action, QuickLockTrigger trigger) {
+    switch (action) {
+      case ChordAction::Screenshot:
+        return {Event::Screenshot, true};
+      case ChordAction::QuickLock:
+        toggleQuickLock(nowMs, trigger);
+        return {Event::QuickLockChanged, true};
+      case ChordAction::PageTurn:
+        return {Event::PageTurn, true};
+      case ChordAction::Disabled:
+        return {Event::None, true};
+      default:
+        return {Event::ConfiguredAction, true, action};
+    }
+  }
+
   QuickLockState quickLockState_;
+  QuickLockTrigger quickLockTrigger_ = QuickLockTrigger::None;
   bool chordActive_ = false;
+  bool powerDownChordActive_ = false;
+  bool upDownChordActive_ = false;
+  bool unlockTriggerReleased_ = true;
 };

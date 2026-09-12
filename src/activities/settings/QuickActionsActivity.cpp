@@ -14,11 +14,15 @@ namespace {
 constexpr StrId triggerLabels[] = {
     StrId::STR_NONE_OPT,          StrId::STR_SHORT_PRESS_POWER,        StrId::STR_LONG_PRESS_POWER,
     StrId::STR_LONG_PRESS_BACK,   StrId::STR_LONG_PRESS_MENU_SHORTCUT, StrId::STR_POWER_BUTTON_CHORD,
-    StrId::STR_TAP_HOME_SHORTCUT, StrId::STR_LONG_PRESS_HOME_SHORTCUT, StrId::STR_DOUBLE_TAP_HOME_SHORTCUT};
+    StrId::STR_TAP_HOME_SHORTCUT, StrId::STR_LONG_PRESS_HOME_SHORTCUT, StrId::STR_DOUBLE_TAP_HOME_SHORTCUT,
+    StrId::STR_SIDE_BUTTON_CHORD};
 
 std::vector<QuickActions::Trigger> availableTriggers() {
   std::vector<QuickActions::Trigger> triggers = {QuickActions::Trigger::None, QuickActions::Trigger::ShortPower,
                                                  QuickActions::Trigger::LongPower, QuickActions::Trigger::PowerUp};
+  if (gpio.hasTouch()) {
+    triggers.push_back(QuickActions::Trigger::UpDown);
+  }
   if (gpio.hasHomeKey()) {
     triggers.push_back(QuickActions::Trigger::TapHome);
     triggers.push_back(QuickActions::Trigger::LongPressHome);
@@ -41,11 +45,20 @@ std::vector<uint8_t> availableActions() {
   actions.reserve(QuickActions::shortcutActionOrder.size());
   for (const auto action : QuickActions::shortcutActionOrder) {
     const auto rawAction = static_cast<uint8_t>(action);
-    if (QuickActions::isActionAvailable(rawAction)) actions.push_back(rawAction);
+    if (QuickActions::isQuickActionSlotActionAvailable(rawAction)) actions.push_back(rawAction);
   }
   return actions;
 }
 }  // namespace
+
+#ifdef SIMULATOR
+namespace QuickActionsActivityTest {
+bool isTriggerAvailable(const QuickActions::Trigger trigger) {
+  const auto triggers = availableTriggers();
+  return std::find(triggers.begin(), triggers.end(), trigger) != triggers.end();
+}
+}  // namespace QuickActionsActivityTest
+#endif
 
 void QuickActionsActivity::onEnter() {
   Activity::onEnter();
@@ -67,7 +80,8 @@ void QuickActionsActivity::showOverview() {
                     I18N.get(triggerLabels[static_cast<uint8_t>(draftTrigger)]));
   for (uint8_t i = 0; i < 5; ++i) {
     const uint8_t action = draftSlots[i];
-    const char* label = QuickActions::isActionAvailable(action) ? I18N.get(QuickActions::actionLabel(action)) : "-";
+    const char* label =
+        QuickActions::isQuickActionSlotActionAvailable(action) ? I18N.get(QuickActions::actionLabel(action)) : "-";
     rows.emplace_back(std::to_string(i + 1) + ". " + label);
   }
   popup.showConfirmed(

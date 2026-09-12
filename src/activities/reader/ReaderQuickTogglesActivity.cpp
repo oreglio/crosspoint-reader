@@ -10,7 +10,7 @@
 
 const ReaderQuickTogglesActivity::Toggle ReaderQuickTogglesActivity::TOGGLES[] = {
     {StrId::STR_FONT_SIZE, nullptr, true},
-    {StrId::STR_READER_DARK_MODE, &CrossPointSettings::readerDarkMode, true},
+    {StrId::STR_READER_DARK_MODE, &CrossPointSettings::screenInverted, true},
     {StrId::STR_TEXT_AA, &CrossPointSettings::textAntiAliasing, true},
     {StrId::STR_GUIDE_READING, &CrossPointSettings::guideReadingEnabled, false},
     // Status-bar contents. None of these touch the text, so the page under the

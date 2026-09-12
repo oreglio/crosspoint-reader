@@ -16,7 +16,7 @@
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
-#include "activities/boot_sleep/SleepImageIndex.h"
+#include "activities/boot_sleep/ImageFolderIndex.h"
 #include "activities/home/FileBrowserActivity.h"
 #include "components/TouchActionButtons.h"
 #include "components/TouchHeaderBackButton.h"
@@ -514,7 +514,7 @@ bool NearbyBookTransferActivity::finishReceivedFile(const uint64_t expectedBytes
     return false;
   }
   if (replacing) Storage.remove(backupPath_.c_str());
-  SleepImageIndex::invalidateForPath(finalPath_.c_str());
+  ImageFolderIndex::invalidateForPath(finalPath_.c_str());
   // A book just landed: the Library rebuilds, reconciled, on its next entry.
   library::markShelfStaleIfBook(finalPath_.c_str());
   return true;
@@ -876,6 +876,7 @@ void NearbyBookTransferActivity::render(RenderLock&&) {
     centeredWrapped(errorMessage_.c_str(), renderer.getLineHeight(UI_10_FONT_ID) + 10, 3, SMALL_FONT_ID);
   }
 
+  std::array<char, 128> backLabelBuffer{};
   const char* back = tr(STR_CANCEL);
   const char* confirm = "";
   if (state_ == State::ChooseReceiveAction || state_ == State::DeviceList || state_ == State::CollisionPrompt)
@@ -883,7 +884,9 @@ void NearbyBookTransferActivity::render(RenderLock&&) {
   else if (state_ == State::OfferPrompt)
     confirm = tr(STR_ACCEPT);
   else if (state_ == State::Success && mode_ == Mode::Receive) {
-    back = tr(STR_BACK);
+    std::snprintf(backLabelBuffer.data(), backLabelBuffer.size(), "%s",
+                  mappedInput.resolveLabel(mappedInput.withBackArrow(tr(STR_BACK))));
+    back = backLabelBuffer.data();
     confirm =
         FsHelpers::hasPngExtension(finalPath_) || FsHelpers::hasBmpExtension(finalPath_) ? tr(STR_OPEN) : tr(STR_READ);
   } else if (state_ == State::Success) {

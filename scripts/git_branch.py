@@ -3,12 +3,12 @@ PlatformIO pre-build script: inject git info into version defines.
 
   default:       1.1.0-dev+<branch>.<hash>.<YYYYMMDD-HHMMSS>  (local development builds)
   production:    1.1.0               (when $CROSSINK_RELEASE_VERSION is set)
-  default RC:    1.1.0-rc+<hash>       (when $CROSSINK_RC_HASH is set)
+  RC:            1.1.0-<hash>-RC      (when $CROSSINK_RC_HASH is set)
   test & debug:          1.2.6-<branch>+<5-char-hash>
-  gh_release_rc: 1.1.0-rc+<hash>       (hash from $CROSSINK_RC_HASH in CI,
+  gh_release_rc: 1.1.0-<hash>-RC       (hash from $CROSSINK_RC_HASH in CI,
                                         or from git locally)
 
-All other environments set CROSSINK_VERSION directly in platformio.ini.
+Simulator environments set CROSSINK_VERSION directly in platformio.ini.
 """
 
 import configparser
@@ -89,6 +89,18 @@ def get_git_short_sha(project_dir):
     )
 
 
+def get_git_dirty(project_dir):
+    try:
+        status = subprocess.check_output(
+            ['git', 'status', '--porcelain', '--untracked-files=no'],
+            text=True, stderr=subprocess.PIPE, cwd=project_dir
+        )
+        return '1' if status.strip() else '0'
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        warn(f'Could not read git working-tree state: {e}; state will be "unknown"')
+        return 'unknown'
+
+
 def _read_ini(project_dir):
     ini_path = os.path.join(project_dir, 'platformio.ini')
     local_ini_path = os.path.join(project_dir, 'platformio.local.ini')
@@ -118,7 +130,8 @@ def get_crossink_version(project_dir):
 
 def get_release_candidate_version(project_dir):
     short_hash = os.environ.get('CROSSINK_RC_HASH') or get_git_short_hash(project_dir)
-    return f'{get_crossink_version(project_dir)}-rc+{sanitize_version_component(short_hash)}'
+    base_version = re.sub(r'-RC$', '', get_crossink_version(project_dir), flags=re.IGNORECASE)
+    return f'{base_version}-{sanitize_version_component(short_hash)}-RC'
 
 
 def get_production_version(project_dir):
@@ -165,34 +178,57 @@ def write_version_header(project_dir, version_string):
         warn(f'could not write {GENERATED_HEADER}: {exc}')
 
 
+def get_hardware_version(project_dir, pioenv):
+    if os.environ.get('CROSSINK_RC_HASH'):
+        return get_release_candidate_version(project_dir)
+
+    if pioenv == 'default':
+        if os.environ.get('CROSSINK_RELEASE_VERSION'):
+            return get_production_version(project_dir)
+        # The commit goes in too. Without it every local build of a branch
+        # reports the same string, so a device cannot say which one it is
+        # running and a crash report cannot either — four different images were
+        # flashed in one afternoon, all announcing 1.5.0-dev+feat-library.
+        #
+        # And the build instant, to the second: the hash alone cannot tell two
+        # builds of one commit apart (a dirty tree, or a rebuild before the
+        # commit landed), and those are exactly the images that get flashed
+        # back to back while testing. Dev builds only — the timestamp lives in
+        # the semver build-metadata part, which version comparison ignores.
+        base_version = get_crossink_version(project_dir)
+        branch = get_git_branch(project_dir)
+        short_hash = get_git_short_hash(project_dir)
+        stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        suffix = f'{branch}.{short_hash}' if short_hash else branch
+        return f'{base_version}-dev+{sanitize_version_component(suffix)}.{stamp}'
+
+    base_version = (
+        get_production_version(project_dir)
+        if os.environ.get('CROSSINK_RELEASE_VERSION')
+        else get_crossink_version(project_dir)
+    )
+    device_suffix = {'sticky': '-sticky', 'x4-pro': '-x4-pro', 'x4-classic': '-x4-classic'}[pioenv]
+    return f'{base_version}{device_suffix}'
+
+
 def inject_version(env):
     project_dir = env['PROJECT_DIR']
     pioenv = env['PIOENV']
+    # Keep build provenance separate from CROSSINK_VERSION: production versions
+    # intentionally omit the source revision, while diagnostics need the base
+    # commit and whether the compiled tree had tracked modifications.
+    env.Append(CPPDEFINES=[
+        ('CROSSINK_GIT_SHA', f'\\"{get_git_short_sha(project_dir)}\\"'),
+        ('CROSSINK_GIT_DIRTY', f'\\"{get_git_dirty(project_dir)}\\"'),
+    ])
 
-    if pioenv == 'default':
+    if pioenv in {'default', 'sticky', 'x4-pro', 'x4-classic'}:
+        version_string = get_hardware_version(project_dir, pioenv)
         if os.environ.get('CROSSINK_RC_HASH'):
-            version_string = get_release_candidate_version(project_dir)
             print(f'CrossInk RC build version: {version_string}')
         elif os.environ.get('CROSSINK_RELEASE_VERSION'):
-            version_string = get_production_version(project_dir)
             print(f'CrossInk production build version: {version_string}')
         else:
-            # The commit goes in too. Without it every local build of a branch
-            # reports the same string, so a device cannot say which one it is
-            # running and a crash report cannot either — four different images were
-            # flashed in one afternoon, all announcing 1.5.0-dev+feat-library.
-            #
-            # And the build instant, to the second: the hash alone cannot tell two
-            # builds of one commit apart (a dirty tree, or a rebuild before the
-            # commit landed), and those are exactly the images that get flashed
-            # back to back while testing. Dev builds only — the timestamp lives in
-            # the semver build-metadata part, which version comparison ignores.
-            base_version = get_crossink_version(project_dir)
-            branch = get_git_branch(project_dir)
-            short_hash = get_git_short_hash(project_dir)
-            stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-            suffix = f'{branch}.{short_hash}' if short_hash else branch
-            version_string = f'{base_version}-dev+{sanitize_version_component(suffix)}.{stamp}'
             print(f'CrossInk build version: {version_string}')
         # Header, not a define: see write_version_header.
         write_version_header(project_dir, version_string)
@@ -221,7 +257,7 @@ def inject_version(env):
         ])
         print(f'CrossInk test build version: {ci_version}{suffix}')
 
-    elif pioenv == 'x4-pro-debug':
+    elif pioenv in {'x4-pro-debug', 'x4-classic-debug'}:
         branch = get_git_branch(project_dir)
         short_hash = get_git_short_hash(project_dir)
         ci_version = get_crossink_version(project_dir)

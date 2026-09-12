@@ -198,7 +198,7 @@ void OpdsSettingsActivity::handleSelection() {
       }
     };
     startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_PASSWORD),
-                                                                   editServer.password, 63, InputType::Password),
+                                                                   editServer.password, 63, InputType::Text),
                            handler);
   } else if (selectedIndex == 4) {
     editServer.filenameFormat = editServer.filenameFormat == OpdsFilenameFormat::AUTHOR_TITLE
@@ -290,7 +290,8 @@ void OpdsSettingsActivity::render(RenderLock&&) {
   app.render();
   uiReady = true;
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels =
+      mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   if (showSaveError) {

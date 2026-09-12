@@ -27,6 +27,9 @@ void KOReaderAuthActivity::onWifiSelectionComplete(const bool success) {
     return;
   }
 
+  WiFi.setSleep(false);
+  LOG_DBG("KOAuth", "WiFi sleep disabled for authentication");
+
   sdFontSystem.releaseForNetwork(renderer);
 
   {
@@ -83,7 +86,7 @@ void KOReaderAuthActivity::onExit() {
   }
   // Authentication launches from minimal network boot, so restore the full
   // app state even if setup failed before WiFi was started.
-  silentRestart();
+  silentRestartAfterNetwork();
 }
 
 void KOReaderAuthActivity::render(RenderLock&&) {
@@ -120,7 +123,7 @@ void KOReaderAuthActivity::render(RenderLock&&) {
                                      true, EpdFontFamily::REGULAR, 4);
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+  const auto labels = mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), "", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer(screenTransitionRefresh.modeFor(static_cast<uint8_t>(state)));
 }

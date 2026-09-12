@@ -77,6 +77,7 @@ ReaderActivity::EpubOpenResult ReaderActivity::loadEpub(const std::string& path)
   GfxRenderer::FrameBufferLoan loan(renderer);
   const bool loaded = epub->load(true, result.readerSettings.readerSettings.embeddedStyle == 0,
                                  Epub::XLocationLoadMode::Immediate, true);
+  if (loaded) epub->ensureOptimizerImageIndex();
   loan.end();
   if (loaded) {
     result.epub = std::move(epub);
@@ -147,9 +148,14 @@ void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub,
                                       EpubReaderActivity::BookReaderSettingsData readerSettings) {
   const auto epubPath = epub->getPath();
   currentBookPath = epubPath;
-  activityManager.replaceActivity(
-      std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub), std::move(readerSettings),
-                                           initialRefreshCountdown(), cleanImageBaseOnEntry));
+  // A retained-frame fast refresh is only supplied by the direct sleep-wake
+  // route. The current book is already first in recents, so avoid loading and
+  // rewriting that store solely to record the same entry again. Adapted from
+  // Sichroteph/YACP commit 20af8aee8d3e1d560456753b08d1f52e5488621f (MIT).
+  const bool skipRecentBookUpdateOnEntry = allowFastInitialRefresh;
+  activityManager.replaceActivity(std::make_unique<EpubReaderActivity>(
+      renderer, mappedInput, std::move(epub), std::move(readerSettings), initialRefreshCountdown(),
+      cleanImageBaseOnEntry, skipRecentBookUpdateOnEntry));
 }
 
 void ReaderActivity::onGoToBmpViewer(const std::string& path) {
@@ -159,15 +165,15 @@ void ReaderActivity::onGoToBmpViewer(const std::string& path) {
 void ReaderActivity::onGoToXtcReader(std::unique_ptr<Xtc> xtc) {
   const auto xtcPath = xtc->getPath();
   currentBookPath = xtcPath;
-  activityManager.replaceActivity(
-      std::make_unique<XtcReaderActivity>(renderer, mappedInput, std::move(xtc), initialRefreshCountdown()));
+  activityManager.replaceActivity(std::make_unique<XtcReaderActivity>(
+      renderer, mappedInput, std::move(xtc), initialRefreshCountdown(), allowFastInitialRefresh));
 }
 
 void ReaderActivity::onGoToTxtReader(std::unique_ptr<Txt> txt) {
   const auto txtPath = txt->getPath();
   currentBookPath = txtPath;
-  activityManager.replaceActivity(
-      std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt), initialRefreshCountdown()));
+  activityManager.replaceActivity(std::make_unique<TxtReaderActivity>(
+      renderer, mappedInput, std::move(txt), initialRefreshCountdown(), allowFastInitialRefresh));
 }
 
 void ReaderActivity::onEnter() {

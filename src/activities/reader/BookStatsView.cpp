@@ -472,7 +472,7 @@ void renderPerBookStatsPage(GfxRenderer& renderer, const MappedInputManager* map
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto& layout = getStatsLayout(renderer, mappedInput, false, showButtonHints, showRtcStats);
   if (mappedInput && mappedInput->hasTouchHardware()) {
-    TouchHeaderBackButton::drawCompact(renderer, tr(STR_READING_STATS), true, true);
+    TouchHeaderBackButton::drawCompact(renderer, tr(STR_READING_STATS), false, true);
   } else {
     CompactHeader::drawTitle(renderer, tr(STR_READING_STATS), true);
   }
@@ -529,8 +529,9 @@ void renderPerBookStatsPage(GfxRenderer& renderer, const MappedInputManager* map
   }
 
   if (showButtonHints && mappedInput) {
-    const auto labels = mappedInput->mapLabels(tr(STR_BACK), showEditButton ? tr(STR_EDIT) : "", "",
-                                               showMoreButton ? tr(STR_MORE) : "");
+    const auto labels =
+        mappedInput->mapLabels(mappedInput->withBackArrow(tr(STR_BACK)), showEditButton ? tr(STR_EDIT) : "", "",
+                               showMoreButton ? tr(STR_MORE) : "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, true);
   }
 }
@@ -542,7 +543,7 @@ void renderGlobalStatsPage(GfxRenderer& renderer, const MappedInputManager* mapp
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto& layout = getStatsLayout(renderer, mappedInput, true, showButtonHints, showRtcStats);
   if (mappedInput && mappedInput->hasTouchHardware()) {
-    TouchHeaderBackButton::drawCompact(renderer, screenTitle, true);
+    TouchHeaderBackButton::drawCompact(renderer, screenTitle, false);
   } else {
     CompactHeader::drawTitle(renderer, screenTitle);
   }
@@ -589,7 +590,9 @@ void renderGlobalStatsPage(GfxRenderer& renderer, const MappedInputManager* mapp
   }
 
   if (showButtonHints && mappedInput) {
-    const auto labels = mappedInput->mapLabels(tr(STR_EXIT), "", tr(STR_BACK), showMoreButton ? tr(STR_MORE) : "");
+    const auto labels =
+        mappedInput->mapLabels(mappedInput->withBackArrow(tr(STR_EXIT)), "", mappedInput->withBackArrow(tr(STR_BACK)),
+                               showMoreButton ? tr(STR_MORE) : "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, true);
   }
 }
@@ -603,7 +606,7 @@ void renderNoRtcCombinedStatsPage(GfxRenderer& renderer, const MappedInputManage
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto& layout = getNoRtcCombinedLayout(renderer, mappedInput, showButtonHints, allDevicesStats != nullptr);
   if (mappedInput && mappedInput->hasTouchHardware()) {
-    TouchHeaderBackButton::drawCompact(renderer, tr(STR_READING_STATS), true);
+    TouchHeaderBackButton::drawCompact(renderer, tr(STR_READING_STATS), false);
   } else {
     CompactHeader::drawTitle(renderer, tr(STR_READING_STATS));
   }
@@ -640,7 +643,7 @@ void renderNoRtcCombinedStatsPage(GfxRenderer& renderer, const MappedInputManage
   }
 
   if (showButtonHints && mappedInput) {
-    const auto labels = mappedInput->mapLabels(tr(STR_BACK), "", "", "");
+    const auto labels = mappedInput->mapLabels(mappedInput->withBackArrow(tr(STR_BACK)), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, true);
   }
 }
@@ -649,7 +652,7 @@ void renderEditBookDatesPage(GfxRenderer& renderer, const MappedInputManager* ma
                              const BookReadingStats& stats, const int selectedField, const bool showButtonHints) {
   renderer.clearScreen();
   if (mappedInput && mappedInput->hasTouchHardware()) {
-    TouchHeaderBackButton::drawCompact(renderer, tr(STR_READING_STATS), true);
+    TouchHeaderBackButton::drawCompact(renderer, tr(STR_READING_STATS), false);
   } else {
     CompactHeader::drawTitle(renderer, tr(STR_READING_STATS));
   }
@@ -747,7 +750,8 @@ void renderEditBookDatesPage(GfxRenderer& renderer, const MappedInputManager* ma
 #endif
 
   if (showButtonHints && mappedInput) {
-    const auto labels = mappedInput->mapLabels(tr(STR_BACK), tr(STR_NEXT_FIELD), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+    const auto labels = mappedInput->mapLabels(mappedInput->withBackArrow(tr(STR_BACK)), tr(STR_NEXT_FIELD),
+                                               tr(STR_DIR_UP), tr(STR_DIR_DOWN));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, true);
   }
 }

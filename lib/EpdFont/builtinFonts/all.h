@@ -1,8 +1,9 @@
 #pragma once
 
-// Built-in reading fonts are fixed at 10, 12, 14, and 16 pt. The default
-// variant includes emoji/symbol and PHM CJK fallbacks; noemoji includes only
-// the primary fonts.
+#include <builtinFonts/ui_symbols_10.h>
+
+// Built-in reading fonts are fixed at 10, 12, 14, and 16 pt. They carry the
+// PHM CJK fallback ranges; emoticons were dropped upstream in v1.5.1.
 //
 // Reading fonts dominate the firmware image: they account for roughly a third
 // of the app0 partition, so which ones are baked in is a build-time choice.
@@ -22,11 +23,9 @@
 // fail the build if it does not.
 //
 // Macro names match CrumBLE's so the two forks can merge this area cleanly.
-#ifdef OMIT_EMOJI_FONTS
-#define BUILTIN_READING_FONT_HEADER(name) <builtinFonts/noemoji/name.h>
-#else
+// Upstream dropped the noemoji/ variants in v1.5.1 (emoticons are stripped from
+// the fonts themselves), so there is only one header per face now.
 #define BUILTIN_READING_FONT_HEADER(name) <builtinFonts/name.h>
-#endif
 
 #if defined(OMIT_BITTER_FONT) && defined(OMIT_LEXENDDECA_FONT)
 #error "At least one built-in reading font family must be kept"

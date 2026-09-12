@@ -1,6 +1,7 @@
 #include "CrossPointSettings.h"
 
 #include <BoardConfig.h>
+#include <CrossInkHalFrontlight.h>
 #include <HalClock.h>
 #include <HalGPIO.h>
 #include <HalStorage.h>
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <limits>
 #include <mutex>
 #include <string>
 
@@ -20,6 +22,8 @@
 #include "QuickActions.h"
 #include "SettingsList.h"
 #include "fontIds.h"
+#include "util/FrontlightSchedule.h"
+#include "util/TwoFingerSwipe.h"
 
 void readAndValidate(FsFile& file, uint8_t& member, const uint8_t maxValue) {
   uint8_t tempValue;
@@ -306,7 +310,8 @@ bool isSleepScreenSetting(const SettingInfo& info) { return info.key && strcmp(i
 bool isValidQuickActionSlot(const uint8_t action) {
   return action < CrossPointSettings::QUICK_ACTION_SLOT_ACTION_COUNT ||
          action == CrossPointSettings::TOGGLE_HOME_BUTTON_IN_READER ||
-         action == CrossPointSettings::TOGGLE_FRONTLIGHT || action == CrossPointSettings::TOGGLE_TOUCHSCREEN;
+         action == CrossPointSettings::TOGGLE_FRONTLIGHT || action == CrossPointSettings::TOGGLE_TOUCHSCREEN ||
+         action == CrossPointSettings::PREVIOUS_PAGE || action == CrossPointSettings::NEARBY_POSITION_SYNC;
 }
 
 uint8_t migrateTiltDirectionValue(const uint8_t direction) {
@@ -319,6 +324,7 @@ uint8_t migrateTiltDirectionValue(const uint8_t direction) {
 
 const char* CrossPointSettings::getDefaultDeviceName() {
   if (BoardConfig::isSticky()) return "Sticky";
+  if (BoardConfig::isX4Pro()) return "CrossInk X4 Pro";
   if (gpio.deviceIsX3()) return "CrossInk X3";
   if (gpio.deviceIsX4()) return "CrossInk X4";
   return "CrossInk";
@@ -342,6 +348,58 @@ void CrossPointSettings::validateFrontButtonMapping(CrossPointSettings& settings
       }
     }
   }
+}
+
+bool CrossPointSettings::isTwoFingerSwipeActionAvailable(const uint8_t action, const bool frontlightPresent,
+                                                         const bool hasColorTemperature) {
+  switch (static_cast<TWO_FINGER_SWIPE_ACTION>(action)) {
+    case TWO_FINGER_SWIPE_NOT_SET:
+    case TWO_FINGER_SWIPE_NEXT_CHAPTER:
+    case TWO_FINGER_SWIPE_PREVIOUS_CHAPTER:
+    case TWO_FINGER_SWIPE_INCREASE_FONT_SIZE:
+    case TWO_FINGER_SWIPE_DECREASE_FONT_SIZE:
+      return true;
+    case TWO_FINGER_SWIPE_INCREASE_BRIGHTNESS:
+    case TWO_FINGER_SWIPE_DECREASE_BRIGHTNESS:
+      return frontlightPresent;
+    case TWO_FINGER_SWIPE_INCREASE_WARMTH:
+    case TWO_FINGER_SWIPE_DECREASE_WARMTH:
+      return frontlightPresent && hasColorTemperature;
+    case TWO_FINGER_SWIPE_ACTION_COUNT:
+      return false;
+  }
+  return false;
+}
+
+bool CrossPointSettings::normalizeTwoFingerSwipeActions(CrossPointSettings& settings,
+                                                        uint8_t CrossPointSettings::* const editedField) {
+  uint8_t CrossPointSettings::* const fields[] = {
+      &CrossPointSettings::twoFingerSwipeUp, &CrossPointSettings::twoFingerSwipeDown,
+      &CrossPointSettings::twoFingerSwipeLeft, &CrossPointSettings::twoFingerSwipeRight};
+  bool changed = false;
+  const bool frontlightPresent = Frontlight.present();
+  const bool hasColorTemperature = Frontlight.hasColorTemperature();
+
+  for (const auto field : fields) {
+    uint8_t& action = settings.*field;
+    if (!isTwoFingerSwipeActionAvailable(action, frontlightPresent, hasColorTemperature)) {
+      action = TWO_FINGER_SWIPE_NOT_SET;
+      changed = true;
+    }
+  }
+
+  uint8_t actions[] = {settings.twoFingerSwipeUp, settings.twoFingerSwipeDown, settings.twoFingerSwipeLeft,
+                       settings.twoFingerSwipeRight};
+  int editedIndex = -1;
+  for (int i = 0; i < 4; i++) {
+    if (fields[i] == editedField) editedIndex = i;
+  }
+  changed = TwoFingerSwipe::clearDuplicateActions(actions, TWO_FINGER_SWIPE_NOT_SET, editedIndex) || changed;
+  settings.twoFingerSwipeUp = actions[0];
+  settings.twoFingerSwipeDown = actions[1];
+  settings.twoFingerSwipeLeft = actions[2];
+  settings.twoFingerSwipeRight = actions[3];
+  return changed;
 }
 
 void CrossPointSettings::validateReaderFrontButtonMapping(CrossPointSettings& settings) {
@@ -459,7 +517,7 @@ uint16_t CrossPointSettings::getReadingIdleTimeThresholdSeconds() const {
 void CrossPointSettings::toJson(JsonDocument& doc) const {
   std::lock_guard<std::mutex> lock(_mutex);
   for (const auto& info : getBaseSettingsList()) {
-    if (!info.key || (!info.valuePtr && !info.stringOffset)) continue;
+    if (!info.key || (!info.valuePtr && !info.value16Ptr && !info.stringOffset)) continue;
     if (info.stringOffset) {
       const char* value = reinterpret_cast<const char*>(this) + info.stringOffset;
       if (info.obfuscated) {
@@ -469,6 +527,8 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
       } else {
         doc[info.key] = value;
       }
+    } else if (info.value16Ptr) {
+      doc[info.key] = this->*(info.value16Ptr);
     } else {
       uint8_t value = this->*(info.valuePtr);
       if (isSleepScreenSetting(info)) value = sleepScreenModeToStorage(value);
@@ -495,8 +555,10 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   }
   doc["quickActionsTrigger"] = quickActionsTrigger;
   doc["language"] = (language < getLanguageCount()) ? LANGUAGE_CODES[language] : "EN";
+  if (keyboardLayouts != 0) doc["keyboardLayouts"] = keyboardLayouts;
   doc["tiltPageTurnDirectionSchema"] = TILT_DIRECTION_SCHEMA_CURRENT;
   doc["clockDateHasBeenSynced"] = clockDateHasBeenSynced;
+  doc["screenInverted"] = screenInverted;
 }
 
 bool CrossPointSettings::fromJson(JsonVariantConst doc) {
@@ -510,11 +572,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   const bool migrateTiltDirectionSchema =
       !doc["tiltPageTurnDirection"].isNull() &&
       ((doc["tiltPageTurnDirectionSchema"] | static_cast<uint8_t>(1)) < TILT_DIRECTION_SCHEMA_CURRENT);
-
   if (doc["statusBarChapterPageCount"].isNull()) applyLegacyStatusBarSettings(*this);
+  screenInverted = clamp(doc["screenInverted"] | screenInverted, 2, screenInverted);
 
   for (const auto& info : getBaseSettingsList()) {
-    if (!info.key || (!info.valuePtr && !info.stringOffset)) continue;
+    if (!info.key || (!info.valuePtr && !info.value16Ptr && !info.stringOffset)) continue;
     if (info.stringOffset) {
       char* destination = reinterpret_cast<char*>(this) + info.stringOffset;
       if (info.stringMaxLen == 0) {
@@ -559,6 +621,16 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
       continue;
     }
 
+    if (info.value16Ptr) {
+      const uint16_t fieldDefault = this->*(info.value16Ptr);
+      uint16_t value = doc[info.key] | fieldDefault;
+      if (info.type == SettingType::VALUE) {
+        value = std::clamp(value, info.valueRange.min, info.valueRange.max);
+      }
+      this->*(info.value16Ptr) = value;
+      continue;
+    }
+
     const uint8_t fieldDefault = this->*(info.valuePtr);
     uint8_t value = doc[info.key] | fieldDefault;
     if (strcmp(info.key, "sdFontSizeRange") == 0 && value == SD_FONT_RANGE_NO_EMOJI_LEGACY) {
@@ -589,10 +661,37 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     } else if (info.type == SettingType::TOGGLE) {
       value = clamp(value, 2, fieldDefault);
     } else if (info.type == SettingType::VALUE) {
-      value = std::clamp(value, info.valueRange.min, info.valueRange.max);
+      value = std::clamp(value, static_cast<uint8_t>(info.valueRange.min), static_cast<uint8_t>(info.valueRange.max));
     }
     this->*(info.valuePtr) = value;
   }
+
+  // The old gesture setting controlled both directions. Preserve it on upgrade.
+  if (doc["previousPageGesture"].isNull()) {
+    previousPageGesture = pageTurnGesture;
+    needsResave = true;
+  }
+
+  // Older global settings files named the display preference readerDarkMode.
+  // Preserve it when moving to the global screenInverted setting.
+  if (doc["screenInverted"].isNull() && !doc["readerDarkMode"].isNull()) {
+    screenInverted = clamp(doc["readerDarkMode"] | static_cast<uint8_t>(0), 2, 0);
+    needsResave = true;
+  }
+  if (refreshFrequency == REFRESH_NEVER && !Frontlight.present()) {
+    refreshFrequency = REFRESH_15;
+    needsResave = true;
+  }
+
+  const auto normalizeFrontlightScheduleTime = [&needsResave](uint16_t& timeOfDay) {
+    if (FrontlightSchedule::isTimeOfDayValid(timeOfDay) || timeOfDay == FrontlightSchedule::kUnsetTimeOfDay) return;
+    timeOfDay = FrontlightSchedule::kUnsetTimeOfDay;
+    needsResave = true;
+  };
+  normalizeFrontlightScheduleTime(frontlightScheduleStart);
+  normalizeFrontlightScheduleTime(frontlightScheduleEnd);
+
+  if (normalizeTwoFingerSwipeActions(*this)) needsResave = true;
 
   // The web API shares the base catalog so it can receive raw value 26 even
   // on boards without a Home key. Never retain that reader-only action there.
@@ -702,9 +801,9 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   const uint8_t persistedQuickActionsTrigger =
       doc["quickActionsTrigger"] | static_cast<uint8_t>(QuickActions::Trigger::None);
   const bool unavailableHomeTrigger =
-      !gpio.hasHomeKey() && persistedQuickActionsTrigger >= static_cast<uint8_t>(QuickActions::Trigger::TapHome);
-  if (persistedQuickActionsTrigger <= static_cast<uint8_t>(QuickActions::Trigger::DoubleTapHome) &&
-      !unavailableHomeTrigger) {
+      !gpio.hasHomeKey() && persistedQuickActionsTrigger >= static_cast<uint8_t>(QuickActions::Trigger::TapHome) &&
+      persistedQuickActionsTrigger <= static_cast<uint8_t>(QuickActions::Trigger::DoubleTapHome);
+  if (persistedQuickActionsTrigger <= static_cast<uint8_t>(QuickActions::Trigger::UpDown) && !unavailableHomeTrigger) {
     quickActionsTrigger = persistedQuickActionsTrigger;
   } else {
     quickActionsTrigger = static_cast<uint8_t>(QuickActions::Trigger::None);
@@ -717,8 +816,18 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     lineHeightPercent = legacyLineSpacingToPercent(legacySpacing, fontFamily, sdFontFamilyName[0] != '\0');
     needsResave = true;
   }
+  if (doc["screenMarginVertical"].isNull() || doc["screenMarginHorizontal"].isNull()) {
+    const uint8_t legacyScreenMargin =
+        std::clamp(doc["screenMargin"] | static_cast<uint8_t>(MIN_SCREEN_MARGIN), MIN_SCREEN_MARGIN, MAX_SCREEN_MARGIN);
+    if (doc["screenMarginVertical"].isNull()) screenMarginVertical = legacyScreenMargin;
+    if (doc["screenMarginHorizontal"].isNull()) screenMarginHorizontal = legacyScreenMargin;
+    needsResave = true;
+  }
   if (doc["language"].is<const char*>()) {
     language = static_cast<uint8_t>(I18n::languageFromCode(doc["language"].as<const char*>()));
+  }
+  if (doc["keyboardLayouts"].is<uint16_t>()) {
+    keyboardLayouts = doc["keyboardLayouts"].as<uint16_t>();
   }
   clockDateHasBeenSynced = clamp(doc["clockDateHasBeenSynced"] | static_cast<uint8_t>(0), 2, 0);
 
@@ -878,7 +987,10 @@ bool CrossPointSettings::loadFromBinaryFile() {
     if (++settingsRead >= fileSettingsCount) break;
     readAndValidate(inputFile, refreshFrequency, REFRESH_FREQUENCY_COUNT);
     if (++settingsRead >= fileSettingsCount) break;
-    serialization::readPod(inputFile, screenMargin);
+    uint8_t legacyScreenMargin = MIN_SCREEN_MARGIN;
+    serialization::readPod(inputFile, legacyScreenMargin);
+    screenMarginVertical = std::clamp(legacyScreenMargin, MIN_SCREEN_MARGIN, MAX_SCREEN_MARGIN);
+    screenMarginHorizontal = screenMarginVertical;
     if (++settingsRead >= fileSettingsCount) break;
     readAndValidate(inputFile, sleepScreenCoverMode, SLEEP_SCREEN_COVER_MODE_COUNT);
     if (++settingsRead >= fileSettingsCount) break;
@@ -959,7 +1071,7 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   spec.hyphenationEnabled = hyphenationEnabled != 0;
   spec.embeddedStyle = embeddedStyle != 0;
   spec.imageRendering = imageRendering;
-  spec.bionicReadingEnabled = bionicReadingEnabled != 0;
+  spec.focusReadingEnabled = focusReadingEnabled != 0;
   spec.guideReadingEnabled = guideReadingEnabled != 0;
   spec.wordSpacing = wordSpacing;
   spec.renderMode = renderMode;
@@ -1029,6 +1141,10 @@ int CrossPointSettings::getRefreshFrequency() const {
       return 15;
     case REFRESH_30:
       return 30;
+    case REFRESH_NEVER:
+      // Never is available only on frontlit boards. Persisted settings can be
+      // shared between devices, so retain a safe cadence everywhere else.
+      return Frontlight.present() ? std::numeric_limits<int>::max() : 15;
   }
 }
 
@@ -1096,28 +1212,13 @@ CrossPointSettings::FONT_SIZE CrossPointSettings::getEffectiveReaderFontSize() c
 
 uint8_t CrossPointSettings::getSdFontTargetPointSize() const { return readerFontPointSize; }
 
-bool CrossPointSettings::changeReaderFontSize(const bool larger) {
-  const FONT_SIZE currentSize = getEffectiveReaderFontSize();
-  int currentIndex = 0;
-  constexpr size_t sizeCount = sizeof(READER_FONT_SIZE_CYCLE_ORDER) / sizeof(READER_FONT_SIZE_CYCLE_ORDER[0]);
-  for (size_t i = 0; i < sizeCount; i++) {
-    if (READER_FONT_SIZE_CYCLE_ORDER[i] == currentSize) {
-      currentIndex = static_cast<int>(i);
-      break;
-    }
+bool CrossPointSettings::changeReaderFontSize(const bool larger, const FontSizeStepMode mode) {
+  uint8_t sizes[FONT_SIZE_COUNT] = {};
+  size_t count = 0;
+  for (const FONT_SIZE size : READER_FONT_SIZE_CYCLE_ORDER) {
+    if (isReaderFontSizeAvailable(size)) sizes[count++] = getReaderFontPointSize(size);
   }
-
-  for (size_t step = 1; step < sizeCount; step++) {
-    const int direction = larger ? 1 : -1;
-    const size_t nextIndex =
-        (currentIndex + direction * static_cast<int>(step) + static_cast<int>(sizeCount)) % sizeCount;
-    const uint8_t stored = getStoredReaderFontSize(READER_FONT_SIZE_CYCLE_ORDER[nextIndex]);
-    if (stored != INVALID_READER_FONT_SIZE) {
-      readerFontPointSize = getReaderFontPointSize(READER_FONT_SIZE_CYCLE_ORDER[nextIndex]);
-      return true;
-    }
-  }
-  return false;
+  return changeReaderFontSizeStep(sizes, count, readerFontPointSize, larger, mode);
 }
 
 int CrossPointSettings::getReaderFontId() const {

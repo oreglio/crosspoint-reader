@@ -16,6 +16,17 @@ class MappedInputManager;
 // an ordinary repaint. The handshake lives here exactly once so no screen
 // re-implements (and mis-orders) it.
 //
+// Upstream (crosspoint) turned this into UiAppHost<MaxInteractions, MaxHandlers>
+// so a simple screen does not carry the Library's interaction table. That
+// intent is NOT adopted here, for a concrete reason: UiListActivity derives
+// from this host and ~40 activities derive from it, so the template would
+// instantiate FreeInkApp about forty times. AGENTS.md asks that templates in
+// shared code be deliberate because of exactly that binary growth, and this
+// build has just dropped the Bitter family to reclaim flash. The RAM it would
+// save is measured and bounded: 256 bytes per live host, capped by the
+// activity stack depth. Upstream's three screens name their capacity through
+// the aliases below instead.
+//
 // UiListActivity layers list navigation on top of this; screens that are not a
 // single list (sliders, prompts, state machines) inherit or hold this directly
 // and keep their own input/loop logic.
@@ -30,6 +41,9 @@ class UiAppHost {
  public:
   using UiApp = freeink::ui::FreeInkApp<32, 6>;
   using UiScreen = UiApp::ScreenType;
+  // Upstream spellings, so screens ported from crosspoint name the same types.
+  using App = UiApp;
+  using Screen = UiScreen;
 
   explicit UiAppHost(const GfxRenderer& renderer);
 
@@ -65,6 +79,18 @@ class UiAppHost {
   // Gated route of a caller-built snapshot, for flows that need the snapshot
   // before dispatch (e.g. a handler that reads "was this a release" state).
   freeink::ui::ActionEvent route(const freeink::ui::InputSnapshot& snap);
+
+  // Upstream spellings, so screens ported from crosspoint read unchanged.
+  void reset() { resetUi(); }
+  void render() { renderUi(); }
+
+  // Upstream's routeTouch signature: reports whether the snapshot was routed
+  // and hands the event back by reference.
+  bool routeTouch(const MappedInputManager& input, freeink::ui::ActionEvent& event) {
+    const TouchRoute result = routeTouch(input);
+    event = result.event;
+    return result.routed;
+  }
 
   // Close the routing gate outside a render, e.g. when the data the
   // interaction table indexes is released mid-state. Reopens on renderUi().

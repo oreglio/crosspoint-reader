@@ -7,6 +7,7 @@
 #include "CompactTableLayout.h"
 #include "GfxRenderer.h"
 #include "TableColumnLayout.h"
+#include "TableTextLineOrder.h"
 
 namespace {
 
@@ -34,7 +35,13 @@ TEST(CompactTableLayoutTest, SourceFixtureModelsLargeAndUnsupportedTables) {
   ASSERT_NE(gridStart, std::string::npos);
   ASSERT_NE(gridEnd, std::string::npos);
   const std::string grid = source.substr(gridStart, gridEnd - gridStart);
+  const size_t captionStart = grid.find("<caption>");
+  const size_t firstRowStart = grid.find("<tr>");
 
+  ASSERT_NE(captionStart, std::string::npos);
+  ASSERT_NE(firstRowStart, std::string::npos);
+  EXPECT_LT(captionStart, firstRowStart);
+  EXPECT_NE(grid.find("Table 2-1: Compact table caption"), std::string::npos);
   EXPECT_EQ(countOccurrences(grid, "<tr>"), 33u);  // group heading + header + 31 data rows
   EXPECT_EQ(countOccurrences(grid, "<td"), 31u * 8u);
   EXPECT_EQ(countOccurrences(grid, "<th"), 9u);  // eight headers plus the full-width heading
@@ -60,6 +67,26 @@ TEST(CompactTableLayoutTest, WideLeadingColumnKeepsEightColumnTableLabelsReadabl
   // Other grids keep their established equal column sizing.
   EXPECT_EQ(TableColumnLayout::columnWidth(tableWidth, 6, 0, 1), 80);
   EXPECT_EQ(TableColumnLayout::columnWidth(tableWidth, 6, 5, 1), 80);
+}
+
+TEST(CompactTableLayoutTest, VisitsWrappedCellsInVisualReadingOrder) {
+  struct Cell {
+    std::vector<int> lines;
+  };
+  struct Row {
+    std::vector<Cell> cells;
+  };
+
+  const Row row{{{{1, 2}}, {{3}}, {{4, 5}}}};
+  std::vector<std::pair<size_t, size_t>> visited;
+  ASSERT_TRUE(
+      TableTextLineOrder::forEachCellLineInVisualOrder(row, [&](const size_t cellIndex, const size_t lineIndex) {
+        visited.emplace_back(cellIndex, lineIndex);
+        return true;
+      }));
+
+  const std::vector<std::pair<size_t, size_t>> expected{{0, 0}, {1, 0}, {2, 0}, {0, 1}, {2, 1}};
+  EXPECT_EQ(visited, expected);
 }
 
 TEST(CompactTableLayoutTest, CompactLayoutUsesWideLeadingColumnForEightCellRows) {
