@@ -158,6 +158,13 @@ int LibraryListActivity::selectedEntry() const {
   return entry < 0 ? 0 : entry;
 }
 
+// selectedEntry() is a position in the LIST, and while the groups are folded
+// the list holds headings — so every caller that means "the selected BOOK" must
+// ask this instead. Folded, the reader's book position is the row the fold
+// started from: they have not moved off it, they are looking for somewhere to
+// move it to.
+int LibraryListActivity::selectedBookEntry() const { return groupsCollapsed ? preCollapseEntry : selectedEntry(); }
+
 void LibraryListActivity::resetListPosition() {
   auto& n = activeNav();
   n.top = 0;
@@ -227,7 +234,7 @@ void LibraryListActivity::onExit() {
   state.shelfSort = sSortOrder;
   state.favSort = sFavSortOrder;
   if (indexReady) {
-    rowKeyFor(selectedEntry(), state.selected);
+    rowKeyFor(selectedBookEntry(), state.selected);
   } else {
     state.selected = exitSelection;
   }
@@ -272,7 +279,7 @@ void LibraryListActivity::openSelectedBook() {
   }
   // Staged for onExit: once the index closes, the selection can no longer be
   // resolved, and the book being opened is exactly the one to come back to.
-  rowKeyFor(selectedEntry(), exitSelection);
+  rowKeyFor(selectedBookEntry(), exitSelection);
   // A tap flash on the row would gray an unrelated element of the reader
   // screen this navigation opens.
   app.clearTapFlash();
@@ -328,7 +335,9 @@ void LibraryListActivity::toggleFavoriteAt(const int entry) {
 }
 
 void LibraryListActivity::openBookMenu() {
-  if (!indexReady || rowCount() == 0) return;
+  // A heading is not a book: every entry below reads selectedEntry() as a book
+  // row, which it is not while the groups are folded.
+  if (!indexReady || groupsCollapsed || rowCount() == 0) return;
   std::string title;
   std::string author;
   bool isFavorite = false;
@@ -842,7 +851,7 @@ bool LibraryListActivity::handleButtons() {
       // branch, matched no tab, and fell through having done nothing.
       if (tabsFocused()) {
         onTabLongPress(activeTab());
-      } else {
+      } else if (!groupsCollapsed) {
         openBookMenu();
       }
       return true;

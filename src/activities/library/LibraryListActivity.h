@@ -19,8 +19,8 @@
 // eye can sweep, not by a tidier filename.
 //
 // Rows render through fui::list on a UiTabListActivity ring (0 = the sort
-// strip, 1..N = the books), which is what brings touch: rows, tabs, the A-Z
-// grid and the header search action all register FreeInkUI hit rects. Titles
+// strip, 1..N = the books), which is what brings touch: rows, tabs and the
+// header search action all register FreeInkUI hit rects. Titles
 // wrap over up to three lines with per-item row heights, measured by the widget —
 // a short title costs a short row, as the pre-conversion renderer did.
 //
@@ -101,6 +101,8 @@ class LibraryListActivity final : public UiTabListActivity {
 
   // Ring 0 is the strip; the selected BOOK is ring - 1.
   int selectedEntry() const;
+  // The selected BOOK, which is not the selected ROW while groups are folded.
+  int selectedBookEntry() const;
   bool tabsFocused() const { return ringPos() == 0; }
   bool searchShortcutActive() const;
   // Row + viewport reset after a data change; ring 0 (strip focus) survives,
@@ -113,7 +115,7 @@ class LibraryListActivity final : public UiTabListActivity {
   std::vector<uint16_t> filtered;
   void openSearch();
   void buildSearchAction(UiScreen& screen);
-  // Details is a mode of this activity too, like the grid: a full-screen page
+  // Details is a mode of this activity, not a separate one: a full-screen page
   // for the selected row, render + Back, no lifecycle of its own.
   bool detailsView = false;
   void buildDetails(UiScreen& screen);
@@ -143,8 +145,9 @@ class LibraryListActivity final : public UiTabListActivity {
   std::unique_ptr<uint16_t[]> groupStarts;
   uint16_t groupCapacity = 0;
   uint16_t groupCount = 0;
-  // False where no grouping exists to fold: the date orders, the ★ view, a
-  // degraded shelf and an empty one.
+  // False where no grouping exists to fold: the date orders, a degraded shelf
+  // and an empty one. The ★ view IS foldable — it carries its own sort, and a
+  // long favorites list wants the jump as much as the full shelf does.
   bool groupable() const;
   bool buildGroupStarts();
   int groupForBook(int bookEntry) const;
