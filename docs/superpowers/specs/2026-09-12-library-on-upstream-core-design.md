@@ -56,7 +56,7 @@ Rejected alternatives, with the reason:
 
 ## The boundary
 
-Adopted verbatim from `crosspoint/feat/library-view@d4411be9`, never edited:
+Adopted verbatim from `crosspoint/feat/library-view@ad949bdd`, never edited:
 
 ```
 lib/LibraryIndex/LibraryBuilder.{cpp,h}
