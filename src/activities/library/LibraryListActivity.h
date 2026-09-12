@@ -3,6 +3,7 @@
 #include <LibraryFavoritesFile.h>
 #include <LibraryIndexFile.h>
 
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -64,8 +65,6 @@ class LibraryListActivity final : public UiTabListActivity {
  private:
   // The shelf's own actions, after the base's ACTION_ROW / ACTION_TAB.
   static constexpr freeink::ui::ActionId ACTION_SEARCH = ACTION_TAB_USER;
-  static constexpr freeink::ui::ActionId ACTION_LETTER = ACTION_TAB_USER + 1;
-  static constexpr freeink::ui::ActionId ACTION_LETTER_MODE = ACTION_TAB_USER + 2;
 
   // The readers open the Library from a HOLD of either button pair, and all
   // four of those buttons move the cursor or the sort strip here on release.
@@ -118,29 +117,49 @@ class LibraryListActivity final : public UiTabListActivity {
   // for the selected row, render + Back, no lifecycle of its own.
   bool detailsView = false;
   void buildDetails(UiScreen& screen);
-  // The A-Z grid is a mode of this activity, not a separate one: it borrows the
-  // same render and input pass, so it needs no lifecycle of its own.
-  bool letterGrid = false;
-  int letterCursor = 0;
-  void buildLetterGrid(UiScreen& screen);
-  void openLetterGrid();
-  void jumpToLetter(char letter);
-  void toggleLetterGridMode();
-  // Touch routing while a modal mode (the grid) consumes the loop pass, so
-  // its component hit rects still dispatch.
-  void routeModalTouch();
-  static void letterActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
-  static void letterModeActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
   static void searchActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
-  // One bit per letter, computed when the grid opens. Testing each letter against
-  // the index while drawing would re-read every record 26 times per frame.
-  uint32_t lettersPresent = 0;
-  void computeLettersPresent();
-  // Which word of a name the grid's letters refer to. No rule can tell "Lu
-  // Xun" (surname first) from "Jane Austen" (surname last), so the reader
-  // says which they mean instead of the code guessing.
-  bool jumpByGivenName = false;
-  char letterOf(const library::ClixRecord& record);
+
+  // --- collapsed groups ------------------------------------------------------
+  //
+  // The jump, adopted from upstream's screen (crosspoint/feat/library-view@
+  // ad949bdd). The list folds onto its own section headings: the authors in
+  // author order, the initials in title order. Pick one and the list unfolds
+  // there.
+  //
+  // It replaces the A-Z grid, which the reader had to translate — "which letter
+  // does the person I want start with, and is that their forename or their
+  // surname?" — into a question the shelf can answer by showing the names
+  // themselves. That grid's "By first name / By last name" toggle existed only
+  // because a letter cannot say which word it refers to; a name can.
+  //
+  // Not a separate activity: a mode of this one, like details, sharing the
+  // render and input pass. listCount() reports the group count while it is up,
+  // so the base's ring, viewport and our paging all operate on the folded list
+  // with no further changes.
+  bool groupsCollapsed = false;
+  // Entry index where each group starts, in the active sort order. uint16_t
+  // because the index caps at 65535 books; allocated on demand and kept for
+  // reuse, never per frame.
+  std::unique_ptr<uint16_t[]> groupStarts;
+  uint16_t groupCapacity = 0;
+  uint16_t groupCount = 0;
+  // False where no grouping exists to fold: the date orders, the ★ view, a
+  // degraded shelf and an empty one.
+  bool groupable() const;
+  bool buildGroupStarts();
+  int groupForBook(int bookEntry) const;
+  // The folded codepoint an entry files under in title order.
+  uint32_t groupInitialFor(int entry);
+  // The row the fold started from, so Back returns the reader to their place
+  // rather than to whichever heading they stopped scrolling on.
+  int preCollapseEntry = 0;
+  bool collapseGroups(int bookEntry);
+  void expandToGroup(int groupEntry);
+  void restoreExpandedList();
+  // The heading one group shows: the author's name as "Surname, Forename", or
+  // the initial. Writes into `out` rather than returning, so the visible window
+  // reuses its own storage.
+  void formatGroupHeading(int bookEntry, std::string& out);
   void applyFilter();
   int rowCount() const;
   int rowFor(int entry) const;
