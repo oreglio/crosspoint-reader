@@ -163,6 +163,36 @@ class LibraryListActivity final : public UiTabListActivity {
   // the initial. Writes into `out` rather than returning, so the visible window
   // reuses its own storage.
   void formatGroupHeading(int bookEntry, std::string& out);
+  // --- excluded folders ------------------------------------------------------
+  //
+  // Raindrop Sync writes its articles into /Articles as Markdown, and the
+  // builder's isBookName() counts .md as a book, so every synced article landed
+  // on the shelf. A reading list of hundreds of articles buries the books the
+  // shelf exists to find.
+  //
+  // Excluded HERE and not in the walk: LibraryBuilder is adopted verbatim from
+  // upstream and editing it would cost a conflict at every future sync. That is
+  // affordable because an article is cheap to index — metadata extraction is
+  // gated on hasEpubExtension (LibraryBuilder.cpp:306), so a .md costs one
+  // dirent and one 128-byte record, and nothing else. The pollution is in the
+  // list, so the list is where it is answered.
+  //
+  // The articles stay where they are on the card and stay readable from the
+  // File Browser; only the shelf stops claiming them as books.
+  static constexpr char ARTICLES_FOLDER[] = "/Articles";
+  // Whether this card has any, decided once per index open. False costs the
+  // shelf nothing at all: the unfiltered path stays exactly as it was.
+  bool hasExcludedRows = false;
+  // Folder verdicts, memoised by folderId — a card has a handful of folders and
+  // hundreds of books, so this turns one readPath() per ROW into one per
+  // FOLDER.
+  struct FolderVerdict {
+    uint16_t folderId;
+    bool excluded;
+  };
+  std::vector<FolderVerdict> folderVerdicts;
+  bool rowIsExcluded(const library::ClixRecord& record);
+  void detectExcludedRows();
   void applyFilter();
   int rowCount() const;
   int rowFor(int entry) const;

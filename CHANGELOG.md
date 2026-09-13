@@ -3,7 +3,9 @@
 ### Added
 
 - Raindrop Sync (beta): syncs the article shelf published by a personal CrossDrop
-  companion server into `/Articles` as Markdown files the Library indexes.
+  companion server into `/Articles` as Markdown files. The Library leaves them
+  alone — a reading list of hundreds of articles would bury the books — and they
+  are read from the File Browser, where they stay.
   Enable it and paste the server URL + device token from the web portal
   settings; launch from the Home menu or Settings > System.
 

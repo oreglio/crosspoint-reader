@@ -245,7 +245,45 @@ void LibraryListActivity::onExit() {
 
 bool LibraryListActivity::openIndex() {
   index.close();
-  return index.open(library::libraryIndexPath());
+  if (!index.open(library::libraryIndexPath())) return false;
+  detectExcludedRows();
+  return true;
+}
+
+// Is this book one of Raindrop's articles? Answered from the folder, memoised
+// per folderId: readPath() rebuilds the path from the folder record, which is a
+// read we want once per folder and not once per book.
+bool LibraryListActivity::rowIsExcluded(const library::ClixRecord& record) {
+  for (const auto& verdict : folderVerdicts) {
+    if (verdict.folderId == record.folderId) return verdict.excluded;
+  }
+  std::string path;
+  bool excluded = false;
+  if (index.readPath(record, path)) {
+    constexpr size_t prefixLen = sizeof(ARTICLES_FOLDER) - 1;
+    // The folder itself or anything below it; "/ArticlesOfFaith.epub" is a book
+    // and must not match, hence the separator test rather than a bare prefix.
+    excluded = path.compare(0, prefixLen, ARTICLES_FOLDER) == 0 && (path.size() == prefixLen || path[prefixLen] == '/');
+  }
+  folderVerdicts.push_back(FolderVerdict{record.folderId, excluded});
+  return excluded;
+}
+
+// One pass, stopping at the first article: a card with no /Articles pays a walk
+// of its folders and then keeps the unfiltered shelf it has always had.
+void LibraryListActivity::detectExcludedRows() {
+  hasExcludedRows = false;
+  folderVerdicts.clear();
+  const int total = static_cast<int>(index.bookCount());
+  for (int ordinal = 0; ordinal < total; ordinal++) {
+    library::ClixRecord record{};
+    if (!index.readRecord(static_cast<uint16_t>(ordinal), record)) continue;
+    if (rowIsExcluded(record)) {
+      hasExcludedRows = true;
+      break;
+    }
+  }
+  if (hasExcludedRows) LOG_INF("LIB", "shelf excludes %s", ARTICLES_FOLDER);
 }
 
 bool LibraryListActivity::rebuildIndex() {
@@ -488,7 +526,9 @@ void LibraryListActivity::stepTab(const int direction) {
 }
 
 int LibraryListActivity::rowCount() const {
-  const bool filteredView = !query.empty() || sFavoritesView;
+  // Must name exactly the condition applyFilter() uses, or the shelf reports a
+  // count from one path and rows from the other.
+  const bool filteredView = !query.empty() || sFavoritesView || hasExcludedRows;
   return filteredView ? static_cast<int>(filtered.size()) : static_cast<int>(index.bookCount());
 }
 
@@ -501,7 +541,7 @@ int LibraryListActivity::listCount() const { return groupsCollapsed ? static_cas
 // Entry position on screen to row position in the sort order. Identity while
 // unfiltered, so the shelf costs nothing when nothing is typed.
 int LibraryListActivity::rowFor(const int entry) const {
-  if (query.empty() && !sFavoritesView) return entry;
+  if (query.empty() && !sFavoritesView && !hasExcludedRows) return entry;
   if (entry < 0 || entry >= static_cast<int>(filtered.size())) return 0;
   return filtered[entry];
 }
@@ -518,7 +558,7 @@ void LibraryListActivity::applyFilter() {
   // that reaches here has just invalidated it. Unfolding is not cosmetic: a
   // stale map would point rows at the wrong books.
   groupsCollapsed = false;
-  if (query.empty() && !sFavoritesView) return;
+  if (query.empty() && !sFavoritesView && !hasExcludedRows) return;
 
   // Folded the same way the stored folds were, articles removed included —
   // otherwise "the hobbit" searches for a word no record contains.
@@ -529,7 +569,10 @@ void LibraryListActivity::applyFilter() {
     const uint16_t ordinal = index.ordinalForRow(currentOrder(), static_cast<uint16_t>(row));
     library::ClixRecord record{};
     if (ordinal == 0xFFFF || !index.readRecord(ordinal, record)) continue;
-    // ★ narrows first, and composes with the query rather than replacing it:
+    // First, and before ★ reads a name: an article is not a book in any view,
+    // so no later test should have to consider one.
+    if (hasExcludedRows && rowIsExcluded(record)) continue;
+    // ★ narrows next, and composes with the query rather than replacing it:
     // searching within favorites is the natural reading of having both on.
     if (sFavoritesView) {
       std::string name;
