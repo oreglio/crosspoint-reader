@@ -820,15 +820,22 @@ void KOReaderSyncActivity::render(RenderLock&&) {
     // file's; the other two are the configured matching method and its
     // alternate.
     const char* remoteIdentity = remoteMatchedEmbedded ? "embedded" : matchMethodName(remoteMatchMethod);
-    char deviceStr[96];
+    // The id itself, not only its kind. Comparing it against what another
+    // reader computed is the only way to tell "this book is not on the server"
+    // from "it is there, under an id we never ask for". Twelve hex digits are
+    // 48 bits: enough to compare by eye, short enough to leave room for the
+    // device name.
+    char identityStr[112];
+    char shortHash[13] = {};
+    strncpy(shortHash, documentHash.c_str(), sizeof(shortHash) - 1);
     if (!remoteProgress.device.empty()) {
       char fromStr[64];
       snprintf(fromStr, sizeof(fromStr), tr(STR_DEVICE_FROM_FORMAT), remoteProgress.device.c_str());
-      snprintf(deviceStr, sizeof(deviceStr), "%s \u00b7 %s", fromStr, remoteIdentity);
+      snprintf(identityStr, sizeof(identityStr), "%s \u00b7 %s \u00b7 %s", fromStr, remoteIdentity, shortHash);
     } else {
-      snprintf(deviceStr, sizeof(deviceStr), "%s", remoteIdentity);
+      snprintf(identityStr, sizeof(identityStr), "%s \u00b7 %s", remoteIdentity, shortHash);
     }
-    renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 115, deviceStr);
+    renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 115, identityStr);
 
     // Local progress - chapter and page
     renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 150, tr(STR_LOCAL_LABEL), true);
