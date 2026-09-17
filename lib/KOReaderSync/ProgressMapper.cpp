@@ -841,6 +841,11 @@ std::optional<CrossPointPosition> ProgressMapper::fromRichPosition(const std::sh
 
   CrossPointPosition result{};
   result.spineIndex = rich.spineIndex;
+  // A rich position is CrossPoint's own (spine, page): both coordinates are
+  // real, whichever branch below lands the page — exact, LUT or page-space
+  // scaling. None of them goes through a byte percentage.
+  result.hasResolvedSpineIndex = true;
+  result.hasMappedPage = true;
 
   Section tempSection(epub, result.spineIndex, renderer);
   const auto cachedCount = tempSection.getCachedPageCount();
@@ -915,7 +920,10 @@ CrossPointPosition ProgressMapper::toCrossPoint(const std::shared_ptr<Epub>& epu
   const bool useAncestry = xpathStepCount > 0;
 
   if (xpathSpine >= 0 && xpathSpine < spineCount) {
+    // DocFragment[N] is spine item N-1 by construction, so this index is the
+    // remote reader's actual chapter rather than a guess from its percentage.
     result.spineIndex = xpathSpine;
+    result.hasResolvedSpineIndex = true;
   } else {
     for (int i = 0; i < spineCount; i++) {
       if (epub->getCumulativeSpineItemSize(i) >= targetBytes) {
@@ -997,6 +1005,9 @@ CrossPointPosition ProgressMapper::toCrossPoint(const std::shared_ptr<Epub>& epu
 
   result.pageNumber = std::max(
       0, std::min(static_cast<int>(intra * static_cast<float>(result.totalPages - 1) + 0.5f), result.totalPages - 1));
+  // resolvedIntra is exactly the question the flag asks: the fraction came from
+  // walking the XPath's own content, not from dividing byte offsets.
+  result.hasMappedPage = resolvedIntra;
   LOG_DBG("PM", "<- KO: %.2f%% %s -> spine=%d page=%d/%d", koPos.percentage * 100, mappedKoPos.xpath.c_str(),
           result.spineIndex, result.pageNumber, result.totalPages);
   return result;

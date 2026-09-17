@@ -22,6 +22,7 @@
 #include "KOReaderDocumentId.h"
 #include "KOReaderEmbeddedId.h"
 #include "MappedInputManager.h"
+#include "ProgressComparison.h"
 #include "ReaderUtils.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
@@ -474,27 +475,55 @@ void KOReaderSyncActivity::performSync() {
   }
 
   if (smartSyncEnabled()) {
-    static constexpr float SAME_PROGRESS_EPSILON = 0.001f;  // 0.1 percentage points
-    const float delta = localProgress.percentage - remoteProgress.percentage;
-    LOG_DBG("KOSync", "Smart decision: doc=%s local=%.6f remote=%.6f delta=%.6f remoteXpath=%s mapped=%d/%d",
-            documentHash.c_str(), localProgress.percentage, remoteProgress.percentage, delta,
-            remoteProgress.progress.c_str(), remotePosition.spineIndex, remotePosition.pageNumber);
-    if (std::fabs(delta) <= SAME_PROGRESS_EPSILON) {
-      completeAlreadySynced();
-      return;
+    // Which way to sync is decided on READING ORDER, not on percentages.
+    // The two engines paginate the same book differently — a byte-size model
+    // against CrossPoint's own layout — so a remote position can be a whole
+    // chapter ahead and still report the smaller percentage. Comparing the
+    // resolved spine and page first, and only falling back to percentages when
+    // neither side resolved, is upstream's rule (ProgressComparison.cpp,
+    // crosspoint/feat #3111), adopted here verbatim.
+    CrossPointPosition localPosition{};
+    localPosition.spineIndex = currentSpineIndex;
+    localPosition.pageNumber = currentPage;
+    localPosition.totalPages = totalPagesInSpine;
+    // The reader's own coordinates: resolved by definition, never estimated.
+    localPosition.hasResolvedSpineIndex = true;
+    localPosition.hasMappedPage = true;
+    if (currentParagraphIndex.has_value()) {
+      localPosition.paragraphIndex = *currentParagraphIndex;
+      localPosition.hasParagraphIndex = true;
     }
 
-    if (delta > 0) {
-      // Alternate hashes are only probes for newer remote state. Uploads stay
-      // on the upload identity — the embedded id when present, else the
-      // user's configured matching method — so its primary record heals.
-      documentHash = uploadHash;
-      performUpload();
-      return;
-    }
+    const ProgressComparison comparison =
+        compareProgress(localPosition, localProgress.percentage, remotePosition, remoteProgress.percentage);
+    LOG_DBG("KOSync",
+            "Smart decision: doc=%s verdict=%d local=%.6f(spine=%d page=%d) remote=%.6f(spine=%d page=%d res=%d/%d) "
+            "remoteXpath=%s",
+            documentHash.c_str(), static_cast<int>(comparison), localProgress.percentage, currentSpineIndex,
+            currentPage, remoteProgress.percentage, remotePosition.spineIndex, remotePosition.pageNumber,
+            remotePosition.hasResolvedSpineIndex, remotePosition.hasMappedPage, remoteProgress.progress.c_str());
 
-    saveProgressAndReturn(remotePosition);
-    return;
+    switch (comparison) {
+      case ProgressComparison::Synchronized:
+        completeAlreadySynced();
+        return;
+      case ProgressComparison::LocalAhead:
+        // Alternate hashes are only probes for newer remote state. Uploads stay
+        // on the upload identity — the embedded id when present, else the
+        // user's configured matching method — so its primary record heals.
+        documentHash = uploadHash;
+        performUpload();
+        return;
+      case ProgressComparison::RemoteAhead:
+        saveProgressAndReturn(remotePosition);
+        return;
+      case ProgressComparison::Unknown:
+        // Nothing resolved on either side and the percentages are not finite:
+        // there is no answer to guess at, so fall through and let the reader
+        // choose rather than picking a direction at random.
+        LOG_DBG("KOSync", "Smart sync cannot decide; falling back to the manual prompt");
+        break;
+    }
   }
   {
     RenderLock lock(*this);
