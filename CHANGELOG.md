@@ -57,6 +57,7 @@
 
 ### Fixed
 
+- When two readers have synced the same book under different document ids — an optimized copy here, the original on a phone — the shelf no longer picks between them by percentage. Both records are mapped into this reader's own chapters and pages first, and the one genuinely further along wins. The comparison screen now also names the identity that found the record, beside the device that wrote it, so a record from the wrong reader can be told from a record from the right one.
 - KOReader sync decides which way to sync from reading order rather than from percentages. The two engines paginate the same book differently, so a phone position a whole chapter ahead could report the smaller percentage and be ignored — progress simply never arrived, with nothing on screen to say why. The comparison now reads the chapter and page the remote position actually resolves to, and falls back to percentages only when neither side resolved. Books optimized on device keep syncing against their original file, unchanged.
 - The Library strip sits flush under the header. It was reserving its space from the device safe area while the header was drawn from the screen edge, so a bezel inset's worth of empty band stood between them.
 - The Library header reads `Library` rather than `Library · Title A-Z`. The direction was stated twice — the active tab already draws it as an arrow — and the longer title crowded the search action beside it.
