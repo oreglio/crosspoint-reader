@@ -1597,6 +1597,21 @@ In `src/SilentRestart.h`, add `TASK_SYNC = 9,` to the enum, a `case` to
 `isNetworkBootTargetValue`, and a term to the `static_assert` chain. Omitting the
 last two is the classic way to make the target silently unreachable.
 
+**You must also load the task store in the boot branch.** `src/main.cpp` no longer loads it
+unconditionally — that cost ~26 KB of internal RAM from boot on every device, including for
+users who never open Tasks, and `TaskListActivity` calls `TASK_STORE.ensureLoaded()` itself.
+Follow the `KOREADER_STORE` precedent a few lines below in the same function: load it only
+inside the branch that matches your boot target, e.g.
+
+```cpp
+  } else if (snapshotTarget == static_cast<uint32_t>(NetworkBootTarget::TASK_SYNC)) {
+    TASK_STORE.loadFromFile();
+  }
+```
+
+and re-add `#include "TaskStore.h"` to `main.cpp`, which was removed with the load. Without
+this the sync boots with an empty index and an empty secret, and will read as unpaired.
+
 - [ ] **Step 2: Implement the sync**
 
 The sequence, in order, each step with its reason:
