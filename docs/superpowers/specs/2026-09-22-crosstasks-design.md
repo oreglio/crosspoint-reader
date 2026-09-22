@@ -189,8 +189,14 @@ Only `title` remains an unbounded JSON string, capped at 200 bytes raw — at mo
 
 **Ops are applied before the diff is computed.** That single ordering choice is
 what makes the whole design clock-free: the device's own writes come back to it
-confirmed in the same response, conflicts resolve to "whatever the server holds
-after applying my ops", and nothing anywhere compares timestamps. The X4's RTC
+confirmed, conflicts resolve to "whatever the server holds after applying my
+ops", and nothing anywhere compares timestamps.
+
+The confirmation arrives within the same **sync**, not necessarily the same
+*page*: an op takes the highest `seq`, so a device more than one page behind
+receives its own write on a later page, after following `more` to the end. The
+device therefore clears its op queue on the first 2xx — the server has already
+applied them — and keeps paging. The X4's RTC
 drift is therefore irrelevant to sync correctness.
 
 ### Limits
