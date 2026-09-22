@@ -56,6 +56,8 @@ class TaskPairActivity final : public Activity {
   size_t codeLineCount = 0;
   // Vrai apres « changer » : l'ecran rappelle qu'il faut refaire l'appairage.
   bool renewed = false;
+  // Derniere ecriture du secret refusee par la carte.
+  bool writeFailed = false;
 
   std::vector<std::string> hintLines;
 
@@ -73,7 +75,9 @@ class TaskPairActivity final : public Activity {
   // Relit le secret stocke ; en tire un neuf s'il manque ou n'est pas
   // canonique (un secret non canonique ne passerait jamais l'en-tete Bearer).
   void loadOrCreateSecret();
-  void renewSecret();
+  // Tire, stocke et affiche un secret neuf. False si la carte a refuse
+  // l'ecriture : rien n'est alors affiche de nouveau.
+  bool renewSecret();
   // Ouvre la confirmation ; renewSecret() ne tourne que si elle est acceptee.
   void confirmRenew();
   void adoptSecret(const char* canonical);

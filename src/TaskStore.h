@@ -54,10 +54,15 @@ class TaskStore : public PersistableStore<TaskStore> {
   const std::vector<TaskRecord>& all() const { return records; }
   // Rend vraiment la memoire de l'index (jusqu'a 120 x 216 octets = ~26 Ko,
   // 7 % de la RAM d'un C3) et arme le prochain ensureLoaded() pour qu'il
-  // relise la carte. main.cpp charge ce store a chaque demarrage, donc sans
-  // cet appel les 26 Ko restaient residents toute la session, y compris
-  // pendant la lecture d'un livre. Seul TaskListActivity::onExit() l'appelle :
-  // c'est le seul detenteur d'indices dans ce vecteur.
+  // relise la carte. Seul TaskListActivity::onExit() l'appelle : c'est le seul
+  // detenteur d'indices dans ce vecteur.
+  //
+  // RIEN ne charge ce store au demarrage (main.cpp ne le touche pas, pour ne
+  // pas payer ces 26 Ko pendant la lecture). Un LECTEUR doit donc appeler
+  // ensureLoaded() lui-meme : hasSecret() et readSecret() ne le font pas, et
+  // sur un store jamais charge ils repondent « pas de secret » alors que la
+  // carte en contient un. C'est ainsi que l'ecran d'appairage desappairait
+  // l'appareil apres un redemarrage.
   //
   // ATTENTION aux ecrivains : toute methode qui appelle saveToFile()
   // reserialise `records`, donc ecrire dans un store decharge ecraserait
@@ -110,9 +115,14 @@ class TaskStore : public PersistableStore<TaskStore> {
   void commitStagedNotes() const;
   void discardStaged();
 
+  // Ne chargent PAS le store : l'appelant fait ensureLoaded() d'abord (voir
+  // unload()).
   bool hasSecret() const { return !secretObfuscated.empty(); }
   bool readSecret(char* out, size_t size) const;
-  void writeSecret(const char* secret);
+  // False si la carte a refuse l'ecriture ; le secret en RAM est alors remis a
+  // l'ancien, pour que RAM et carte disent la meme chose — sinon la session
+  // enverrait un secret qu'un redemarrage oublierait.
+  bool writeSecret(const char* secret);
   void clearSecret();
 
   // 'd' + 8 hex tires du generateur materiel : pas de table de correspondance

@@ -445,20 +445,33 @@ bool TaskStore::readSecret(char* out, size_t size) const {
   if (secretObfuscated.empty()) return false;
 
   obfuscation::DecodeStatus status = obfuscation::DecodeStatus::INVALID;
-  const std::string plaintext = obfuscation::deobfuscateFromBase64(secretObfuscated.c_str(), &status);
+  std::string plaintext = obfuscation::deobfuscateFromBase64(secretObfuscated.c_str(), &status);
   if (status != obfuscation::DecodeStatus::VALIDATED && status != obfuscation::DecodeStatus::LEGACY) {
     LOG_ERR(TAG, "Stored pairing secret failed to decode");
     return false;
   }
   std::snprintf(out, size, "%s", plaintext.c_str());
+  // Efface la copie en clair avant de la rendre au tas. Les tampons internes
+  // de deobfuscateFromBase64() ne sont pas atteignables d'ici.
+  std::fill(plaintext.begin(), plaintext.end(), '\0');
   return true;
 }
 
-void TaskStore::writeSecret(const char* secret) {
-  if (secret == nullptr) return;
+bool TaskStore::writeSecret(const char* secret) {
+  if (secret == nullptr) return false;
   ensureLoaded();  // meme raison que dans upsert()
-  secretObfuscated = obfuscation::obfuscateToBase64(secret).c_str();
-  saveToFile();
+  // Copie explicite pour pouvoir l'effacer : un const char* passe a
+  // obfuscateToBase64() creerait un temporaire en clair hors de portee.
+  std::string plaintext(secret);
+  const std::string previous = secretObfuscated;
+  secretObfuscated = obfuscation::obfuscateToBase64(plaintext).c_str();
+  std::fill(plaintext.begin(), plaintext.end(), '\0');
+  if (!saveToFile()) {
+    LOG_ERR(TAG, "Could not save the pairing secret; keeping the previous one");
+    secretObfuscated = previous;
+    return false;
+  }
+  return true;
 }
 
 void TaskStore::clearSecret() {

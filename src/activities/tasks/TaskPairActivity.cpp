@@ -19,6 +19,7 @@
 #include "util/QrUtils.h"
 
 #if !defined(SIMULATOR)
+#include <bootloader_random.h>
 #include <esp_system.h>
 #endif
 
@@ -31,10 +32,20 @@ constexpr int kCodeFontId = LEXENDDECA_16_FONT_ID;
 constexpr int kHintFontId = UI_10_FONT_ID;
 constexpr int kBlockGap = 8;
 
-// Quatre appels a esp_random(), recopies par memcpy : c'est la source deja
-// eprouvee ici (TaskStore::newDeviceId), et memcpy evite de convertir un
-// uint8_t* non aligne en uint32_t*.
+// Quatre appels a esp_random(), recopies par memcpy (pas de cast d'un
+// uint8_t* non aligne en uint32_t*).
+//
+// esp_random() ne rend de l'alea vrai que radio allumee (esp_random.h) ; cet
+// ecran tourne radio eteinte. bootloader_random_enable() branche le bruit du
+// SAR ADC sur le generateur le temps des quatre tirages, pas plus. Pendant
+// cette fenetre, AUCUNE lecture ADC ne doit tourner (bootloader_random.h) :
+// les boutons des X3/X4 (echelle ADC) et la batterie sont lus par la boucle
+// principale — la tache courante — et par les themes pendant un rendu, que
+// l'appelant exclut en tenant le verrou de rendu.
 void drawSecretBytes(uint8_t (&bytes)[TASK_SECRET_BYTES]) {
+#if !defined(SIMULATOR)
+  bootloader_random_enable();
+#endif
   for (size_t i = 0; i < TASK_SECRET_BYTES; i += sizeof(uint32_t)) {
 #if !defined(SIMULATOR)
     const uint32_t value = esp_random();
@@ -44,6 +55,9 @@ void drawSecretBytes(uint8_t (&bytes)[TASK_SECRET_BYTES]) {
 #endif
     std::memcpy(bytes + i, &value, sizeof(value));
   }
+#if !defined(SIMULATOR)
+  bootloader_random_disable();
+#endif
 }
 }  // namespace
 
@@ -54,6 +68,11 @@ void TaskPairActivity::onEnter() {
   // reecrit tout index.json, et la tache de rendu n'a rien a peindre avant le
   // requestUpdate() final de toute facon.
   Activity::onEnter();
+  // AVANT toute lecture du secret : rien ne charge ce store au demarrage, et
+  // hasSecret()/readSecret() ne le chargent pas. Sans cet appel, apres un
+  // redemarrage, l'ecran voyait un secret vide, en tirait un neuf et ecrasait
+  // l'appairage existant en silence. Hors du verrou : lecture SD.
+  TASK_STORE.ensureLoaded();
   {
     RenderLock lock(*this);
     computeLayout();
@@ -65,8 +84,11 @@ void TaskPairActivity::onEnter() {
 }
 
 void TaskPairActivity::onExit() {
-  // Ne pas laisser le secret en clair dans un bloc du tas libere. qrPayload
-  // est efface avant d'etre rendu au tas pour la meme raison.
+  // Efface les copies en clair que cet ecran detient : secret, lignes du code
+  // et qrPayload (avant de le rendre au tas). TaskStore efface les siennes
+  // (readSecret/writeSecret). NE sont PAS effaces : les tampons internes de
+  // l'obfuscation et ceux de QrUtils::drawQrCode (la matrice du QR encode le
+  // secret), liberes sans remise a zero hors de portee de cet ecran.
   std::memset(secret, 0, sizeof(secret));
   std::memset(codeLines, 0, sizeof(codeLines));
   std::fill(qrPayload.begin(), qrPayload.end(), '\0');
@@ -88,26 +110,41 @@ void TaskPairActivity::loadOrCreateSecret() {
     RenderLock lock(*this);
     adoptSecret(stored);
   } else {
-    if (TASK_STORE.hasSecret()) LOG_ERR(TAG, "Stored pairing secret is unusable; drawing a new one");
-    renewSecret();
+    if (TASK_STORE.hasSecret()) {
+      LOG_ERR(TAG, "Stored pairing secret is unusable; drawing a new one");
+    } else {
+      LOG_INF(TAG, "No pairing secret yet; drawing the first one");
+    }
+    if (!renewSecret()) {
+      RenderLock lock(*this);
+      writeFailed = true;
+    }
   }
   std::memset(stored, 0, sizeof(stored));
 }
 
-void TaskPairActivity::renewSecret() {
+bool TaskPairActivity::renewSecret() {
   uint8_t bytes[TASK_SECRET_BYTES];
-  drawSecretBytes(bytes);
+  {
+    // Exclut les lectures ADC d'un rendu pendant la fenetre d'entropie.
+    RenderLock lock(*this);
+    drawSecretBytes(bytes);
+  }
   char fresh[TASK_SECRET_LEN + 1];
   taskSecretEncode(bytes, fresh);
   std::memset(bytes, 0, sizeof(bytes));
 
-  // L'ecriture SD hors du verrou : render() ne lit pas le store.
-  TASK_STORE.writeSecret(fresh);
-  LOG_INF(TAG, "New pairing secret stored");
-
-  RenderLock lock(*this);
-  adoptSecret(fresh);
+  // L'ecriture SD hors du verrou : render() ne lit pas le store. Sur echec,
+  // le store a garde l'ancien secret : le nouveau n'est PAS affiche, sinon
+  // l'utilisateur appairerait un code qu'un redemarrage oublierait.
+  const bool saved = TASK_STORE.writeSecret(fresh);
+  if (saved) {
+    LOG_INF(TAG, "New pairing secret stored");
+    RenderLock lock(*this);
+    adoptSecret(fresh);
+  }
   std::memset(fresh, 0, sizeof(fresh));
+  return saved;
 }
 
 void TaskPairActivity::adoptSecret(const char* canonical) {
@@ -204,9 +241,10 @@ void TaskPairActivity::confirmRenew() {
   }
   startActivityForResult(std::move(confirmation), [this](const ActivityResult& result) {
     if (!result.isCancelled) {
-      renewSecret();
+      const bool saved = renewSecret();
       RenderLock lock(*this);
-      renewed = true;
+      renewed = saved;
+      writeFailed = !saved;
     }
     // Pas de onEnter() au depilement : sans cet appel la fenetre de
     // confirmation resterait peinte par-dessus l'ecran.
@@ -253,7 +291,10 @@ void TaskPairActivity::render(RenderLock&&) {
     y += renderer.getLineHeight(kCodeFontId);
   }
 
-  if (renewed) UITheme::drawCenteredText(renderer, content, SMALL_FONT_ID, statusTop, tr(STR_TASK_PAIR_RENEWED));
+  // L'echec d'ecriture prime : le code affiche est alors l'ancien, toujours
+  // valide, ou aucun au premier appairage.
+  const char* status = writeFailed ? tr(STR_TASK_TICK_FAILED) : (renewed ? tr(STR_TASK_PAIR_RENEWED) : nullptr);
+  if (status != nullptr) UITheme::drawCenteredText(renderer, content, SMALL_FONT_ID, statusTop, status);
 
   // Mots seuls, sans glyphe decoratif : un glyphe absent des polices integrees
   // est saute en silence (voir .claude/CONTEXT.md).

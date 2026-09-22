@@ -27,7 +27,7 @@ namespace {
 
 using Button = MappedInputManager::Button;
 
-enum class Act : uint8_t { OpenList, Tap, SeedAllDone, SeedEmpty, OpenPair, Finish };
+enum class Act : uint8_t { ColdPair, OpenList, Tap, SeedAllDone, SeedEmpty, OpenPair, Finish };
 
 struct TourStep {
   const char* name;
@@ -40,6 +40,10 @@ struct TourStep {
 // capture tombe a kStartMs + i * kPeriodMs + kShotOffsetMs. Toute etape
 // ajoutee ici doit l'etre la-bas aussi, sinon les noms de fichiers glissent.
 constexpr TourStep kSteps[] = {
+    // Premiere etape, avant toute visite de la liste : l'ecran d'appairage
+    // s'ouvre sur un store jamais charge, comme apres un redemarrage. Il doit
+    // montrer le secret seme par le script (SEEDED_SECRET), pas en tirer un.
+    {"00-pair-cold-boot", Act::ColdPair, Button::Confirm},
     {"01-list", Act::OpenList, Button::Confirm},
     {"move-down", Act::Tap, Button::Down},
     {"02-ticked-in-place", Act::Tap, Button::Confirm},
@@ -146,12 +150,16 @@ void runSimulatorTasksTourTick() {
     tapStage = 0;
     const TourStep& step = kSteps[index];
     LOG_INF("TOUR", "step %u %s", static_cast<unsigned>(index), step.name);
+    if (index == 0) {
+      applyRequestedLanguage();
+      applyRequestedTheme();
+    }
     switch (step.act) {
+      case Act::ColdPair:
+      case Act::OpenPair:
+        activityManager.replaceActivity(std::make_unique<TaskPairActivity>(renderer, mappedInputManager));
+        break;
       case Act::OpenList:
-        if (index == 0) {
-          applyRequestedLanguage();
-          applyRequestedTheme();
-        }
         openList();
         break;
       case Act::Tap:
@@ -165,9 +173,6 @@ void runSimulatorTasksTourTick() {
       case Act::SeedEmpty:
         TASK_STORE.replaceAll({});
         openList();
-        break;
-      case Act::OpenPair:
-        activityManager.replaceActivity(std::make_unique<TaskPairActivity>(renderer, mappedInputManager));
         break;
       case Act::Finish:
         LOG_INF("TOUR", "tour complete");

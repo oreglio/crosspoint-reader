@@ -125,3 +125,16 @@ TEST(TaskSecretTest, GroupingRefusesANonCanonicalInput) {
   EXPECT_FALSE(taskSecretGroup("hwx1rqmv0bbmctq1y31mq798em", grouped));
   EXPECT_STREQ(grouped, "");
 }
+
+// Le tampon de relecture de l'ecran d'appairage est remis a zero puis rempli
+// par readSecret() : un secret tronque y laisse des NUL jusqu'au bout. C'est
+// la garde « s[i] == '\0' » qui le rejette — pas le hasard d'un octet non nul
+// lu au-dela d'un litteral.
+TEST(TaskSecretTest, IsCanonicalRejectsATruncatedValueInAZeroedBuffer) {
+  char stored[TASK_SECRET_LEN + 2] = {};
+  std::memcpy(stored, "HWX1RQMV0BBMCTQ1Y31MQ798E", TASK_SECRET_LEN - 1);
+  EXPECT_FALSE(taskSecretIsCanonical(stored));
+
+  char empty[TASK_SECRET_LEN + 2] = {};
+  EXPECT_FALSE(taskSecretIsCanonical(empty));
+}

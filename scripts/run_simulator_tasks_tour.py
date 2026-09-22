@@ -13,6 +13,7 @@ kSteps / kStartMs / kPeriodMs dans SimulatorTasksTour.cpp.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import shutil
@@ -26,7 +27,7 @@ PROGRAM = ROOT / ".pio" / "build" / "simulator" / "program"
 
 START_MS, PERIOD_MS, SHOT_OFFSET_MS = 3500, 1300, 1000
 STEPS = [
-    "01-list", "move-down", "02-ticked-in-place", "move-up", "03-done-row-selected",
+    "00-pair-cold-boot", "01-list", "move-down", "02-ticked-in-place", "move-up", "03-done-row-selected",
     "04-done-expanded", "reopen", "05-detail-with-note", "back-to-list",
     "06-all-done", "07-empty", "08-add-keyboard", "09-pair", "10-pair-confirm",
     "11-pair-cancelled", "ask-again", "pick-confirm", "12-pair-renewed", "end",
@@ -53,10 +54,29 @@ TASKS = [
 ]
 
 
+# Secret d'appairage deja stocke : l'etape 00 ouvre l'ecran d'appairage AVANT
+# toute visite de la liste, donc sur un store jamais charge, comme apres un
+# redemarrage. Le code affiche doit etre celui-ci ; tout autre code veut dire
+# que l'ecran a ecrase l'appairage existant. Forme canonique, reconnaissable.
+SEEDED_SECRET = "5EEDC0DE5EEDC0DE5EEDC0DE5E"
+# MAC factice du stub esp_mac.h du simulateur : la cle d'ObfuscationUtils.
+SIM_HW_KEY = bytes([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01])
+
+
+def obfuscate(plaintext: str) -> str:
+    """Meme format que obfuscation::obfuscateToBase64 (lib/Serialization/ObfuscationUtils.cpp)."""
+    h = 2166136261
+    for b in SIM_HW_KEY + plaintext.encode():
+        h = ((h ^ b) * 16777619) & 0xFFFFFFFF
+    payload = b"CPV1" + h.to_bytes(4, "little") + plaintext.encode()
+    xored = bytes(c ^ SIM_HW_KEY[i % len(SIM_HW_KEY)] for i, c in enumerate(payload))
+    return base64.b64encode(xored).decode()
+
+
 def seed(fs: Path) -> None:
     tasks = fs / ".crosspoint" / "tasks"
     (tasks / "n").mkdir(parents=True, exist_ok=True)
-    (tasks / "index.json").write_text(json.dumps({"schema": 1, "secret": "", "tasks": TASKS}))
+    (tasks / "index.json").write_text(json.dumps({"schema": 1, "secret": obfuscate(SEEDED_SECRET), "tasks": TASKS}))
     (tasks / "n" / f"{NOTE_ID}.txt").write_text(NOTE)
 
 
