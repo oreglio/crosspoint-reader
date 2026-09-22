@@ -205,16 +205,16 @@ void TaskListActivity::buildRows(UiScreen& screen) {
       // re-derive la pagination que ListNav possede deja). Deux paliers, pas
       // trois : la priorite basse ne se distingue que par sa place en fin de
       // tri (taskOrderBefore), pas par un style — l'exception (haute) se
-      // marque, pas la regle.
-      item.emphasis = (rec.priority == TASK_PRIORITY_HIGH);
-      // Faite ou cochee pendant cette visite (tickedHere maintient rec.done
-      // vrai dans les deux cas) : attenuee plutot que barree. list() ne rend
-      // que effectiveTop/drawnRows agreges, jamais une position Y par ligne,
-      // donc superposer un trait de barre demanderait de recalculer cette
-      // geometrie nous-memes -- ce que StateDisabled evite.
-      if (rec.done) {
-        item.state = fui::StateDisabled;
-      }
+      // marque, pas la regle. Une tache faite (ou cochee pendant cette
+      // visite) cesse de crier : le gras ne vaut que pour une tache ouverte.
+      item.emphasis = (rec.priority == TASK_PRIORITY_HIGH) && !rec.done;
+      // Pas de fui::StateDisabled sur une tache faite : BoxStyle::resolve()
+      // (FreeInkUICore.h:606-615) teste Disabled AVANT Selected, donc une ligne
+      // faite ET selectionnee prend le style "disabled", sans fond de
+      // selection — le curseur disparaissait apres chaque coche, sur tous les
+      // themes (visite simulateur, 02-ticked-in-place). Et sur ces themes 1 bit
+      // le style disabled n'attenue rien de visible. C'est donc le disque plein
+      // qui dit "faite", et la perte du gras pour une priorite haute.
     }
     winItems.push_back(item);
     ++built;
@@ -273,9 +273,10 @@ void TaskListActivity::toggleDoneSection() {
   showDone = !showDone;
   dirty = true;
   rebuildOrder();
-  // La ligne "N faites" suit les taches ouvertes, que la bascule ne touche
-  // pas : son indice ne bouge pas et la selection y reste. Le clamp couvre
-  // une selection posee plus bas, dans la section qu'on vient de replier.
+  // Ne s'execute que selection SUR la ligne "N faites" (activateIndex()).
+  // Cette ligne suit les taches ouvertes, que la bascule ne touche pas : son
+  // indice ne bouge pas et la selection y reste. Le clamp n'est qu'une garde
+  // de bornes, pas un cas attendu.
   const int next = taskListClampSelection(rows, activeNav().selected);
   if (next >= 0) moveSelectionTo(next);
 }
@@ -335,7 +336,12 @@ void TaskListActivity::toggleAt(int index) {
 
   dirty = true;
   rebuildOrder();
-  const int next = taskListClampSelection(rows, activeNav().selected);
+  // La selection suit la TACHE, pas l'indice. Decocher une tache de la section
+  // depliee la fait remonter parmi les ouvertes, et "N faites" glisse a son
+  // ancien indice : garder l'indice ferait replier la section au Confirmer
+  // suivant, au lieu d'agir sur la tache qu'on vient de toucher.
+  const int moved = rowOfTask(id.c_str());
+  const int next = moved >= 0 ? moved : taskListClampSelection(rows, activeNav().selected);
   if (next >= 0) moveSelectionTo(next);
 }
 
@@ -403,9 +409,12 @@ void TaskListActivity::openDetailAt(int index) {
 
                            dirty = true;
                            rebuildOrder();
-                           // La tache a pu changer de place (priorite) ou quitter l'ecran : sans
-                           // cette renormalisation, `selected` designerait une ligne disparue.
-                           const int next = taskListClampSelection(rows, activeNav().selected);
+                           // La tache a pu changer de place (priorite, decochage) : la selection
+                           // la suit, comme dans toggleAt(). Si elle a quitte l'ecran (cochee
+                           // alors que deja faite, section repliee), le clamp garde un indice
+                           // valide.
+                           const int moved = rowOfTask(id.c_str());
+                           const int next = moved >= 0 ? moved : taskListClampSelection(rows, activeNav().selected);
                            if (next >= 0) moveSelectionTo(next);
                            requestUpdate();
                          });
@@ -425,6 +434,10 @@ void TaskListActivity::createTask() {
     requestUpdate();
     return;
   }
+
+  // Un toucher sur "+ Ajouter une tache" quitte l'ecran : sans cela un flash de
+  // toucher residuel griserait la ligne 0 au retour (UiListActivity.h:41-43).
+  app.clearTapFlash();
 
   // minLength=1 : c'est le clavier qui refuse un titre vide, comme pour la
   // modification d'un titre existant (TaskDetailActivity::editTitle()).
@@ -543,20 +556,20 @@ void TaskListActivity::drawChrome() {
   // ("il y a 2h") demanderait un champ que rien n'ecrit encore -- voir le
   // rapport. Elle sert aussi de surface d'erreur pour une coche refusee : ce
   // depot n'a pas de toast reutilisable hors du lecteur, et cette ligne est
-  // deja peinte a chaque rendu. Enfin elle porte l'etat "aucune tache" /
-  // "tout est fait", que la liste ne peut plus afficher en son centre puisqu'
-  // elle n'est jamais vide (ligne d'ajout, ligne "N faites"). Ces deux-la se
-  // DEDUISENT des compteurs a chaque rendu : ce ne sont pas des evenements,
-  // donc pas des valeurs de StatusNotice, qu'une coche remettrait a None. Une
-  // erreur passe devant : c'est elle qui demande une action.
-  const bool indexEmpty = openCount == 0 && doneCount == 0;
+  // deja peinte a chaque rendu.
+  //
+  // Priorite : erreur > appairage requis > "tout est fait" > "a jour". Une
+  // erreur demande une action immediate ; l'appairage aussi, et rien d'autre
+  // a l'ecran ne le dit. "Tout est fait" se DEDUIT des compteurs a chaque
+  // rendu — ce n'est pas un evenement, donc pas une valeur de StatusNotice,
+  // qu'une coche remettrait a None. Un index vide n'a pas de message propre :
+  // la ligne "+ Ajouter une tache" le dit deja.
   const bool allDone = openCount == 0 && doneCount > 0;
   const char* status = notice == StatusNotice::ListFull      ? tr(STR_TASK_LIST_FULL)
                        : notice == StatusNotice::WriteFailed ? tr(STR_TASK_TICK_FAILED)
-                       : indexEmpty                          ? tr(STR_TASK_EMPTY)
+                       : !TASK_STORE.hasSecret()             ? tr(STR_TASK_PAIRING_REQUIRED)
                        : allDone                             ? tr(STR_TASK_ALL_DONE)
-                       : TASK_STORE.hasSecret()              ? tr(STR_TASK_UP_TO_DATE)
-                                                             : tr(STR_TASK_PAIRING_REQUIRED);
+                                                             : tr(STR_TASK_UP_TO_DATE);
   const Rect subHeader{0, header.y + header.height, renderer.getScreenWidth(), metrics.tabBarHeight};
   GUI.drawSubHeader(renderer, subHeader, "", status);
 }
@@ -565,7 +578,9 @@ void TaskListActivity::drawFooter() {
   // Confirmer dit ce qu'il fera sur la ligne selectionnee ; Droite ne s'affiche
   // que sur une tache, seule ligne qui a un detail (une case vide est effacee
   // par drawButtonHints plutot que laissee a un libelle qui ne ferait rien).
-  // Gauche dit toujours "ajouter". Tous mesures a moins de 80 px en
+  // Gauche dit "ajouter", sauf sur la ligne d'ajout elle-meme, ou Confirmer le
+  // dit deja : deux fois le meme libelle se lisait comme un bogue (Gauche
+  // ajoute quand meme si on l'appuie). Tous mesures a moins de 80 px en
   // inter_8_regular, la case du pire theme (.claude/CONTEXT.md).
   const int selected = activeNav().selected;
   const TaskRowKind kind = selected >= 0 && selected < static_cast<int>(rows.size())
@@ -573,14 +588,16 @@ void TaskListActivity::drawFooter() {
                                : TaskRowKind::Task;
   const char* confirmLabel = tr(STR_TASK_TICK);
   const char* rightLabel = tr(STR_TASK_DETAIL);
+  const char* leftLabel = tr(STR_TASK_NEW_SHORT);
   if (kind == TaskRowKind::DoneSection) {
     confirmLabel = showDone ? tr(STR_TASK_COLLAPSE) : tr(STR_TASK_EXPAND);
     rightLabel = "";
   } else if (kind == TaskRowKind::AddTask) {
     confirmLabel = tr(STR_TASK_NEW_SHORT);
+    leftLabel = "";
     rightLabel = "";
   }
   const auto labels =
-      mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), confirmLabel, tr(STR_TASK_NEW_SHORT), rightLabel);
+      mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), confirmLabel, leftLabel, rightLabel);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }

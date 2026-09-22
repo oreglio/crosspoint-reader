@@ -230,6 +230,12 @@ TEST(TaskListClampSelection, ClampsOutOfRangeIndex) {
   std::vector<TaskListRow> rows = {{TaskRowKind::Task, 0}, {TaskRowKind::Task, 1}};
   EXPECT_EQ(taskListClampSelection(rows, 99), 1);
   EXPECT_EQ(taskListClampSelection(rows, -5), 0);
+  // La frontiere qui compte vraiment : une liste qui raccourcit d'une ligne
+  // sous une selection posee sur sa derniere ligne laisse selected == size().
+  EXPECT_EQ(taskListClampSelection(rows, 2), 1);
+
+  std::vector<TaskListRow> addOnly = {{TaskRowKind::AddTask, -1}};
+  EXPECT_EQ(taskListClampSelection(addOnly, 1), 0);
 }
 
 TEST(TaskListClampSelection, StaysOnTheDoneRow) {
@@ -245,9 +251,11 @@ TEST(TaskListClampSelection, StaysOnTheDoneRow) {
 }
 
 TEST(TaskListClampSelection, AStaleIndexPastTheEndLandsOnTheLastRowWhateverItsKind) {
-  // Repli d'une section de trois taches alors que la selection etait sur la
-  // derniere d'entre elles : la liste retombe a deux lignes, et la selection
-  // doit atterrir sur "N faites", la derniere, et non chercher une tache.
+  // Garde de bornes pure, sans scenario d'ecran derriere : un indice perime
+  // au-dela de la fin atterrit sur la derniere ligne telle qu'elle est — ici
+  // "N faites" ou la ligne d'ajout — sans chercher une tache. (Le repli de la
+  // section ne produit pas ce cas : il ne s'execute que selection sur
+  // "N faites", dont l'indice ne bouge pas.)
   std::vector<TaskListRow> rows = {{TaskRowKind::Task, 0}, {TaskRowKind::DoneSection, -1}};
   EXPECT_EQ(taskListClampSelection(rows, 4), 1);
 
