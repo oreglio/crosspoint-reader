@@ -1629,7 +1629,13 @@ git commit -m "feat(tasks): pair by showing a device-generated secret as a QR"
 **Files:**
 - Create: `src/activities/tasks/TaskSyncActivity.h`, `.cpp`
 - Modify: `src/SilentRestart.h` (add `TASK_SYNC = 9` and its `static_assert` term)
-- Modify: `src/main.cpp` (route the boot target)
+- Modify: `src/main.cpp` (route the boot target, and load the task store in that branch)
+- Modify: `src/CrossPointSettings.h`, `src/SettingsList.h`, `src/activities/settings/SettingsActivity.cpp`
+  (`taskEnabled`, `taskServerUrl`, and the `TaskSync` action)
+
+**This task owns the settings fields.** The plan originally added `taskServerUrl` in Task 10 while
+this task POSTs to it, so this task could not have compiled; and a setting persists through its
+`SettingsList` registration, so the field and its row cannot be split. Mirror Raindrop's block.
 
 **Interfaces:**
 - Consumes: `TaskSyncReader` (Task 2), `TaskOpQueue` (Task 3), `TaskStore` (Task 4),
@@ -1728,10 +1734,13 @@ git commit -m "feat(tasks): manual two-way sync from a minimal network boot"
 
 ---
 
-### Task 10: Settings, i18n, changelog, docs
+### Task 10: i18n, changelog, docs
+
+The settings fields and rows moved to Task 9 (sync) and Task 8 (pairing), each the task that needs
+them to be reachable. This task no longer touches `CrossPointSettings.h` or `SettingsList.h`; skip
+Step 1 below and verify instead that both tasks' rows exist and are gated on `taskEnabled`.
 
 **Files:**
-- Modify: `src/CrossPointSettings.h` (two fields), `src/SettingsList.h`
 - Modify: `lib/I18n/translations/english.yaml`, `lib/I18n/translations/french.yaml`
 - Modify: `CHANGELOG.md`
 - Create: `docs/crosstasks.md`
