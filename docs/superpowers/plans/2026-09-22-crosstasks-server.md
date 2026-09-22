@@ -251,7 +251,7 @@ Expected: 7 tests pass, no type errors.
 
 ```bash
 git add src/taskDb.ts test/taskDb.test.ts
-git commit -m "feat(task): tasks table with a monotonic diff cursor"
+git commit -m "feat(tasks): tasks table with a monotonic diff cursor"
 ```
 
 ---
@@ -259,14 +259,20 @@ git commit -m "feat(task): tasks table with a monotonic diff cursor"
 ### Task 2: Pairing secrets
 
 **Files:**
-- Modify: `src/taskDb.ts` (add three methods)
+- Modify: `src/taskDb.ts` (add the pairing methods)
+- Create: `src/taskAuth.ts`
 - Modify: `test/taskDb.test.ts` (add one describe block)
 
 **Interfaces:**
 - Consumes: `TaskDb` from Task 1.
 - Produces: `TaskDb.setPairing(secretHashHex: string, label: string, pairedAtIso: string): void`,
   `TaskDb.getPairing(): { hash: string; label: string; paired_at: string; last_sync: string | null } | null`,
-  `TaskDb.clearPairing(): void`, `TaskDb.touchLastSync(iso: string): void`.
+  `TaskDb.clearPairing(): void`, `TaskDb.touchLastSync(iso: string): void`,
+  and `hashSecret(s: string): string` (hex sha256) from the new `src/taskAuth.ts`.
+
+`hashSecret` lives here, not beside the session helpers, because it is how the
+pairing secret is *stored* — Task 4 needs it to authenticate the device, long
+before Task 5 adds browser sessions to the same file.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -289,8 +295,14 @@ describe('appairage', () => {
     db.setPairing('b'.repeat(64), 'Deux', NOW);
     expect(db.getPairing()!.label).toBe('Deux');
   });
+
+  it('hashSecret est un sha256 hex stable', () => {
+    expect(hashSecret('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  });
 });
 ```
+
+Add `import { hashSecret } from '../src/taskAuth.js';` to the top of the file.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -334,16 +346,27 @@ Add these methods to `class TaskDb`:
   }
 ```
 
+Create `src/taskAuth.ts`:
+
+```ts
+import { createHash } from 'node:crypto';
+
+/** Le secret d'appairage n'est jamais stocke en clair : seul son sha256 l'est. */
+export function hashSecret(s: string): string {
+  return createHash('sha256').update(s, 'utf8').digest('hex');
+}
+```
+
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run test/taskDb.test.ts && npm run typecheck`
-Expected: 9 tests pass.
+Expected: 10 tests pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/taskDb.ts test/taskDb.test.ts
-git commit -m "feat(task): store the paired device secret as a sha256 hash"
+git add src/taskDb.ts src/taskAuth.ts test/taskDb.test.ts
+git commit -m "feat(tasks): store the paired device secret as a sha256 hash"
 ```
 
 ---
@@ -507,7 +530,7 @@ Expected: 7 tests pass.
 
 ```bash
 git add src/taskOps.ts test/taskOps.test.ts
-git commit -m "feat(task): apply device ops before the diff, rejecting per-op"
+git commit -m "feat(tasks): apply device ops before the diff, rejecting per-op"
 ```
 
 ---
@@ -517,14 +540,20 @@ git commit -m "feat(task): apply device ops before the diff, rejecting per-op"
 **Files:**
 - Create: `src/taskApi.ts`
 - Create: `test/taskApi.test.ts`
-- Modify: `src/api.ts` (one call to register the routes)
-- Modify: `src/config.ts` (one optional field)
+- Modify: `src/api.ts` (register the routes, and exempt them from the article bearer hook)
 
 **Interfaces:**
-- Consumes: `TaskDb` (Tasks 1–2), `applyOps` / `MAX_ACTIVE` (Task 3), `Config`.
+- Consumes: `TaskDb` (Tasks 1–2), `hashSecret` (Task 2), `applyOps` / `MAX_ACTIVE` (Task 3), `Config`.
 - Produces: `registerTaskRoutes(app: FastifyInstance, tasks: TaskDb, cfg: Config): void`,
   serving `POST /api/v1/tasks/sync`. Exports `encodeCursor(seq: number): string`
   and `decodeTaskCursor(raw: string | undefined): number | null` for the web module.
+
+**Authentication — read this before the tests.** These routes do **not** use the
+article pipeline's `DEVICE_TOKEN`. A reader authenticates with the secret it
+generated at pairing, and the server compares `sha256(bearer)` against the hash
+stored by `setPairing`. So `registerTaskRoutes` installs its own `onRequest`
+hook scoped to `/api/v1/tasks/`, and `src/api.ts` exempts that prefix from the
+existing global hook. An unpaired server answers 401 to every task route.
 
 **Framing contract (this is the interface the firmware implements):** the
 response is `application/x-ndjson`. Line 1 is the header. Then, per task, one
@@ -545,15 +574,18 @@ import { buildServer } from '../src/api.js';
 import { loadConfig } from '../src/config.js';
 import { Db } from '../src/db.js';
 import { TaskDb } from '../src/taskDb.js';
+import { hashSecret } from '../src/taskAuth.js';
 
-const TOKEN = 'a'.repeat(48);
-const AUTH = { authorization: `Bearer ${TOKEN}` };
+const TOKEN = 'a'.repeat(48);                 // jeton des articles, PAS celui des taches
+const SECRET = 'K7M2P9XQ4VTB1234567890ABCD';   // secret d'appairage, 26 caracteres
+const AUTH = { authorization: `Bearer ${SECRET}` };
 const NOW = '2026-09-22T09:00:00.000Z';
 let db: Db; let tasks: TaskDb; let cfg: ReturnType<typeof loadConfig>;
 
 beforeEach(() => {
   db = new Db(':memory:');
   tasks = new TaskDb(new Database(':memory:'));
+  tasks.setPairing(hashSecret(SECRET), 'Xteink X4', NOW);
   cfg = loadConfig({ RAINDROP_TOKEN: 't', DEVICE_TOKEN: TOKEN, DOMAIN: 'd.fr', DATA_DIR: mkdtempSync(join(tmpdir(), 'crossdrop-')) });
 });
 
@@ -578,10 +610,24 @@ async function sync(body: object) {
   return app.inject({ method: 'POST', url: '/api/v1/tasks/sync', headers: AUTH, payload: body });
 }
 
-describe('task/sync', () => {
+describe('tasks/sync', () => {
   it('401 sans jeton', async () => {
     const app = await buildServer(db, cfg, { tasks });
     const res = await app.inject({ method: 'POST', url: '/api/v1/tasks/sync', payload: { schema: 1 } });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('401 avec le jeton des articles : il n’ouvre pas les routes taches', async () => {
+    const app = await buildServer(db, cfg, { tasks });
+    const res = await app.inject({ method: 'POST', url: '/api/v1/tasks/sync',
+      headers: { authorization: `Bearer ${TOKEN}` }, payload: { schema: 1 } });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('401 quand aucune liseuse n’est appairée', async () => {
+    tasks.clearPairing();
+    const app = await buildServer(db, cfg, { tasks });
+    const res = await app.inject({ method: 'POST', url: '/api/v1/tasks/sync', headers: AUTH, payload: { schema: 1 } });
     expect(res.statusCode).toBe(401);
   });
 
@@ -667,9 +713,11 @@ Expected: FAIL — `Cannot find module '../src/taskDb.js'` is resolved, but `bui
 Create `src/taskApi.ts`:
 
 ```ts
+import { timingSafeEqual } from 'node:crypto';
 import { Ajv } from 'ajv';
 import type { FastifyInstance } from 'fastify';
 import type { Config } from './config.js';
+import { hashSecret } from './taskAuth.js';
 import type { TaskDb, TaskRow } from './taskDb.js';
 import { applyOps } from './taskOps.js';
 
@@ -694,6 +742,21 @@ function metaLine(r: TaskRow): string {
 }
 
 export function registerTaskRoutes(app: FastifyInstance, tasks: TaskDb, _cfg: Config): void {
+  // Domaine liseuse. Le jeton n'est PAS DEVICE_TOKEN (celui des articles) mais le
+  // secret que la liseuse s'est fabrique a l'appairage : on ne stocke que son
+  // sha256, et une instance non appairee refuse tout.
+  app.addHook('onRequest', async (req, reply) => {
+    if (!req.url.startsWith('/api/v1/tasks/')) return;
+    const pairing = tasks.getPairing();
+    if (!pairing) return reply.code(401).send({ error: 'aucune liseuse appairee' });
+    const header = req.headers.authorization ?? '';
+    const given = Buffer.from(hashSecret(header.startsWith('Bearer ') ? header.slice(7) : ''));
+    const want = Buffer.from(pairing.hash);
+    if (given.length !== want.length || !timingSafeEqual(given, want)) {
+      return reply.code(401).send({ error: 'unauthorized' });
+    }
+  });
+
   const ajv = new Ajv({ coerceTypes: false });
   const validate = ajv.compile({
     type: 'object',
@@ -766,6 +829,14 @@ Add the import at the top (`import type { TaskDb } from './taskDb.js';` and
   if (opts.tasks) registerTaskRoutes(app, opts.tasks, cfg);
 ```
 
+Finally, exempt the task routes from the article bearer hook — they carry their
+own. Make this the first line of the existing `onRequest` hook body in
+`src/api.ts`:
+
+```ts
+    if (req.url.startsWith('/api/v1/tasks/')) return;  // domaine liseuse, auth par secret d'appairage
+```
+
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npm test && npm run typecheck`
@@ -775,7 +846,7 @@ Expected: the 10 new tests pass and **every pre-existing test still passes** —
 
 ```bash
 git add src/taskApi.ts src/api.ts test/taskApi.test.ts
-git commit -m "feat(task): one-call sync endpoint with length-prefixed notes"
+git commit -m "feat(tasks): one-call sync endpoint with length-prefixed notes"
 ```
 
 ---
@@ -783,7 +854,7 @@ git commit -m "feat(task): one-call sync endpoint with length-prefixed notes"
 ### Task 5: Pairing route and browser session auth
 
 **Files:**
-- Create: `src/taskAuth.ts`
+- Modify: `src/taskAuth.ts` (append the session helpers beside `hashSecret` from Task 2)
 - Create: `test/taskAuth.test.ts`
 - Modify: `src/config.ts` (add `webPassword`, `sessionSecret`)
 - Modify: `src/taskApi.ts` (bypass the bearer hook for the browser realm)
@@ -793,7 +864,6 @@ git commit -m "feat(task): one-call sync endpoint with length-prefixed notes"
 - Consumes: `TaskDb` (Task 2), `Config`.
 - Produces: `signSession(secret: string, iat: number): string`,
   `verifySession(secret: string, cookie: string | undefined, nowMs: number): boolean`,
-  `hashSecret(s: string): string` (hex sha256),
   `registerWebAuth(app, tasks, cfg)` serving `POST /web/login`, `POST /web/pair`,
   `POST /web/unpair`.
 
@@ -807,7 +877,7 @@ Create `test/taskAuth.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { hashSecret, signSession, verifySession } from '../src/taskAuth.js';
+import { signSession, verifySession } from '../src/taskAuth.js';
 
 const SECRET = 's'.repeat(32);
 const T0 = 1_790_000_000_000;
@@ -830,29 +900,22 @@ describe('session', () => {
     expect(verifySession('a'.repeat(32), signSession(SECRET, T0), T0)).toBe(false);
   });
 
-  it('hashSecret est un sha256 hex stable', () => {
-    expect(hashSecret('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
-  });
 });
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run test/taskAuth.test.ts`
-Expected: FAIL — `Cannot find module '../src/taskAuth.js'`.
+Expected: FAIL — `signSession is not a function` (the module exists since Task 2,
+but carries only `hashSecret`).
 
 - [ ] **Step 3: Write the implementation**
 
-Create `src/taskAuth.ts`:
+Append to `src/taskAuth.ts` (it already exports `hashSecret` from Task 2; add
+`createHmac` and `timingSafeEqual` to its existing `node:crypto` import):
 
 ```ts
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-
 const MAX_AGE_MS = 30 * 86_400_000;
-
-export function hashSecret(s: string): string {
-  return createHash('sha256').update(s, 'utf8').digest('hex');
-}
 
 /** Cookie = "<iat>.<hmac>" ; aucune donnée de session, juste une date signée. */
 export function signSession(secret: string, iatMs: number): string {
@@ -979,7 +1042,7 @@ Expected: both pass.
 
 ```bash
 git add src/taskAuth.ts src/taskApi.ts src/api.ts src/config.ts .env.example test/taskAuth.test.ts test/taskApi.test.ts
-git commit -m "feat(task): browser session realm and QR pairing, separate from the device bearer"
+git commit -m "feat(tasks): browser session realm and QR pairing, separate from the device bearer"
 ```
 
 ---
@@ -1148,7 +1211,7 @@ Expected: all pass.
 
 ```bash
 git add src/taskApi.ts src/api.ts test/taskApi.test.ts
-git commit -m "feat(task): browser CRUD API behind the session cookie"
+git commit -m "feat(tasks): browser CRUD API behind the session cookie"
 ```
 
 ---
@@ -1224,7 +1287,10 @@ Call `registerWeb(app, cfg)` in `src/api.ts` alongside the others, and add
         || req.url === '/' || req.url === '/pair' || req.url === '/login') return;
 ```
 
-In `Dockerfile`, add `COPY web ./web` next to the existing `COPY` of `dist`.
+In `Dockerfile`, add `COPY web ./web` to the **runtime stage**, immediately after
+`COPY --from=build /app/dist ./dist`. It belongs there and not in the build
+stage: `web/` is not a build product, so nothing compiles it and the runtime
+image is what serves it.
 
 - [ ] **Step 3: Write the stylesheet**
 
@@ -1595,7 +1661,7 @@ without a session.
 
 ```bash
 git add web src/web.ts src/api.ts src/index.ts Dockerfile
-git commit -m "feat(task): responsive web UI on Alpine, served without a build step"
+git commit -m "feat(tasks): responsive web UI on Alpine, served without a build step"
 ```
 
 ---
@@ -1658,7 +1724,7 @@ Expected: all pass.
 
 ```bash
 git add src/index.ts test/taskDb.test.ts
-git commit -m "feat(task): purge tombstones daily and keep the reset floor honest"
+git commit -m "feat(tasks): purge tombstones daily and keep the reset floor honest"
 ```
 
 ---

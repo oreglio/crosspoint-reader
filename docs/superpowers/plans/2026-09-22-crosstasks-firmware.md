@@ -177,7 +177,7 @@ Expected: 5 tests pass.
 ```bash
 clang-format -i src/tasks/TaskRecord.h test/task_record/TaskRecordTest.cpp
 git add src/task test/task_record test/CMakeLists.txt
-git commit -m "feat(task): fixed-width task record and its total display order"
+git commit -m "feat(tasks): fixed-width task record and its total display order"
 ```
 
 ---
@@ -717,7 +717,7 @@ Expected: 8 tests pass, including every chunk size in the split-note test.
 ```bash
 clang-format -i src/tasks/TaskSyncReader.h src/tasks/TaskSyncReader.cpp test/task_sync_reader/TaskSyncReaderTest.cpp
 git add src/task test/task_sync_reader test/CMakeLists.txt
-git commit -m "feat(task): streaming reader for the sync framing, host-tested"
+git commit -m "feat(tasks): streaming reader for the sync framing, host-tested"
 ```
 
 ---
@@ -1085,7 +1085,7 @@ Expected: 8 tests pass.
 ```bash
 clang-format -i src/tasks/TaskOpQueue.h src/tasks/TaskOpQueue.cpp test/task_op_queue/TaskOpQueueTest.cpp
 git add src/task test/task_op_queue test/CMakeLists.txt
-git commit -m "feat(task): pending-op queue serialization, host-tested"
+git commit -m "feat(tasks): pending-op queue serialization, host-tested"
 ```
 
 ---
@@ -1226,7 +1226,7 @@ than ~8 KB at this point; note the reported flash figure for comparison later.
 ```bash
 clang-format -i src/TaskStore.h src/TaskStore.cpp
 git add src/TaskStore.h src/TaskStore.cpp src/main.cpp
-git commit -m "feat(task): SD store for the task index, op queue, cursor and secret"
+git commit -m "feat(tasks): SD store for the task index, op queue, cursor and secret"
 ```
 
 ---
@@ -1324,7 +1324,7 @@ a tick leaves the row in place struck through.
 ```bash
 clang-format -i src/activities/tasks/TaskListActivity.h src/activities/tasks/TaskListActivity.cpp
 git add src/activities/task src/activities/ActivityManager.* src/activities/home/HomeActivity.cpp
-git commit -m "feat(task): Tasks list screen with weight-carried priority"
+git commit -m "feat(tasks): Tasks list screen with weight-carried priority"
 ```
 
 ---
@@ -1384,7 +1384,7 @@ title.
 ```bash
 clang-format -i src/activities/tasks/TaskDetailActivity.* src/activities/util/PomodoroActivity.*
 git add src/activities/task src/activities/util/PomodoroActivity.*
-git commit -m "feat(task): task detail with a paginated note and an anchored pomodoro"
+git commit -m "feat(tasks): task detail with a paginated note and an anchored pomodoro"
 ```
 
 ---
@@ -1441,7 +1441,7 @@ Add a task, confirm it appears immediately with the chosen weight, and confirm
 ```bash
 clang-format -i src/activities/tasks/TaskListActivity.cpp
 git add src/activities/task src/SettingsList.h src/activities/settings/SettingsActivity.h
-git commit -m "feat(task): create a task on the device from the existing keyboard"
+git commit -m "feat(tasks): create a task on the device from the existing keyboard"
 ```
 
 ---
@@ -1475,7 +1475,7 @@ must be exactly the 26 characters shown, with no prefix or URL wrapper.
 ```bash
 clang-format -i src/activities/tasks/TaskPairActivity.*
 git add src/activities/task src/SettingsList.h
-git commit -m "feat(task): pair by showing a device-generated secret as a QR"
+git commit -m "feat(tasks): pair by showing a device-generated secret as a QR"
 ```
 
 ---
@@ -1552,7 +1552,7 @@ device-namespaced and adds are idempotent.
 ```bash
 clang-format -i src/activities/tasks/TaskSyncActivity.* src/SilentRestart.h
 git add src/activities/task src/SilentRestart.h src/main.cpp
-git commit -m "feat(task): manual two-way sync from a minimal network boot"
+git commit -m "feat(tasks): manual two-way sync from a minimal network boot"
 ```
 
 ---
@@ -1650,7 +1650,7 @@ appear).
 
 ```bash
 git add src/CrossPointSettings.h src/SettingsList.h lib/I18n CHANGELOG.md docs/
-git commit -m "feat(task): settings, translations, changelog and protocol doc"
+git commit -m "feat(tasks): settings, translations, changelog and protocol doc"
 ```
 
 ---
