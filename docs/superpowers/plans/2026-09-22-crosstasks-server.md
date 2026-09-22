@@ -1006,14 +1006,23 @@ import { hashSecret, signSession, verifySession } from './taskAuth.js';
  * Le domaine navigateur. Volontairement distinct du Bearer de la liseuse :
  * un secret d'appareil ne doit jamais ouvrir une session web, ni l'inverse.
  */
+/**
+ * UN SEUL point de lecture du cookie de session, partage par les deux groupes
+ * de routes navigateur. Dupliquer ce parsing les ferait diverger au premier
+ * durcissement (prefixe __Host-, `;` dans une valeur quotee) sans qu'aucun test
+ * ne l'attrape, puisque chaque domaine est teste separement.
+ */
+export function sessionCookieOf(req: { headers: Record<string, unknown> }): string | undefined {
+  const raw = String(req.headers.cookie ?? '');
+  return raw.split(';').map(s => s.trim()).find(s => s.startsWith('cd_session='))?.slice('cd_session='.length);
+}
+
+export function sessionGuard(req: { headers: Record<string, unknown> }, cfg: Config): boolean {
+  return verifySession(cfg.sessionSecret, sessionCookieOf(req), Date.now());
+}
+
 export function registerWebAuth(app: FastifyInstance, tasks: TaskDb, cfg: Config): void {
-  const cookieOf = (req: { headers: Record<string, unknown> }) => {
-    const raw = String(req.headers.cookie ?? '');
-    const hit = raw.split(';').map(s => s.trim()).find(s => s.startsWith('cd_session='));
-    return hit?.slice('cd_session='.length);
-  };
-  const authed = (req: { headers: Record<string, unknown> }) =>
-    verifySession(cfg.sessionSecret, cookieOf(req), Date.now());
+  const authed = (req: { headers: Record<string, unknown> }) => sessionGuard(req, cfg);
 
   app.post<{ Body: { password?: string } }>('/web/login', async (req, reply) => {
     if (!cfg.webPassword) return reply.code(503).send({ error: 'interface web désactivée' });
@@ -1186,11 +1195,9 @@ const MAX_NOTE_BYTES = 4096;
 const newWebId = () => `w${randomBytes(4).toString('hex')}`;
 
 export function registerWebData(app: FastifyInstance, tasks: TaskDb, cfg: Config): void {
-  const guard = (req: { headers: Record<string, unknown> }) => {
-    const raw = String(req.headers.cookie ?? '');
-    const hit = raw.split(';').map(s => s.trim()).find(s => s.startsWith('cd_session='));
-    return verifySession(cfg.sessionSecret, hit?.slice('cd_session='.length), Date.now());
-  };
+  // Reutilise sessionGuard de la Task 5 : ne PAS reimplementer la lecture du
+  // cookie ici, les deux chemins navigateur doivent partager exactement le meme.
+  const guard = (req: { headers: Record<string, unknown> }) => sessionGuard(req, cfg);
 
   app.get('/web/api/tasks', async (req, reply) => {
     if (!guard(req)) return reply.code(401).send({ error: 'non connecté' });
