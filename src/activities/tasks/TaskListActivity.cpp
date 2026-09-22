@@ -327,7 +327,7 @@ void TaskListActivity::openDetailAt(int index) {
   // soit ne bouge.
   const std::string id = TASK_STORE.all()[static_cast<size_t>(rows[static_cast<size_t>(index)].recordIndex)].id;
   startActivityForResult(std::make_unique<TaskDetailActivity>(renderer, mappedInput, id.c_str()),
-                         [this](const ActivityResult& result) {
+                         [this, id](const ActivityResult& result) {
                            // Rien ne rappelle onEnter() sur une activite depilee : ActivityManager
                            // la restaure par std::move et ne fait tourner que ce gestionnaire
                            // (chemin Pop). `order`, `rows`, `openCount`, `showDone` et
@@ -338,11 +338,32 @@ void TaskListActivity::openDetailAt(int index) {
                            const auto* edit = std::get_if<TaskEditResult>(&result.data);
                            if (edit == nullptr || !edit->changed) return;  // simple coup d'oeil : rien a refaire
 
+                           // Une coche faite dans le detail reste en place, attenuee, exactement
+                           // comme une coche faite ici : tickedHere existe pour qu'un geste
+                           // regrette se defasse sans ouvrir la section repliee, et cette raison
+                           // ne depend pas de l'ecran ou le geste a eu lieu. Du point de vue de
+                           // l'utilisateur rien ne distingue les deux — il regardait sa tache, il
+                           // l'a cochee, il est revenu.
+                           //
+                           // Conditionne a l'etat FINAL, pas a `changed` : cocher puis decocher
+                           // dans le detail ne doit rien ajouter, et un decochage retire l'entree
+                           // comme le fait deja toggleAt(). AVANT rebuildOrder(), qui lit
+                           // tickedHere pour trier.
+                           const TaskRecord* rec = TASK_STORE.find(id.c_str());
+                           const auto already = std::find(tickedHere.begin(), tickedHere.end(), id);
+                           if (rec != nullptr && rec->done) {
+                             if (already == tickedHere.end()) tickedHere.push_back(id);
+                           } else if (already != tickedHere.end()) {
+                             tickedHere.erase(already);
+                           }
+
                            dirty = true;
                            rebuildOrder();
-                           // La tache a pu changer de place (priorite) ou quitter l'ecran
-                           // (cochee alors que la section "terminees" est repliee) : sans cette
-                           // renormalisation, `selected` designerait une ligne disparue.
+                           // La tache a pu changer de place (priorite) ou quitter l'ecran (cochee
+                           // alors que la section "terminees" est repliee, ce que tickedHere
+                           // evite desormais pour la tache qu'on vient de visiter, mais pas pour
+                           // une disparition due a un autre motif) : sans cette renormalisation,
+                           // `selected` designerait une ligne disparue.
                            const int next = taskListNormalizeSelection(rows, activeNav().selected);
                            if (next >= 0) moveSelectionTo(next);
                            requestUpdate();

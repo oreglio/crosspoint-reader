@@ -386,10 +386,12 @@ bool TaskDetailActivity::appendAndApply(const TaskOp& op, const TaskRecord& next
     return false;
   }
   writeFailed = false;
-  // upsert() sur un id DEJA present remplace en place : pas de push_back, donc
-  // pas de reallocation du vecteur du store, et les indices que la liste tient
-  // en dessous restent valides. Cet ecran ne cree jamais de tache — la
-  // creation appartient a la liste, precisement pour cette raison.
+  // upsert() sur un id DEJA present remplace en place : l'ensemble des taches
+  // ne change pas, donc le modele de lignes que la liste garde en dessous
+  // reste juste. Cet ecran ne cree jamais de tache : la creation appartient a
+  // la liste (tache 7). Le risque n'est pas une reference pendante — la liste
+  // tient de simples indices `int`, qu'un push_back ne deplace pas — mais une
+  // vue perimee : une tache ajoutee ici n'apparaitrait dans aucune ligne.
   TASK_STORE.upsert(next);
   record = next;
   changedAnything = true;
