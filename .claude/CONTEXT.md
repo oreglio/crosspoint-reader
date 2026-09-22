@@ -67,6 +67,16 @@ Refer to https://freeink.org/llms.txt for guidance.
   decorative symbols in button hints are not worth it — the house solution is
   `STR_ARROW_LEFT`/`STR_ARROW_RIGHT` (« », U+00AB/U+00BB) via `withBackArrow()`.
   Shipped once as "☑ 3" rendering " 3" on the tasks footer.
+- **Width is the second trap, and it only bites in French.** A label that fits in English can
+  overflow in the language the user actually reads, and every automated check stays green.
+  Measure with `scripts/measure_label.py <face> "text" --max <px>`, which also flags absent
+  glyphs. Measure against the WORST theme, not BaseTheme:
+  - **Footer button cells: 80 px in `inter_8_regular`.** MinimalTheme and LyraTheme draw hints
+    in 80 px with `SMALL_FONT_ID`; BaseTheme's 106 px in `inter_10` is the generous case and
+    validated `New task` (90 px) while it overflows on two themes of four.
+  - **Sub-header right label: 200 px in `inter_8_regular`** (`BaseTheme::drawSubHeader`,
+    `maxListValueWidth`), truncated with an ellipsis. Shipped once as `Enregistrement impossi…`.
+  - Quickest sanity check: compare against a label already shipped in the same slot.
 
 ## UI Consistency
 
