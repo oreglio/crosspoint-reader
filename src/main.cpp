@@ -88,6 +88,7 @@ inline esp_sleep_wakeup_cause_t esp_sleep_get_wakeup_cause() { return ESP_SLEEP_
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
+#include "TaskStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/boot_sleep/ImageFolderIndex.h"
@@ -101,6 +102,7 @@ inline esp_sleep_wakeup_cause_t esp_sleep_get_wakeup_cause() { return ESP_SLEEP_
 #include "activities/settings/KOReaderSettingsActivity.h"
 #include "activities/settings/OtaUpdateActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
+#include "activities/tasks/TaskSyncActivity.h"
 #include "components/UITheme.h"
 #include "components/icons/tablerFilledIcons.h"
 #include "fontIds.h"
@@ -1392,6 +1394,10 @@ void setup() {
              snapshotTarget == static_cast<uint32_t>(NetworkBootTarget::KOREADER_AUTH) ||
              snapshotTarget == static_cast<uint32_t>(NetworkBootTarget::FILE_TRANSFER)) {
     KOREADER_STORE.loadFromFile();
+  } else if (snapshotTarget == static_cast<uint32_t>(NetworkBootTarget::TASK_SYNC)) {
+    // Plus charge au demarrage normal (~26 Ko d'index) : sans lui, la sync
+    // partirait d'un index et d'un secret vides et se dirait non appairee.
+    TASK_STORE.loadFromFile();
   }
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
@@ -1589,6 +1595,17 @@ void setup() {
           launched = true;
         } else {
           LOG_ERR("MAIN", "OOM: Raindrop sync activity after minimal boot (free=%u maxAlloc=%u)", ESP.getFreeHeap(),
+                  ESP.getMaxAllocHeap());
+        }
+        break;
+      }
+      case NetworkBootTarget::TASK_SYNC: {
+        auto taskSyncActivity = makeUniqueNoThrow<TaskSyncActivity>(renderer, mappedInputManager);
+        if (taskSyncActivity) {
+          activityManager.replaceActivity(std::move(taskSyncActivity));
+          launched = true;
+        } else {
+          LOG_ERR("MAIN", "OOM: Task sync activity after minimal boot (free=%u maxAlloc=%u)", ESP.getFreeHeap(),
                   ESP.getMaxAllocHeap());
         }
         break;

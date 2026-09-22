@@ -329,10 +329,9 @@ void appendHomeMenuItems(HomeMenuEntries& items, bool hasOpdsServers, bool hasRe
   if (SETTINGS.raindropEnabled) {
     items.push({tr(STR_RAINDROP_SYNC), Cloud, HomeMenuAction::RaindropSync});
   }
-  // Pas de garde de type "tasksEnabled" ici : contrairement a Raindrop, la
-  // Tache 10 (parametres/i18n) ne touche pas ce fichier, l'entree est donc
-  // toujours visible pour l'instant.
-  items.push({tr(STR_TASK_TITLE), Text, HomeMenuAction::Tasks});
+  if (SETTINGS.taskEnabled) {
+    items.push({tr(STR_TASK_TITLE), Text, HomeMenuAction::Tasks});
+  }
   items.push({tr(STR_FILE_TRANSFER), Transfer, HomeMenuAction::FileTransfer});
   items.push({tr(STR_COUNTDOWN_TITLE), Recent, HomeMenuAction::Countdown});
   items.push({tr(STR_SETTINGS_TITLE), Settings, HomeMenuAction::Settings});

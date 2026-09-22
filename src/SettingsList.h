@@ -881,6 +881,14 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     add(SettingInfo::String(StrId::STR_RAINDROP_TOKEN, SETTINGS.raindropToken, sizeof(SETTINGS.raindropToken),
                             "raindropToken", StrId::STR_RAINDROP_SYNC));
 
+    // --- Taches (carte web, comme Raindrop : l'URL se colle depuis un
+    // navigateur. taskEnabled masque l'entree Taches de l'accueil ; les deux
+    // lignes Parametres restent visibles, comme celle de Raindrop.) ---
+    add(SettingInfo::Toggle(StrId::STR_TASK_ENABLED, &CrossPointSettings::taskEnabled, "taskEnabled",
+                            StrId::STR_TASK_TITLE));
+    add(SettingInfo::String(StrId::STR_TASK_SERVER_URL, SETTINGS.taskServerUrl, sizeof(SETTINGS.taskServerUrl),
+                            "taskServerUrl", StrId::STR_TASK_TITLE));
+
     // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
     add(SettingInfo::DynamicString(
         StrId::STR_KOREADER_USERNAME, [] { return KOREADER_STORE.getUsername(); },
@@ -1395,7 +1403,7 @@ inline std::vector<SettingInfo> buildDisplaySleepSettingsList(const std::vector<
 
 inline std::vector<SettingInfo> buildSystemSettingsParentList(const std::vector<SettingInfo>& allSettings) {
   std::vector<SettingInfo> systemSettings;
-  systemSettings.reserve(11);
+  systemSettings.reserve(12);
   systemSettings.push_back(SettingInfo::Submenu(StrId::STR_SYSTEM_DEVICE, SettingAction::SystemDevice));
   systemSettings.push_back(SettingInfo::Submenu(StrId::STR_SYSTEM_FILES_CACHE, SettingAction::SystemFilesCache));
   systemSettings.push_back(SettingInfo::Submenu(StrId::STR_LIBRARY, SettingAction::SystemLibrary));
@@ -1404,6 +1412,7 @@ inline std::vector<SettingInfo> buildSystemSettingsParentList(const std::vector<
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_RAINDROP_SYNC, SettingAction::RaindropSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_TASK_PAIR, SettingAction::TaskPair));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_TASK_SYNC, SettingAction::TaskSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));

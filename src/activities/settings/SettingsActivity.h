@@ -54,6 +54,7 @@ enum class SettingAction {
   ClockSync,
   RaindropSync,
   TaskPair,
+  TaskSync,
 };
 
 struct SettingInfo {

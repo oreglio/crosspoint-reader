@@ -1164,6 +1164,9 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::TaskPair:
         startActivityForResult(std::make_unique<TaskPairActivity>(renderer, mappedInput), resultHandler);
         break;
+      case SettingAction::TaskSync:
+        silentRestartToNetwork(NetworkBootTarget::TASK_SYNC);
+        break;
       case SettingAction::SdFirmwareUpdate:
         startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput), resultHandler);
         break;
