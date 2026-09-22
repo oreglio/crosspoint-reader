@@ -496,12 +496,20 @@ function clampPriority(p: unknown): number {
  * serait depassee de moitie (pire en cyrillique ou en CJK).
  */
 function truncateUtf8(s: string, maxBytes: number): string {
-  const buf = Buffer.from(s, 'utf8');
-  if (buf.length <= maxBytes) return s;
-  let end = maxBytes;
-  // Un octet de continuation vaut 10xxxxxx : reculer jusqu'au debut du caractere.
-  while (end > 0 && (buf[end] & 0xc0) === 0x80) end--;
-  return buf.subarray(0, end).toString('utf8');
+  if (Buffer.byteLength(s, 'utf8') <= maxBytes) return s;
+  let out = '';
+  let bytes = 0;
+  // for…of itere par POINTS DE CODE : une paire de substituts ne peut pas etre
+  // coupee en deux, contrairement a slice() qui compte des unites UTF-16 et
+  // laisserait un substitut orphelin — mesure a tort comme 3 octets, donc une
+  // boucle qui s'arrete trop tot en croyant etre sous la limite.
+  for (const ch of s) {
+    const w = Buffer.byteLength(ch, 'utf8');
+    if (bytes + w > maxBytes) break;
+    out += ch;
+    bytes += w;
+  }
+  return out;
 }
 
 /**
