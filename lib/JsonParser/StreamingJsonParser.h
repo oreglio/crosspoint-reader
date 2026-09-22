@@ -28,6 +28,17 @@ class StreamingJsonParser {
 
   bool hasError() const { return error; }
 
+  // Un champ plus long que TOKEN_BUF_SIZE ne declenche pas d'erreur : le jeton
+  // est juste tronque et emitToken() n'appelle onString/onKey/onNumber que
+  // pour un jeton complet, donc jamais pour celui-la. Une validation ecrite
+  // dans le callback de valeur ne voit alors rien passer et ne peut rien
+  // refuser — elle est court-circuitee par au-dessus, pas contournee par en
+  // dessous. Un consommateur a qui ca importe doit donc le demander ici
+  // plutot que de compter sur son propre callback. Sticky jusqu'a reset() :
+  // un depassement peut porter sur un champ que le consommateur ignore,
+  // au milieu d'une ligne par ailleurs valide.
+  bool tokenTruncated() const { return sawTokenOverflow; }
+
  private:
   enum class State : uint8_t {
     SCANNING,
@@ -62,6 +73,7 @@ class StreamingJsonParser {
   bool expectingValue;
   bool escaped;
   bool tokenOverflow;
+  bool sawTokenOverflow;
   bool error;
 
   Container nestingStack[MAX_NESTING];

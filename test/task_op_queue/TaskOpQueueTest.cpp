@@ -3,6 +3,7 @@
 #include <cstring>
 #include <string>
 
+#include "StreamingJsonParser.h"
 #include "TaskOpQueue.h"
 
 namespace {
@@ -67,6 +68,30 @@ TEST(TaskOpQueue, RoundTripsAccentsCjkAndEmoji) {
   EXPECT_STREQ(back.title, op.title);
 }
 
+// Deviation vs le brief : un caractere de controle devient une espace plutot
+// qu'un \u00XX, parce que StreamingJsonParser ne decode pas \uXXXX (il le
+// recopie tel quel — cf sa propre StreamingJsonParser.cpp) et casserait donc
+// ce round-trip. Rien d'autre dans la suite n'exerce un octet de controle :
+// sans ce test, une regression vers l'echappement \u passerait inapercue.
+TEST(TaskOpQueue, ReplacesControlBytesInTitlesWithASpace) {
+  char line[512];
+  const TaskOp op = addOp("d0000abc1",
+                          "abc"
+                          "\x07"
+                          "def"
+                          "\x09"
+                          "ghi",
+                          1);
+  const size_t n = taskOpToLine(op, line, sizeof(line));
+  ASSERT_GT(n, 0u);
+  const std::string s(line, n);
+  EXPECT_NE(s.find("\"title\":\"abc def ghi\""), std::string::npos);
+
+  TaskOp back{};
+  ASSERT_TRUE(taskOpFromLine(line, n, back));
+  EXPECT_STREQ(back.title, "abc def ghi");
+}
+
 TEST(TaskOpQueue, RefusesABufferTooSmall) {
   char tiny[8];
   EXPECT_EQ(taskOpToLine(addOp("d0000abc1", "x", 1), tiny, sizeof(tiny)), 0u);
@@ -95,6 +120,20 @@ TEST(TaskOpQueue, RejectsALineTruncatedMidWrite) {
   const char* truncated = "{\"op\":\"done\",\"id\":\"w17ab93c2\"";
   TaskOp back{};
   EXPECT_FALSE(taskOpFromLine(truncated, std::strlen(truncated), back));
+}
+
+// Une ligne forgee (jamais produite par taskOpToLine, dont le titre tient
+// dans TASK_TITLE_MAX) avec un champ plus long que le tampon de jeton du
+// parseur partage : au-dela de TOKEN_BUF_SIZE, StreamingJsonParser tronque le
+// jeton et n'appelle jamais onString pour lui — sans tokenTruncated(), opString
+// ne verrait rien passer et la ligne serait acceptee avec un titre vide.
+TEST(TaskOpQueue, RejectsATitleLongerThanTheParserTokenBuffer) {
+  std::string line = "{\"op\":\"add\",\"id\":\"d0000abc1\",\"title\":\"";
+  line.append(StreamingJsonParser::TOKEN_BUF_SIZE + 1, 'c');
+  line += "\",\"priority\":0}";
+
+  TaskOp back{};
+  EXPECT_FALSE(taskOpFromLine(line.c_str(), line.size(), back));
 }
 
 TEST(TaskOpQueue, BuildsARequestBodyWithCursorAndOps) {

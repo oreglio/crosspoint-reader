@@ -221,7 +221,16 @@ bool taskOpFromLine(const char* line, const size_t len, TaskOp& out) {
   // d'erreur. C'est exactement ce que laisserait une coupure de courant en
   // plein write() du fichier de file d'attente — objDepth doit donc etre
   // revenu a 0 pour que la ligne soit acceptee.
-  if (parser.hasError() || sink.badValue || sink.structureBroken || !sink.sawOp || sink.objDepth != 0) return false;
+  //
+  // tokenTruncated() couvre un trou distinct : un champ de plus de
+  // TOKEN_BUF_SIZE octets ne remonte jamais jusqu'a opString/opNumber (voir
+  // le commentaire de tokenTruncated()), donc badValue ne peut pas le voir
+  // non plus — un champ qu'on ne peut pas lire est un champ qu'on ne peut
+  // pas valider, la ligne est refusee plutot qu'acceptee avec un champ vide.
+  if (parser.hasError() || parser.tokenTruncated() || sink.badValue || sink.structureBroken || !sink.sawOp ||
+      sink.objDepth != 0) {
+    return false;
+  }
 
   TaskOpKind kind{};
   if (!kindFromName(sink.op, kind)) return false;
