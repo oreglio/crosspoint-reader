@@ -30,7 +30,9 @@ bool isValidTaskId(const char* id) {
 
 // Le curseur repart tel quel dans le corps de la requête suivante, assemblé par
 // snprintf : hors de cet alphabet il y injecterait de la syntaxe JSON. Le `=`
-// est accepté parce que le serveur padde son base64url.
+// est toléré par choix — le serveur ne padde pas (le base64url de Node est sans
+// padding, vérifié sur le serveur : `MQ`, `MTg`, `MjAw`), mais l'accepter ne
+// coûte rien et évite de casser sur un jour où l'encodage changerait.
 bool isSafeCursor(const char* cursor) {
   for (const char* p = cursor; *p != '\0'; ++p) {
     const char c = *p;
@@ -328,6 +330,18 @@ void TaskSyncReader::parseHeaderLine(size_t len) {
   }
   if (sink.schema != TASK_SYNC_SCHEMA) {
     TASK_LOG_ERR("sync: unsupported schema %ld", sink.schema);
+    error_ = true;
+    return;
+  }
+  // Le serveur n'émet jamais de curseur vide (`encodeCursor(0)` vaut "MA") :
+  // vide veut donc dire que quelque chose s'est perdu en route — clé absente,
+  // ou valeur plus longue que le tampon de jeton du parseur, auquel cas
+  // emitToken() n'appelle pas onString et les gardes ci-dessous ne voient rien
+  // passer. Le laisser filer ferait écrire un curseur vide dans cursor.txt, que
+  // le serveur lit comme « absent » : chaque synchro repartirait de zéro, en
+  // silence et pour toujours.
+  if (sink.cursor[0] == '\0') {
+    TASK_LOG_ERR("sync: header without a cursor");
     error_ = true;
     return;
   }

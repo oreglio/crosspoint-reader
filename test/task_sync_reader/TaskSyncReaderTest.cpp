@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "StreamingJsonParser.h"
 #include "TaskSyncReader.h"
 
 namespace {
@@ -422,4 +423,29 @@ TEST(TaskSyncReader, IgnoresTheShapeOfFieldsItDoesNotUse) {
   r.feed(body.data(), body.size());
   EXPECT_TRUE(cap.header);
   EXPECT_FALSE(r.hasError());
+}
+
+// Un curseur vide écrit dans cursor.txt se lit « absent » côté serveur : chaque
+// synchro repartirait de zéro, en silence et pour toujours. Le serveur n'en
+// émet jamais, donc vide veut dire que quelque chose s'est perdu.
+TEST(TaskSyncReader, RejectsAHeaderWithoutACursorKey) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body = "{\"schema\":1,\"more\":false,\"reset\":false,\"count\":0}\n";
+  r.feed(body.data(), body.size());
+  EXPECT_TRUE(r.hasError());
+  EXPECT_FALSE(cap.header);
+}
+
+// Au-delà de TOKEN_BUF_SIZE, StreamingJsonParser n'émet pas le jeton du tout :
+// la garde d'alphabet ne voit rien passer et le curseur resterait vide.
+TEST(TaskSyncReader, RejectsACursorLongerThanTheParserTokenBuffer) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string cursor(StreamingJsonParser::TOKEN_BUF_SIZE + 1, 'A');
+  const std::string body = "{\"schema\":1,\"cursor\":\"" + cursor + "\",\"more\":false,\"reset\":false}\n";
+  ASSERT_LT(body.size(), TaskSyncReader::LINE_BUF_SIZE);
+  r.feed(body.data(), body.size());
+  EXPECT_TRUE(r.hasError());
+  EXPECT_FALSE(cap.header);
 }

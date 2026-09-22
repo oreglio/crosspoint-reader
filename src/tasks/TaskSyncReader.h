@@ -49,10 +49,15 @@ class TaskSyncReader {
 
   explicit TaskSyncReader(const TaskSyncCallbacks& callbacks) : cb_(callbacks) {}
 
-  // Chaque fin de ligne coûte environ 950 octets de pile transitoires — le
-  // collecteur de champs et StreamingJsonParser, tous deux locaux à la lecture
-  // d'une ligne. La tâche qui alimente feed() doit donc avoir au moins 4 Ko,
-  // ce qui est la taille prévue pour le travail réseau.
+  // Chaque fin de ligne coûte une pointe de pile transitoire, mesurée à
+  // ~1424 octets sur le chemin d'une ligne de tâche (~1200 pour l'en-tête) avec
+  // la chaîne du dépôt : riscv32-esp-elf-g++ -Os -fno-exceptions -fstack-usage.
+  // L'essentiel vient de deux cadres locaux à l'analyse d'une ligne, le
+  // collecteur de champs (576 avec TaskRecord) et StreamingJsonParser (672).
+  // Les deux sont de taille fixe et aucune récursion n'est possible ici : une
+  // entrée pathologique ne peut donc pas creuser plus. La tâche qui alimente
+  // feed() doit prévoir au moins 4 Ko, la taille retenue pour le travail
+  // réseau — et la pointe survient dans le rappel de réception TLS.
   void feed(const char* data, size_t len);
   bool hasError() const { return error_; }
   bool sawHeader() const { return sawHeader_; }
