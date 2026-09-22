@@ -1864,10 +1864,12 @@ In `src/index.ts`, after `loop.start();`:
 ```ts
 // Les tombstones ne servent qu'à faire découvrir les suppressions aux liseuses.
 // Passé 30 jours, une liseuse restée éteinte repart d'un instantané (header reset).
-const purgeTimer = setInterval(() => {
-  const cutoff = new Date(Date.now() - 30 * 86_400_000).toISOString();
-  tasks.purgeTombstones(cutoff);
-}, 86_400_000);
+const purge = () => tasks.purgeTombstones(new Date(Date.now() - 30 * 86_400_000).toISOString());
+// Un passage au démarrage, PUIS l'intervalle : setInterval ne se déclenche qu'à
+// +24 h, donc un service qui redéploie plus souvent qu'une fois par jour ne
+// purgerait jamais et la table grossirait sans borne.
+purge();
+const purgeTimer = setInterval(purge, 86_400_000);
 purgeTimer.unref();
 ```
 
