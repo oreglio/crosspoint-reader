@@ -449,3 +449,52 @@ TEST(TaskSyncReader, RejectsACursorLongerThanTheParserTokenBuffer) {
   EXPECT_TRUE(r.hasError());
   EXPECT_FALSE(cap.header);
 }
+
+// Le tableau `rejected` doit se refermer : un autre tableau d'objets, plus loin
+// dans le même en-tête, ne doit pas voir ses entrées prises pour des rejets.
+TEST(TaskSyncReader, DoesNotReadRejectionsOutOfAnUnrelatedArray) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body =
+      "{\"schema\":1,\"cursor\":\"MQ\",\"rejected\":[{\"id\":\"d0000abc1\",\"reason\":\"full\"}],"
+      "\"audit\":[{\"id\":\"w00000001\",\"reason\":\"PIRATE\"}],\"more\":false,\"reset\":false}\n";
+  r.feed(body.data(), body.size());
+
+  ASSERT_EQ(cap.rejected.size(), 1u);
+  EXPECT_EQ(cap.rejected[0].first, "d0000abc1");
+  EXPECT_EQ(cap.rejected[0].second, "full");
+  EXPECT_EQ(cap.cursor, "MQ");
+  EXPECT_FALSE(r.hasError());
+}
+
+// Le même nom de clé, un cran plus bas, ne doit pas écraser le champ d'en-tête.
+TEST(TaskSyncReader, DoesNotReadHeaderFieldsOutOfANestedObject) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body =
+      "{\"schema\":1,\"cursor\":\"MQ\",\"meta\":{\"cursor\":\"PIRATE\"},\"more\":false,"
+      "\"reset\":false}\n";
+  r.feed(body.data(), body.size());
+
+  EXPECT_TRUE(cap.header);
+  EXPECT_EQ(cap.cursor, "MQ");
+  EXPECT_FALSE(r.hasError());
+}
+
+// Rien dans le protocole ne fixe l'ordre des clés d'un objet JSON : `rejected`
+// doit se lire aussi bien avant qu'après les champs propres de l'en-tête.
+TEST(TaskSyncReader, ReadsRejectionsDeclaredBeforeTheHeaderFields) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body =
+      "{\"rejected\":[{\"id\":\"d0000abc1\",\"reason\":\"full\"}],\"schema\":1,\"cursor\":\"MQ\","
+      "\"more\":true,\"reset\":false,\"count\":0}\n";
+  r.feed(body.data(), body.size());
+
+  ASSERT_EQ(cap.rejected.size(), 1u);
+  EXPECT_EQ(cap.rejected[0].first, "d0000abc1");
+  EXPECT_TRUE(cap.header);
+  EXPECT_EQ(cap.cursor, "MQ");
+  EXPECT_TRUE(cap.more);
+  EXPECT_FALSE(r.hasError());
+}

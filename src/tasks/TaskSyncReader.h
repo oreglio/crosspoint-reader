@@ -22,8 +22,12 @@ struct TaskSyncCallbacks {
   // Émis par morceaux au fil de l'arrivée réseau ; `last` marque le dernier.
   void (*onNoteChunk)(void* ctx, const char* id, const char* data, size_t len, bool last);
   // Une op refusée par le serveur, annoncée dans le tableau `rejected` de
-  // l'en-tête : `reason` vaut "full", "unknown" ou "badid". Émis pendant la
-  // lecture de la ligne d'en-tête, donc avant onHeader.
+  // l'en-tête : `reason` vaut "full", "unknown" ou "badid". Émis pendant
+  // l'analyse de la ligne d'en-tête, donc avant onHeader — et avant qu'on
+  // sache si cette ligne est valide : une entrée refermée juste avant une
+  // coupure remonte, puis la ligne est rejetée. Le consommateur doit donc
+  // jeter les rejets accumulés dès que hasError() est vrai, sinon l'écran de
+  // résumé nommera une tâche refusée pour une réponse qu'on a jetée.
   void (*onRejected)(void* ctx, const char* id, const char* reason);
 };
 
