@@ -517,7 +517,9 @@ bool RaindropSyncActivity::fetchBundleInfo() {
     http.end();
     return false;
   }
-  const std::string& body = http.getString();
+  // `auto`: l'appareil rend une const std::string& (aucune copie, inchange),
+  // le client du simulateur rend une String Arduino ; c_str() existe des deux cotes.
+  const auto& body = http.getString();
   const char* countAt = strstr(body.c_str(), "\"count\":");
   const char* bytesAt = strstr(body.c_str(), "\"bytes\":");
   http.end();
