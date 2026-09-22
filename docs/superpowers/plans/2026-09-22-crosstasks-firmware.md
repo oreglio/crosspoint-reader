@@ -1573,10 +1573,24 @@ git commit -m "feat(tasks): create a task on the device from the existing keyboa
 
 **Files:**
 - Create: `src/activities/tasks/TaskPairActivity.h`, `.cpp`
-- Modify: `src/SettingsList.h` (one action row)
+- Modify: `src/SettingsList.h`, `src/activities/settings/SettingsActivity.h` (one
+  `SettingAction::TaskPair` row)
+- Modify: `lib/I18n/translations/english.yaml`, `french.yaml`
 
 **Interfaces:**
-- Consumes: `QrDisplayActivity` (`src/activities/reader/QrDisplayActivity.h`), `TaskStore`.
+- Consumes: `QrUtils::drawQrCode(renderer, bounds, payload)` (`src/util/QrUtils.h`), `TaskStore`.
+
+**Do NOT reuse `QrDisplayActivity`.** It is `final`, its constructor takes only a payload, and
+it exposes no hook for a footer action — so a "regenerate" button cannot be added to it, and
+`TaskPairActivity` cannot derive from it. Draw the code yourself with `QrUtils::drawQrCode`,
+which is the reusable half and is exactly what `QrDisplayActivity` itself calls
+(`QrDisplayActivity.cpp:49`). Note that file hardcodes `Rect qrBounds(20, …)`; do not copy that
+— derive your bounds from the renderer, per the global constraints.
+
+**This task owns its own settings row**, unlike Task 7. A screen that cannot be reached cannot
+be tested at all, and pairing is the one flow whose entry point is inseparable from the screen.
+Task 10 still owns `SettingAction::TaskSync` and the rest of the settings block; add only
+`TaskPair` here, gated the same way the Raindrop rows are.
 
 - [ ] **Step 1: Generate and show the secret**
 
@@ -1585,8 +1599,15 @@ base32 characters (alphabet `0123456789ABCDEFGHJKMNPQRSTVWXYZ`, no I, L, O or U)
 writes them through `TaskStore::writeSecret`, and renders the QR plus the code
 grouped in fours below it.
 
-`≡ régénérer` draws a new secret and invalidates the old one — the user must
-re-pair on the web.
+**The secret is never logged.** Not at any level, not truncated, not in a debug build. It is
+the only credential the device holds, and serial output is not private. `TaskStore` stores it
+obfuscated for the same reason.
+
+A **regenerate** action draws a new secret and invalidates the old one — the user must re-pair
+on the web. Label it with a translated word and **no decorative glyph**: `≡` (U+2261) is absent
+from the built-in fonts and a missing glyph is silently skipped, leaving a stray space. See
+`.claude/CONTEXT.md`, "Fonts / Glyph Coverage", and measure the label against its cell the way
+Task 7 did rather than assuming it fits.
 
 - [ ] **Step 2: Verify on hardware**
 
