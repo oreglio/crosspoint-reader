@@ -120,6 +120,18 @@ bool TaskStore::fromJson(JsonVariantConst doc) {
 }
 
 void TaskStore::replaceAll(std::vector<TaskRecord> next) {
+  // upsert() et fromJson() refusent deja un id malforme ; replaceAll() n'a
+  // aujourd'hui qu'un seul appelant (TaskSyncReader, deja valide en amont),
+  // mais la defense en profondeur cesse d'etre theorique des qu'un deuxieme
+  // appelant existe (la remise a zero complete a venir). Rejeter en silence
+  // serait pire que la faille : un seul log resume ce qui a saute.
+  const size_t before = next.size();
+  next.erase(std::remove_if(next.begin(), next.end(), [](const TaskRecord& r) { return !isValidTaskId(r.id); }),
+             next.end());
+  if (next.size() != before) {
+    LOG_ERR(TAG, "Dropped %zu task(s) with a malformed id from a full sync snapshot", before - next.size());
+  }
+
   if (next.size() > MAX_TASKS) {
     LOG_ERR(TAG, "Clamping full sync snapshot from %zu to %zu tasks", next.size(), MAX_TASKS);
     next.resize(MAX_TASKS);
