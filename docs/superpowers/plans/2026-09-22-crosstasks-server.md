@@ -1044,11 +1044,16 @@ export function registerWebAuth(app: FastifyInstance, tasks: TaskDb, cfg: Config
 Add `import { timingSafeEqual } from 'node:crypto';` to the top of `src/taskApi.ts`,
 and call `registerWebAuth(app, opts.tasks, cfg)` next to `registerTaskRoutes` in `src/api.ts`.
 
-In `src/api.ts`, exempt the browser realm from the device bearer hook. Change the
-existing `onRequest` hook body so its first line is:
+In `src/api.ts`, exempt the browser realm from the article bearer hook. **Add a
+second exemption line beside the one Task 4 already put there — do not replace
+it.** Dropping Task 4's line would let the article hook intercept
+`/api/v1/tasks/*` before the pairing hook runs, and a valid pairing secret
+(always different from `DEVICE_TOKEN`) would be rejected 401 by the wrong hook,
+taking the whole reader sync down:
 
 ```ts
-    if (req.url.startsWith('/web/') || req.url === '/' ) return;  // domaine navigateur, auth par cookie
+    if (req.url.startsWith('/api/v1/tasks/')) return;              // domaine liseuse (Task 4)
+    if (req.url.startsWith('/web/') || req.url === '/') return;    // domaine navigateur, auth par cookie
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -1320,10 +1325,13 @@ export function registerWeb(app: FastifyInstance, _cfg: Config): void {
 }
 ```
 
-Call `registerWeb(app, cfg)` in `src/api.ts` alongside the others, and add
-`/assets/` and `/pair` and `/login` to the bearer-hook exemption line from Task 5:
+Call `registerWeb(app, cfg)` in `src/api.ts` alongside the others, and widen the
+**browser** exemption line from Task 5 with the static routes. Leave Task 4's
+`/api/v1/tasks/` line exactly as it is — the two exemptions are separate realms
+and must both survive:
 
 ```ts
+    if (req.url.startsWith('/api/v1/tasks/')) return;              // domaine liseuse (Task 4)
     if (req.url.startsWith('/web/') || req.url.startsWith('/assets/')
         || req.url === '/' || req.url === '/pair' || req.url === '/login') return;
 ```
