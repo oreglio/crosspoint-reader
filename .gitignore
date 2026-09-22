@@ -62,3 +62,6 @@ lib/AppVersion/AppVersionGenerated.h
 
 # Playwright MCP debug output
 .playwright-mcp/
+
+# Superpowers brainstorming mockups (local only)
+.superpowers/
