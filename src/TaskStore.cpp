@@ -129,6 +129,11 @@ void TaskStore::unload() {
 }
 
 void TaskStore::replaceAll(std::vector<TaskRecord> next) {
+  // toJson() serialise AUSSI doc["secret"], pas seulement `records` : sur un
+  // store decharge (ou jamais charge) le saveToFile() de fin ecrirait un
+  // secret vide et desappairerait l'appareil en silence. Remplacer tout
+  // l'ensemble des taches ne dispense donc pas de charger d'abord.
+  ensureLoaded();
   // upsert() et fromJson() refusent deja un id malforme ; replaceAll() n'a
   // aujourd'hui qu'un seul appelant (TaskSyncReader, deja valide en amont),
   // mais la defense en profondeur cesse d'etre theorique des qu'un deuxieme

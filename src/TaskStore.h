@@ -63,7 +63,8 @@ class TaskStore : public PersistableStore<TaskStore> {
   // reserialise `records`, donc ecrire dans un store decharge ecraserait
   // index.json avec une liste vide. Les mutateurs concernes (upsert, remove,
   // writeSecret, clearSecret) appellent ensureLoaded() en entree pour cette
-  // raison ; replaceAll() n'en a pas besoin, il remplace tout l'ensemble.
+  // raison, replaceAll() COMPRIS : il remplace bien tout l'ensemble des
+  // taches, mais toJson() ecrit aussi doc["secret"], qu'il ne remplace pas.
   void unload();
   void replaceAll(std::vector<TaskRecord> next);
   void upsert(const TaskRecord& rec);
