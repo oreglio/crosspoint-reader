@@ -483,8 +483,25 @@ const DEVICE_ID = /^d[0-9a-f]{8}$/;
 const ANY_ID = /^[wd][0-9a-f]{8}$/;
 
 function clampPriority(p: unknown): number {
-  const n = Number(p);
-  return n === 0 || n === 2 ? n : 1;
+  // Pas Number(p) : Number(null) vaut 0, donc un `priority: null` explicite
+  // deviendrait « haute » alors qu'un champ absent retombe sur « normale ».
+  if (typeof p !== 'number' || !Number.isInteger(p)) return 1;
+  return p === 0 || p === 2 ? p : 1;
+}
+
+/**
+ * Tronque a `maxBytes` OCTETS UTF-8, sans jamais couper un caractere en deux.
+ * slice() compterait des unites UTF-16 : 150 « e » accentues font 150 unites
+ * mais 300 octets, donc aucune troncature ne se declencherait et la limite
+ * serait depassee de moitie (pire en cyrillique ou en CJK).
+ */
+function truncateUtf8(s: string, maxBytes: number): string {
+  const buf = Buffer.from(s, 'utf8');
+  if (buf.length <= maxBytes) return s;
+  let end = maxBytes;
+  // Un octet de continuation vaut 10xxxxxx : reculer jusqu'au debut du caractere.
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end--;
+  return buf.subarray(0, end).toString('utf8');
 }
 
 /**
@@ -496,6 +513,14 @@ function clampPriority(p: unknown): number {
 export function applyOps(db: TaskDb, ops: unknown[], nowIso: string): Rejection[] {
   const rejected: Rejection[] = [];
   for (const raw of ops) {
+    // `raw as ...` n'est qu'un cast de compilation : sans cette garde, un
+    // `{"ops":[null]}` — du JSON parfaitement valide venu du reseau — leverait
+    // une TypeError hors de applyOps et ferait perdre toutes les ops valides
+    // de la meme requete.
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      rejected.push({ id: '', reason: 'badid' });
+      continue;
+    }
     const o = raw as Record<string, unknown>;
     const id = typeof o.id === 'string' ? o.id : '';
     if (!ANY_ID.test(id)) { rejected.push({ id, reason: 'badid' }); continue; }
@@ -504,7 +529,7 @@ export function applyOps(db: TaskDb, ops: unknown[], nowIso: string): Rejection[
       if (!DEVICE_ID.test(id)) { rejected.push({ id, reason: 'badid' }); continue; }
       if (db.get(id)) continue;                       // rejeu : sans effet
       if (db.activeCount() >= MAX_ACTIVE) { rejected.push({ id, reason: 'full' }); continue; }
-      const title = String(o.title ?? '').slice(0, MAX_TITLE_BYTES);
+      const title = truncateUtf8(String(o.title ?? ''), MAX_TITLE_BYTES);
       db.upsert({ id, title, note: '', priority: clampPriority(o.priority), done: 0, deleted: 0, updated_at: nowIso });
       continue;
     }
@@ -514,7 +539,7 @@ export function applyOps(db: TaskDb, ops: unknown[], nowIso: string): Rejection[
 
     if (o.op === 'done') db.upsert({ ...row, done: o.done === true ? 1 : 0, updated_at: nowIso });
     else if (o.op === 'prio') db.upsert({ ...row, priority: clampPriority(o.priority), updated_at: nowIso });
-    else if (o.op === 'title') db.upsert({ ...row, title: String(o.title ?? '').slice(0, MAX_TITLE_BYTES), updated_at: nowIso });
+    else if (o.op === 'title') db.upsert({ ...row, title: truncateUtf8(String(o.title ?? ''), MAX_TITLE_BYTES), updated_at: nowIso });
     else rejected.push({ id, reason: 'unknown' });
   }
   return rejected;
@@ -1631,7 +1656,12 @@ In `src/index.ts`, after the existing `const db = new Db(...)` line, add:
 import Database from 'better-sqlite3';
 import { TaskDb } from './taskDb.js';
 // …
-const tasks = new TaskDb(new Database(join(cfg.dataDir, 'tasks.db')));
+const tasksDbFile = new Database(join(cfg.dataDir, 'tasks.db'));
+// Meme journal que la base des articles (src/db.ts) : sans WAL, un lecteur
+// bloque un ecrivain, et les deux bases du service n'auraient pas la meme
+// garantie de durabilite pour aucune raison.
+tasksDbFile.pragma('journal_mode = WAL');
+const tasks = new TaskDb(tasksDbFile);
 ```
 
 and pass it to `buildServer`:
