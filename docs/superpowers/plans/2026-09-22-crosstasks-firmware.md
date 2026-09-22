@@ -285,12 +285,12 @@ TEST(TaskSyncReader, ReadsHeaderAndOneTaskWithoutNote) {
   Capture cap;
   TaskSyncReader r(callbacks(cap));
   const std::string body =
-      "{\"schema\":1,\"cursor\":\"MTg=\",\"more\":false,\"reset\":false,\"count\":1}\n"
+      "{\"schema\":1,\"cursor\":\"MTg\",\"more\":false,\"reset\":false,\"count\":1}\n"
       "{\"id\":\"w17ab93c2\",\"title\":\"Rappeler le notaire\",\"priority\":0,\"done\":false,\"noteBytes\":0}\n";
   r.feed(body.data(), body.size());
 
   EXPECT_TRUE(cap.header);
-  EXPECT_EQ(cap.cursor, "MTg=");
+  EXPECT_EQ(cap.cursor, "MTg");
   EXPECT_FALSE(cap.more);
   ASSERT_EQ(cap.tasks.size(), 1u);
   EXPECT_STREQ(cap.tasks[0].id, "w17ab93c2");
@@ -307,7 +307,7 @@ TEST(TaskSyncReader, ReadsARawNoteBlockAfterItsMetadataLine) {
   TaskSyncReader r(callbacks(cap));
   const std::string note = "Curseur + file d'ops.\nDeuxieme ligne.";
   const std::string body =
-      "{\"schema\":1,\"cursor\":\"MQ==\",\"more\":false,\"reset\":false,\"count\":1}\n"
+      "{\"schema\":1,\"cursor\":\"MQ\",\"more\":false,\"reset\":false,\"count\":1}\n"
       "{\"id\":\"w17ab93c2\",\"title\":\"Spec\",\"priority\":1,\"done\":false,\"noteBytes\":" +
       std::to_string(note.size()) + "}\n" + note + "\n";
   r.feed(body.data(), body.size());
@@ -322,7 +322,7 @@ TEST(TaskSyncReader, ReadsARawNoteBlockAfterItsMetadataLine) {
 TEST(TaskSyncReader, SurvivesANoteSplitAcrossNetworkChunks) {
   const std::string note(3000, 'n');
   const std::string body =
-      "{\"schema\":1,\"cursor\":\"MQ==\",\"more\":false,\"reset\":false,\"count\":1}\n"
+      "{\"schema\":1,\"cursor\":\"MQ\",\"more\":false,\"reset\":false,\"count\":1}\n"
       "{\"id\":\"d0000abc1\",\"title\":\"Longue\",\"priority\":2,\"done\":false,\"noteBytes\":" +
       std::to_string(note.size()) + "}\n" + note + "\n";
 
@@ -340,7 +340,7 @@ TEST(TaskSyncReader, ReadsSeveralTasksAndTombstonesInOneBody) {
   Capture cap;
   TaskSyncReader r(callbacks(cap));
   const std::string body =
-      "{\"schema\":1,\"cursor\":\"Mg==\",\"more\":true,\"reset\":false,\"count\":3}\n"
+      "{\"schema\":1,\"cursor\":\"Mg\",\"more\":true,\"reset\":false,\"count\":3}\n"
       "{\"id\":\"w00000001\",\"title\":\"A\",\"priority\":0,\"done\":false,\"noteBytes\":2}\n"
       "ab\n"
       "{\"id\":\"w00000002\",\"deleted\":true}\n"
@@ -360,7 +360,7 @@ TEST(TaskSyncReader, ReadsSeveralTasksAndTombstonesInOneBody) {
 TEST(TaskSyncReader, ReportsTheResetFlag) {
   Capture cap;
   TaskSyncReader r(callbacks(cap));
-  const std::string body = "{\"schema\":1,\"cursor\":\"MQ==\",\"more\":false,\"reset\":true,\"count\":0}\n";
+  const std::string body = "{\"schema\":1,\"cursor\":\"MQ\",\"more\":false,\"reset\":true,\"count\":0}\n";
   r.feed(body.data(), body.size());
   EXPECT_TRUE(cap.reset);
 }
@@ -369,7 +369,7 @@ TEST(TaskSyncReader, RejectsAMalformedIdWithoutEmittingATask) {
   Capture cap;
   TaskSyncReader r(callbacks(cap));
   const std::string body =
-      "{\"schema\":1,\"cursor\":\"MQ==\",\"more\":false,\"reset\":false,\"count\":1}\n"
+      "{\"schema\":1,\"cursor\":\"MQ\",\"more\":false,\"reset\":false,\"count\":1}\n"
       "{\"id\":\"../etc/passwd\",\"title\":\"X\",\"priority\":1,\"done\":false,\"noteBytes\":0}\n";
   r.feed(body.data(), body.size());
   EXPECT_TRUE(cap.tasks.empty());
@@ -379,7 +379,7 @@ TEST(TaskSyncReader, RejectsANoteLongerThanTheCap) {
   Capture cap;
   TaskSyncReader r(callbacks(cap));
   const std::string body =
-      "{\"schema\":1,\"cursor\":\"MQ==\",\"more\":false,\"reset\":false,\"count\":1}\n"
+      "{\"schema\":1,\"cursor\":\"MQ\",\"more\":false,\"reset\":false,\"count\":1}\n"
       "{\"id\":\"w00000001\",\"title\":\"X\",\"priority\":1,\"done\":false,\"noteBytes\":99999}\n";
   r.feed(body.data(), body.size());
   EXPECT_TRUE(r.hasError());
@@ -390,7 +390,7 @@ TEST(TaskSyncReader, TruncatesAnOverlongTitleInsteadOfOverflowing) {
   TaskSyncReader r(callbacks(cap));
   const std::string title(400, 't');
   const std::string body =
-      "{\"schema\":1,\"cursor\":\"MQ==\",\"more\":false,\"reset\":false,\"count\":1}\n"
+      "{\"schema\":1,\"cursor\":\"MQ\",\"more\":false,\"reset\":false,\"count\":1}\n"
       "{\"id\":\"w00000001\",\"title\":\"" + title + "\",\"priority\":1,\"done\":false,\"noteBytes\":0}\n";
   r.feed(body.data(), body.size());
   ASSERT_EQ(cap.tasks.size(), 1u);
@@ -833,7 +833,7 @@ TEST(TaskOpQueue, BuildsARequestBodyWithCursorAndOps) {
   const size_t n = taskOpsToRequestBody(ops, 1, "MTg=", body, sizeof(body));
   ASSERT_GT(n, 0u);
   const std::string s(body, n);
-  EXPECT_NE(s.find("\"cursor\":\"MTg=\""), std::string::npos);
+  EXPECT_NE(s.find("\"cursor\":\"MTg\""), std::string::npos);
   EXPECT_NE(s.find("\"op\":\"add\""), std::string::npos);
   EXPECT_NE(s.find("\"id\":\"d0000abc1\""), std::string::npos);
   EXPECT_EQ(s.front(), '{');
