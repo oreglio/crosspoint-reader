@@ -91,3 +91,4 @@ add_subdirectory(absolute_grayscale)
 
 add_subdirectory(buffered_file)
 add_subdirectory(ota_boot_switch)
+add_subdirectory(task_record)
