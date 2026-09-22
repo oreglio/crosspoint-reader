@@ -982,11 +982,31 @@ In `src/config.ts`, add to the `Config` interface:
   webPassword: string | null; sessionSecret: string;
 ```
 
+Add this helper beside the other `loadConfig` helpers — **never fall back to
+`deviceToken`**. That token is the article pipeline's bearer and the reader holds
+it on its SD card; signing session cookies with it would let anyone who reads the
+card forge a web session, pair their own device and revoke yours. The two realms
+must not share a key:
+
+```ts
+function sessionSecretOf(env: Env, deviceToken: string): string {
+  const given = env.SESSION_SECRET?.trim();
+  if (given) {
+    if (given.length < 32) throw new ConfigError('SESSION_SECRET trop court (min 32 caractères)');
+    if (given === deviceToken) throw new ConfigError('SESSION_SECRET doit différer de DEVICE_TOKEN');
+    return given;
+  }
+  // Sans interface web, aucune session n'est jamais signée : une valeur inerte suffit.
+  if (!env.WEB_PASSWORD?.trim()) return 'web-desactivee';
+  throw new ConfigError('SESSION_SECRET requis dès que WEB_PASSWORD est défini (openssl rand -hex 32)');
+}
+```
+
 and inside the object returned by `loadConfig`:
 
 ```ts
     webPassword: env.WEB_PASSWORD?.trim() || null,
-    sessionSecret: env.SESSION_SECRET?.trim() || deviceToken,
+    sessionSecret: sessionSecretOf(env, deviceToken),
 ```
 
 Append to `.env.example`:
