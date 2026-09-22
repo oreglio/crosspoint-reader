@@ -1218,17 +1218,31 @@ export function registerWebData(app: FastifyInstance, tasks: TaskDb, cfg: Config
       const row = tasks.get(req.params.id);
       if (!row || row.deleted === 1) return reply.code(404).send({ error: 'inconnue' });
       const b = req.body ?? {};
-      if (b.note !== undefined && Buffer.byteLength(String(b.note), 'utf8') > MAX_NOTE_BYTES) {
+      // `?? ''` : un `note: null` explicite vaut « vide », pas la chaine "null"
+      // — String(null) donnerait littéralement « null » dans la note affichée
+      // sur la liseuse.
+      if (b.note !== undefined && Buffer.byteLength(String(b.note ?? ''), 'utf8') > MAX_NOTE_BYTES) {
         return reply.code(400).send({ error: 'note trop longue' });
       }
-      if (b.title !== undefined && Buffer.byteLength(String(b.title), 'utf8') > MAX_TITLE_BYTES) {
-        return reply.code(400).send({ error: 'titre trop long' });
+      if (b.title !== undefined) {
+        const t = String(b.title ?? '').trim();
+        // POST refuse un titre vide ; PATCH doit le refuser aussi, sinon on
+        // vide un titre par une modification partielle.
+        if (!t) return reply.code(400).send({ error: 'titre vide' });
+        if (Buffer.byteLength(t, 'utf8') > MAX_TITLE_BYTES) {
+          return reply.code(400).send({ error: 'titre trop long' });
+        }
+      }
+      // Une priorite presente mais hors domaine doit echouer, pas etre avalee :
+      // sinon l'appelant croit avoir ecrit et rien n'a change.
+      if (b.priority !== undefined && b.priority !== 0 && b.priority !== 1 && b.priority !== 2) {
+        return reply.code(400).send({ error: 'priorité invalide' });
       }
       tasks.upsert({
         ...row,
-        title: b.title !== undefined ? String(b.title) : row.title,
-        note: b.note !== undefined ? String(b.note) : row.note,
-        priority: b.priority === 0 || b.priority === 1 || b.priority === 2 ? b.priority : row.priority,
+        title: b.title !== undefined ? String(b.title ?? '').trim() : row.title,
+        note: b.note !== undefined ? String(b.note ?? '') : row.note,
+        priority: b.priority !== undefined ? b.priority : row.priority,
         done: b.done !== undefined ? (b.done ? 1 : 0) : row.done,
         updated_at: new Date().toISOString(),
       });
@@ -1237,7 +1251,10 @@ export function registerWebData(app: FastifyInstance, tasks: TaskDb, cfg: Config
 
   app.delete<{ Params: { id: string } }>('/web/api/tasks/:id', async (req, reply) => {
     if (!guard(req)) return reply.code(401).send({ error: 'non connecté' });
-    if (!tasks.get(req.params.id)) return reply.code(404).send({ error: 'inconnue' });
+    // `get()` ne filtre pas les tombstones : sans ce test, supprimer deux fois
+    // rendrait 200 la seconde fois, pour une tache qui n'existe plus.
+    const row = tasks.get(req.params.id);
+    if (!row || row.deleted === 1) return reply.code(404).send({ error: 'inconnue' });
     tasks.markDeleted(req.params.id);
     return { ok: true };
   });
