@@ -38,24 +38,12 @@ class TaskListActivity final : public UiListActivity {
   int listCount() const override;
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
-  // Right (detail) et Left (bascule "terminees") : aucun des deux n'est
-  // Back/Confirm/Haut/Bas, donc pas couvert par le contrat de base — voir le
-  // rapport pour pourquoi ce sont les deux boutons avant qui restent une fois
-  // Retour/Confirmer pris.
+  // Right (detail) et Left (ajouter) : aucun des deux n'est
+  // Back/Confirm/Haut/Bas, donc pas couvert par le contrat de base. Back et
+  // Confirmer restent ceux de la base (Confirmer au front d'appui) : sans appui
+  // long, rien ne demande plus d'attendre le relachement, et activateIndex()
+  // route selon la nature de la ligne.
   bool handleCustomInput() override;
-  // Remplace entierement le Back/Confirmer de la base. UiListActivity active la
-  // ligne sur le FRONT D'APPUI de Confirmer (UiListActivity.cpp:50-54), ce qui
-  // rend un appui long indiscernable d'un appui court : la bascule "fait"
-  // partirait des l'enfoncement, et l'ecran de creation s'ouvrirait par-dessus
-  // une tache qu'on vient de cocher par accident. Ici c'est donc le
-  // RELACHEMENT qui decide, et sa duree qui choisit entre cocher et creer --
-  // exactement l'idiome de LibraryListActivity::handleButtons().
-  bool handleButtons() override;
-  // Remplace le pas Suivant/Precedent de base : celui-ci ne sait pas que la
-  // ligne d'en-tete "terminees" n'est pas selectionnable (fui::ListItem
-  // l'affiche non selectionnee, mais rien cote fui ne fait sauter l'index du
-  // bouton par-dessus) — taskListStepSelection le fait.
-  void navigateButtons() override;
   // En-tete + sous-ligne d'etat, rejoues par la base a chaque passe de
   // reconstruction ; pieds : les quatre libelles propres a cet ecran.
   void drawChrome() override;
@@ -65,6 +53,8 @@ class TaskListActivity final : public UiListActivity {
   void rebuildOrder();
   void buildRows(UiScreen& screen);
   void toggleAt(int index);
+  // Confirmer (ou un toucher) sur la ligne "N faites" : accordeon.
+  void toggleDoneSection();
   void openDetailAt(int index);
   // Creation sur l'appareil, sans serveur ni Wi-Fi : refus du plafond, puis
   // clavier, puis choix de priorite. Les deux etapes sont chainees par leurs
@@ -101,7 +91,7 @@ class TaskListActivity final : public UiListActivity {
   // Fenetre de ListItem materialisee pour la page visible seulement (comme
   // LibraryListActivity::winItems), pas un tableau de la taille totale.
   std::vector<freeink::ui::ListItem> winItems;
-  // Stockage stable pour le libelle "N terminees" tant qu'il est reference
-  // par un ListItem::label (un seul a la fois, ligne d'en-tete unique).
-  std::string doneHeaderLabel;
+  // Stockage stable pour le libelle "N faites" tant qu'il est reference par un
+  // ListItem::label (un seul a la fois, la ligne est unique).
+  std::string doneRowLabel;
 };

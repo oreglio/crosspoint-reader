@@ -16,14 +16,18 @@
 // implementation a maintenir en plus des ~40 ecrans qui partagent la
 // premiere. Extrait pour rester testable a l'hote sans renderer ni TaskStore.
 
-// Une ligne d'ecran est soit une tache, soit l'en-tete non selectionnable de
-// la section "terminees" (repliee par defaut).
-enum class TaskRowKind : uint8_t { Task, DoneHeader };
+// Une ligne d'ecran est une tache, la ligne "N faites" qui deplie ou replie la
+// section terminees, ou la ligne "+ Ajouter une tache" d'un index vide. Les
+// trois sont selectionnables : aucune n'est un fui::ListItem::isHeader, que le
+// SDK dessine non selectionnable et sans action (list.h:442). Il n'y a donc
+// plus aucune ligne a sauter, et la navigation de base (ButtonNavigator) sert
+// telle quelle.
+enum class TaskRowKind : uint8_t { Task, DoneSection, AddTask };
 
 struct TaskListRow {
   TaskRowKind kind = TaskRowKind::Task;
   // Indice dans `records` (le tableau passe a buildTaskOrder) ; non
-  // significatif quand kind == DoneHeader.
+  // significatif quand kind != Task.
   int recordIndex = -1;
 };
 
@@ -37,31 +41,18 @@ struct TaskListRow {
 void buildTaskOrder(const std::vector<TaskRecord>& records, const std::vector<std::string>& tickedHere,
                     std::vector<int>& order, int& openCount);
 
-// Aplati `order` en lignes d'ecran : les `openCount` premieres taches, puis -
-// seulement si showDone - une ligne d'en-tete suivie du reste (deja trie par
-// priorite/id, puisque buildTaskOrder les laisse a la fin du tableau).
+// Aplati `order` en lignes d'ecran :
+//  - index vide : une seule ligne AddTask, rien d'autre ;
+//  - sinon les `openCount` premieres taches, puis - des qu'il reste au moins
+//    une tache terminee, section repliee OU depliee - la ligne DoneSection,
+//    suivie du reste (deja trie par priorite/id) seulement si showDone.
+// La ligne 0 est donc la premiere tache ouverte s'il y en a une, la ligne
+// AddTask si l'index est vide, et la ligne DoneSection si tout est fait :
+// c'est la selection par defaut, puisque UiListActivity::onEnter() remet la
+// selection a 0.
 void buildTaskListRows(const std::vector<int>& order, int openCount, bool showDone, std::vector<TaskListRow>& rows);
 
-// Avance `index` d'un cran (`direction` = +1 ou -1) dans `rows` sans jamais
-// s'arreter sur une ligne d'en-tete, en bouclant d'un bout a l'autre de la
-// liste. Rend -1 si `rows` est vide. Sert a faire sauter Haut/Bas par-dessus
-// la ligne "terminees", que fui::ListItem::isHeader rend non selectionnable a
-// l'affichage mais que rien cote fui ne fait sauter dans l'arithmetique
-// d'indices du bouton — c'est cette arithmetique-la, pas une geometrie.
-int taskListStepSelection(const std::vector<TaskListRow>& rows, int index, int direction);
-
-// Ramene `selected` sur une ligne Tache valide apres une reconstruction de
-// `rows` (bornes + saut par-dessus une en-tete). Rend -1 si `rows` est vide.
-int taskListNormalizeSelection(const std::vector<TaskListRow>& rows, int selected);
-
-// Saut de page (appui long sur Haut/Bas) : avance de `pageRows` lignes
-// (`direction` = +1 ou -1), puis ramene le resultat sur une ligne Tache via
-// taskListNormalizeSelection — un saut de page peut atterrir pile sur
-// l'en-tete "terminees", que rien cote ButtonNavigator ne sait eviter.
-// L'arithmetique elle-meme vient de util/PageIndex.h, le meme header dont
-// derivent ButtonNavigator::nextPageIndex/previousPageIndex : une seule
-// implementation pour les ~40 ecrans de liste et pour celui-ci, et elle reste
-// compilable a l'hote (PageIndex.h n'inclut ni Arduino ni le HAL, contrairement
-// a util/ButtonNavigator.h -> MappedInputManager.h -> HalGPIO.h -> Arduino.h).
-// Rend -1 si `rows` est vide.
-int taskListPageJump(const std::vector<TaskListRow>& rows, int selected, int pageRows, int direction);
+// Ramene `selected` dans les bornes de `rows` apres une reconstruction (une
+// coche ou un repli peut raccourcir la liste). Aucune ligne n'est sautee,
+// quelle que soit sa nature. Rend -1 si `rows` est vide.
+int taskListClampSelection(const std::vector<TaskListRow>& rows, int selected);

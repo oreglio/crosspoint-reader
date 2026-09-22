@@ -2,8 +2,6 @@
 
 #include <algorithm>
 
-#include "util/PageIndex.h"
-
 namespace {
 
 bool isTickedHere(const std::vector<std::string>& tickedHere, const char* id) {
@@ -53,55 +51,33 @@ void buildTaskOrder(const std::vector<TaskRecord>& records, const std::vector<st
 void buildTaskListRows(const std::vector<int>& order, int openCount, bool showDone, std::vector<TaskListRow>& rows) {
   rows.clear();
   const int total = static_cast<int>(order.size());
+  if (total == 0) {
+    // Seul cas ou la ligne d'ajout existe : dans l'etat "tout est fait",
+    // l'index n'est pas vide, la ligne "N faites" est la, et l'ajout passe par
+    // le bouton Gauche comme sur une liste peuplee.
+    rows.push_back({TaskRowKind::AddTask, -1});
+    return;
+  }
   if (openCount < 0) openCount = 0;
   if (openCount > total) openCount = total;
-  rows.reserve(showDone ? total + 1 : openCount);
+  const bool hasDone = openCount < total;
+  rows.reserve(static_cast<size_t>(showDone ? total + 1 : openCount + 1));
 
   for (int i = 0; i < openCount; ++i) rows.push_back({TaskRowKind::Task, order[i]});
 
-  if (showDone && openCount < total) {
-    rows.push_back({TaskRowKind::DoneHeader, -1});
-    for (int i = openCount; i < total; ++i) rows.push_back({TaskRowKind::Task, order[i]});
+  // Presente repliee aussi : un accordeon qu'on ne voit pas ne s'ouvre pas.
+  if (hasDone) {
+    rows.push_back({TaskRowKind::DoneSection, -1});
+    if (showDone) {
+      for (int i = openCount; i < total; ++i) rows.push_back({TaskRowKind::Task, order[i]});
+    }
   }
 }
 
-int taskListStepSelection(const std::vector<TaskListRow>& rows, int index, int direction) {
+int taskListClampSelection(const std::vector<TaskListRow>& rows, int selected) {
   const int total = static_cast<int>(rows.size());
   if (total == 0) return -1;
-  int next = index;
-  for (int step = 0; step < total; ++step) {
-    next = (next + direction + total) % total;
-    if (rows[next].kind == TaskRowKind::Task) return next;
-  }
-  // Rien de selectionnable (que des en-tetes) : ne devrait jamais arriver
-  // puisqu'une en-tete n'existe que quand il y a au moins une tache derriere.
-  return index;
-}
-
-int taskListNormalizeSelection(const std::vector<TaskListRow>& rows, int selected) {
-  const int total = static_cast<int>(rows.size());
-  if (total == 0) return -1;
-  if (selected < 0) selected = 0;
-  if (selected >= total) selected = total - 1;
-  if (rows[selected].kind == TaskRowKind::Task) return selected;
-  return taskListStepSelection(rows, selected, +1);
-}
-
-int taskListPageJump(const std::vector<TaskListRow>& rows, int selected, int pageRows, int direction) {
-  const int total = static_cast<int>(rows.size());
-  if (total == 0) return -1;
-  if (pageRows <= 0) pageRows = 1;
-  if (selected < 0) selected = 0;
-  if (selected >= total) selected = total - 1;
-
-  // Meme arithmetique que ButtonNavigator::nextPageIndex/previousPageIndex :
-  // les deux delegent a util/PageIndex.h, qui n'inclut ni Arduino ni le HAL et
-  // reste donc compilable a l'hote. Les gardes degenerees restent ici (voir le
-  // contrat de PageIndex.h) : cet appelant rend -1 sur une liste vide, pas 0.
-  const int jumped =
-      direction > 0 ? nextPageIndexPure(selected, total, pageRows) : previousPageIndexPure(selected, total, pageRows);
-  // Un saut de page ignore tout des lignes non selectionnables et peut
-  // atterrir pile sur l'en-tete "terminees" : cette correction est ce qui
-  // rend la propriete testable a l'hote (voir TaskListModelTest.cpp).
-  return taskListNormalizeSelection(rows, jumped);
+  if (selected < 0) return 0;
+  if (selected >= total) return total - 1;
+  return selected;
 }

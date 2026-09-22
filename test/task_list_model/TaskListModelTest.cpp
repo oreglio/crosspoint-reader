@@ -109,19 +109,28 @@ TEST(BuildTaskOrder, EqualPriorityFallsBackToId) {
 }
 
 // --- buildTaskListRows -------------------------------------------------------
+// The "N faites" row is an accordion: it must be present whenever something is
+// done, collapsed or expanded, and the add row exists only for an empty index.
+// Each test below was checked by mutation on a scratch copy outside the git
+// tree: it fails when the rule it names is broken, and passes again once
+// restored.
 
-TEST(BuildTaskListRows, HidesDoneSectionByDefault) {
+TEST(BuildTaskListRows, CollapsedStillShowsTheDoneRowButNotTheDoneTasks) {
+  // Avant la refonte, la ligne n'existait qu'une fois la section ouverte :
+  // replie, rien ne permettait de l'ouvrir au doigt ni a Confirmer.
   std::vector<int> order = {0, 1, 2};
   std::vector<TaskListRow> rows;
   buildTaskListRows(order, /*openCount=*/2, /*showDone=*/false, rows);
 
-  ASSERT_EQ(rows.size(), 2u);
+  ASSERT_EQ(rows.size(), 3u);
   EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
   EXPECT_EQ(rows[0].recordIndex, 0);
+  EXPECT_EQ(rows[1].kind, TaskRowKind::Task);
   EXPECT_EQ(rows[1].recordIndex, 1);
+  EXPECT_EQ(rows[2].kind, TaskRowKind::DoneSection);
 }
 
-TEST(BuildTaskListRows, ShowDoneInsertsOneHeaderBeforeTheDoneTail) {
+TEST(BuildTaskListRows, ExpandedPutsTheDoneRowBeforeTheDoneTail) {
   std::vector<int> order = {0, 1, 2, 3};
   std::vector<TaskListRow> rows;
   buildTaskListRows(order, /*openCount=*/2, /*showDone=*/true, rows);
@@ -129,115 +138,124 @@ TEST(BuildTaskListRows, ShowDoneInsertsOneHeaderBeforeTheDoneTail) {
   ASSERT_EQ(rows.size(), 5u);
   EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
   EXPECT_EQ(rows[1].kind, TaskRowKind::Task);
-  EXPECT_EQ(rows[2].kind, TaskRowKind::DoneHeader);
+  EXPECT_EQ(rows[2].kind, TaskRowKind::DoneSection);
   EXPECT_EQ(rows[3].kind, TaskRowKind::Task);
   EXPECT_EQ(rows[3].recordIndex, 2);
+  EXPECT_EQ(rows[4].kind, TaskRowKind::Task);
   EXPECT_EQ(rows[4].recordIndex, 3);
 }
 
-TEST(BuildTaskListRows, NoHeaderWhenNothingIsDone) {
+TEST(BuildTaskListRows, NoDoneRowWhenNothingIsDoneInEitherState) {
   std::vector<int> order = {0, 1};
   std::vector<TaskListRow> rows;
-  buildTaskListRows(order, /*openCount=*/2, /*showDone=*/true, rows);
-  ASSERT_EQ(rows.size(), 2u);
-  for (const auto& row : rows) EXPECT_EQ(row.kind, TaskRowKind::Task);
+  for (const bool showDone : {false, true}) {
+    buildTaskListRows(order, /*openCount=*/2, showDone, rows);
+    ASSERT_EQ(rows.size(), 2u) << "showDone=" << showDone;
+    for (const auto& row : rows) EXPECT_EQ(row.kind, TaskRowKind::Task) << "showDone=" << showDone;
+  }
 }
 
-TEST(BuildTaskListRows, TogglingDoneOffAfterUntickingTheLastCompletedTaskDropsTheHeader) {
-  // Le cas que le brief de correction nomme explicitement : la bascule reste
-  // ouverte (showDone ne change pas) et openCount passe de 1 a 2 parce que la
-  // derniere tache terminee vient d'etre decochee. L'en-tete est presente au
-  // premier appel et doit avoir disparu au second, sans rester orpheline
-  // au-dessus d'une section vide. Deux appels : sans le premier, le test ne
-  // serait qu'un doublon de NoHeaderWhenNothingIsDone.
+TEST(BuildTaskListRows, UntickingTheLastDoneTaskDropsTheCollapsedDoneRow) {
+  // La TRANSITION, section repliee : openCount passe de 1 a 2 parce que la
+  // derniere tache terminee vient d'etre decochee (depuis le detail). La ligne
+  // est la au premier appel et doit avoir disparu au second, sans rester
+  // orpheline sur un compte "0 faites". Deux appels : sans le premier, le test
+  // ne serait qu'un doublon de NoDoneRowWhenNothingIsDoneInEitherState.
   std::vector<int> order = {0, 1};
   std::vector<TaskListRow> rows;
 
-  buildTaskListRows(order, /*openCount=*/1, /*showDone=*/true, rows);
-  ASSERT_EQ(rows.size(), 3u);
-  EXPECT_EQ(rows[1].kind, TaskRowKind::DoneHeader);
+  buildTaskListRows(order, /*openCount=*/1, /*showDone=*/false, rows);
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
+  EXPECT_EQ(rows[1].kind, TaskRowKind::DoneSection);
 
-  buildTaskListRows(order, /*openCount=*/2, /*showDone=*/true, rows);
+  buildTaskListRows(order, /*openCount=*/2, /*showDone=*/false, rows);
   ASSERT_EQ(rows.size(), 2u);
   EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
   EXPECT_EQ(rows[1].kind, TaskRowKind::Task);
 }
 
-// --- taskListStepSelection / taskListNormalizeSelection ----------------------
+TEST(BuildTaskListRows, EmptyIndexYieldsExactlyTheAddRow) {
+  std::vector<int> order;
+  std::vector<TaskListRow> rows;
+  for (const bool showDone : {false, true}) {
+    buildTaskListRows(order, /*openCount=*/0, showDone, rows);
+    ASSERT_EQ(rows.size(), 1u) << "showDone=" << showDone;
+    EXPECT_EQ(rows[0].kind, TaskRowKind::AddTask) << "showDone=" << showDone;
+  }
+}
 
-TEST(TaskListStepSelection, SkipsOverTheHeaderRow) {
+TEST(BuildTaskListRows, NoAddRowOnceTheIndexHoldsAnything) {
+  // "Tout est fait" n'est PAS un index vide : aucune tache ouverte, mais la
+  // ligne "N faites" est la et l'ajout passe par le bouton Gauche. Seul un
+  // index reellement vide porte la ligne d'ajout — choix explicite de
+  // l'utilisateur contre une ligne toujours presente.
+  std::vector<TaskListRow> rows;
+
+  buildTaskListRows(/*order=*/{0, 1}, /*openCount=*/0, /*showDone=*/false, rows);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows[0].kind, TaskRowKind::DoneSection);
+
+  buildTaskListRows(/*order=*/{0, 1}, /*openCount=*/0, /*showDone=*/true, rows);
+  ASSERT_EQ(rows.size(), 3u);
+  for (const auto& row : rows) EXPECT_NE(row.kind, TaskRowKind::AddTask);
+
+  buildTaskListRows(/*order=*/{0, 1}, /*openCount=*/1, /*showDone=*/false, rows);
+  for (const auto& row : rows) EXPECT_NE(row.kind, TaskRowKind::AddTask);
+}
+
+TEST(BuildTaskListRows, RowZeroIsTheDefaultSelectionForEveryState) {
+  // UiListActivity::onEnter() remet la selection a 0 et l'ecran s'ouvre
+  // replie : la ligne 0 EST la selection par defaut. Elle doit etre la
+  // premiere tache quand il y en a une d'ouverte, la ligne d'ajout sur un
+  // index vide - jamais la ligne "N faites" devant des taches ouvertes.
+  std::vector<TaskListRow> rows;
+
+  buildTaskListRows(/*order=*/{4, 2, 7}, /*openCount=*/1, /*showDone=*/false, rows);
+  ASSERT_FALSE(rows.empty());
+  EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
+  EXPECT_EQ(rows[0].recordIndex, 4);
+
+  buildTaskListRows(/*order=*/{}, /*openCount=*/0, /*showDone=*/false, rows);
+  ASSERT_FALSE(rows.empty());
+  EXPECT_EQ(rows[0].kind, TaskRowKind::AddTask);
+}
+
+// --- taskListClampSelection --------------------------------------------------
+// Every row is selectable now, so the only job left after a rebuild is to keep
+// the index in bounds. The old normalizer also stepped off the header; these
+// tests pin that it no longer steps off anything.
+
+TEST(TaskListClampSelection, ClampsOutOfRangeIndex) {
+  std::vector<TaskListRow> rows = {{TaskRowKind::Task, 0}, {TaskRowKind::Task, 1}};
+  EXPECT_EQ(taskListClampSelection(rows, 99), 1);
+  EXPECT_EQ(taskListClampSelection(rows, -5), 0);
+}
+
+TEST(TaskListClampSelection, StaysOnTheDoneRow) {
+  // Confirmer sur "N faites" deplie la section puis reconstruit : la selection
+  // doit rester sur la ligne qu'on vient d'activer, pas glisser sur la
+  // premiere tache terminee.
   std::vector<TaskListRow> rows = {
       {TaskRowKind::Task, 0},
-      {TaskRowKind::DoneHeader, -1},
+      {TaskRowKind::DoneSection, -1},
       {TaskRowKind::Task, 1},
   };
-  EXPECT_EQ(taskListStepSelection(rows, 0, +1), 2);  // saute l'en-tete
-  EXPECT_EQ(taskListStepSelection(rows, 2, -1), 0);  // et dans l'autre sens
+  EXPECT_EQ(taskListClampSelection(rows, 1), 1);
 }
 
-TEST(TaskListStepSelection, WrapsAround) {
-  std::vector<TaskListRow> rows = {{TaskRowKind::Task, 0}, {TaskRowKind::Task, 1}};
-  EXPECT_EQ(taskListStepSelection(rows, 1, +1), 0);
-  EXPECT_EQ(taskListStepSelection(rows, 0, -1), 1);
+TEST(TaskListClampSelection, AStaleIndexPastTheEndLandsOnTheLastRowWhateverItsKind) {
+  // Repli d'une section de trois taches alors que la selection etait sur la
+  // derniere d'entre elles : la liste retombe a deux lignes, et la selection
+  // doit atterrir sur "N faites", la derniere, et non chercher une tache.
+  std::vector<TaskListRow> rows = {{TaskRowKind::Task, 0}, {TaskRowKind::DoneSection, -1}};
+  EXPECT_EQ(taskListClampSelection(rows, 4), 1);
+
+  std::vector<TaskListRow> addOnly = {{TaskRowKind::AddTask, -1}};
+  EXPECT_EQ(taskListClampSelection(addOnly, 3), 0);
 }
 
-TEST(TaskListStepSelection, EmptyRowsReturnsNegativeOne) {
+TEST(TaskListClampSelection, EmptyRowsReturnsNegativeOne) {
   std::vector<TaskListRow> rows;
-  EXPECT_EQ(taskListStepSelection(rows, 0, +1), -1);
-}
-
-TEST(TaskListNormalizeSelection, ClampsOutOfRangeIndex) {
-  std::vector<TaskListRow> rows = {{TaskRowKind::Task, 0}, {TaskRowKind::Task, 1}};
-  EXPECT_EQ(taskListNormalizeSelection(rows, 99), 1);
-  EXPECT_EQ(taskListNormalizeSelection(rows, -5), 0);
-}
-
-TEST(TaskListNormalizeSelection, StepsPastAHeaderLandedOnAfterRebuild) {
-  std::vector<TaskListRow> rows = {
-      {TaskRowKind::Task, 0},
-      {TaskRowKind::DoneHeader, -1},
-      {TaskRowKind::Task, 1},
-  };
-  EXPECT_EQ(taskListNormalizeSelection(rows, 1), 2);
-}
-
-TEST(TaskListNormalizeSelection, EmptyRowsReturnsNegativeOne) {
-  std::vector<TaskListRow> rows;
-  EXPECT_EQ(taskListNormalizeSelection(rows, 0), -1);
-}
-
-// --- taskListPageJump ---------------------------------------------------
-// TaskListActivity itself is not host-compiled (it needs GfxRenderer,
-// MappedInputManager, TaskStore), so the composition that matters --
-// "a page jump landing on the header gets corrected" -- has to live here to
-// be reachable by a host test at all. Verified by mutation on a scratch copy
-// outside the git tree: removing the taskListNormalizeSelection() call from
-// taskListPageJump() (returning `jumped` directly) makes both tests below
-// fail; restoring it makes them pass again.
-
-TEST(TaskListPageJump, ForwardJumpLandingExactlyOnTheDoneHeaderIsCorrectedToATaskRow) {
-  // ButtonNavigator::nextPageIndex(current=0, count=7, pageRows=3) rends
-  // exactement 3 -- l'index de l'en-tete -- puisque nextPageIndex ne sait
-  // rien des lignes non selectionnables.
-  std::vector<TaskListRow> rows = {
-      {TaskRowKind::Task, 0}, {TaskRowKind::Task, 1}, {TaskRowKind::Task, 2}, {TaskRowKind::DoneHeader, -1},
-      {TaskRowKind::Task, 3}, {TaskRowKind::Task, 4}, {TaskRowKind::Task, 5},
-  };
-  EXPECT_EQ(taskListPageJump(rows, /*selected=*/0, /*pageRows=*/3, /*direction=*/+1), 4);
-}
-
-TEST(TaskListPageJump, BackwardJumpLandingExactlyOnTheDoneHeaderIsCorrectedToATaskRow) {
-  // ButtonNavigator::previousPageIndex(current=6, count=7, pageRows=3) rend
-  // aussi 3 : le saut arriere ignore la ligne d'en-tete tout autant que le
-  // saut avant.
-  std::vector<TaskListRow> rows = {
-      {TaskRowKind::Task, 0}, {TaskRowKind::Task, 1}, {TaskRowKind::Task, 2}, {TaskRowKind::DoneHeader, -1},
-      {TaskRowKind::Task, 3}, {TaskRowKind::Task, 4}, {TaskRowKind::Task, 5},
-  };
-  EXPECT_EQ(taskListPageJump(rows, /*selected=*/6, /*pageRows=*/3, /*direction=*/-1), 4);
-}
-
-TEST(TaskListPageJump, EmptyRowsReturnsNegativeOne) {
-  std::vector<TaskListRow> rows;
-  EXPECT_EQ(taskListPageJump(rows, 0, 3, +1), -1);
+  EXPECT_EQ(taskListClampSelection(rows, 0), -1);
 }
