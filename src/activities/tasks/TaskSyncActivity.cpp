@@ -95,6 +95,10 @@ TaskSyncActivity::TaskSyncActivity(GfxRenderer& renderer, MappedInputManager& ma
 
 void TaskSyncActivity::onEnter() {
   Activity::onEnter();
+  // Avant toute lecture : hasSecret()/readSecret() ne chargent pas le store,
+  // et un store jamais charge se lit comme non appaire — 401 pour toujours.
+  // main.cpp le charge deja dans la branche TASK_SYNC ; sans effet dans ce cas.
+  TASK_STORE.ensureLoaded();
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
   requestUpdate();
