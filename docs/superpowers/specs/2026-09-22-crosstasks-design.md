@@ -1,4 +1,4 @@
-# TODO Sync — Design
+# CrossTasks — Design
 
 Date: 2026-09-22 · Status: validated with the user (this session) · Target: fork-local feature, firmware + CrossDrop companion
 
@@ -48,11 +48,11 @@ Three units with one interface between them.
 
 | Unit | Lives in | Owns |
 | --- | --- | --- |
-| `todo` module | `crossdrop/src/todo*.ts` | SQLite table, op application, cursor diff, pairing secrets |
+| `task` module | `crossdrop/src/task*.ts` | SQLite table, op application, cursor diff, pairing secrets |
 | Web UI | `crossdrop/web/` | Two templates + one stylesheet + vendored Alpine |
-| Device | `CrossInkLibrary/src/activities/todo/` + `src/TodoStore.*` | Screens, SD persistence, pending-op queue, sync client |
+| Device | `CrossInkLibrary/src/activities/tasks/` + `src/TaskStore.*` | Screens, SD persistence, pending-op queue, sync client |
 
-The device and the server share exactly one contract: `POST /api/v1/todo/sync`.
+The device and the server share exactly one contract: `POST /api/v1/tasks/sync`.
 Everything else on either side can change without touching the other.
 
 ### Why one endpoint and not a REST resource
@@ -67,7 +67,7 @@ resource would mean one handshake per task.
 ### Server (new table; migration is additive, articles untouched)
 
 ```sql
-CREATE TABLE IF NOT EXISTS todos (
+CREATE TABLE IF NOT EXISTS tasks (
   id         TEXT PRIMARY KEY,           -- 'w'+8hex (web-created) or 'd'+8hex (device-created)
   title      TEXT NOT NULL,
   note       TEXT NOT NULL DEFAULT '',
@@ -77,16 +77,16 @@ CREATE TABLE IF NOT EXISTS todos (
   updated_at TEXT NOT NULL,
   seq        INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_todos_seq ON todos(seq);
+CREATE INDEX IF NOT EXISTS idx_tasks_seq ON tasks(seq);
 ```
 
-`seq` comes from its own `kv` key `todo_seq`, **not** the article counter, so the
+`seq` comes from its own `kv` key `task_seq`, **not** the article counter, so the
 two features stay independent. It is bumped on write **only when what the device
 can see changes** — the exact rule `upsertArticle` already applies (`db.ts:49-56`),
 so a no-op save does not re-serve the task.
 
 Tombstones are purged after 30 days, and the purge horizon is recorded in `kv`
-as `todo_tombstone_floor`. A device whose cursor predates that floor would
+as `task_tombstone_floor`. A device whose cursor predates that floor would
 silently miss deletions, so the server answers it with `"reset": true` in the
 header and a full snapshot; the device clears its index and note directory
 before applying. This is the one case where the device throws away local state,
@@ -97,8 +97,8 @@ snapshot is computed.
 
 Two tiers, because notes must never be held in RAM as a block:
 
-- `/.crosspoint/todo/index.json` — `id`, `title`, `priority`, `done`, `noteBytes`.
-  Loaded in `onEnter()`, freed in `onExit()`. **`MAX_TODOS = 120`** active tasks
+- `/.crosspoint/tasks/index.json` — `id`, `title`, `priority`, `done`, `noteBytes`.
+  Loaded in `onEnter()`, freed in `onExit()`. **`MAX_TASKS = 120`** active tasks
   ≈ 8.4 KB resident.
   The cap is enforced **server-side only**: an `add` is refused with 409 once 120
   active tasks exist, whether it comes from the web or the device. A personal
@@ -106,22 +106,22 @@ Two tiers, because notes must never be held in RAM as a block:
   place that can count authoritatively removes every overflow-eviction path from
   the device — which would otherwise need to decide what to forget, and to
   remember that it forgot.
-- `/.crosspoint/todo/n/<id>.txt` — one note per file, written during sync, read
+- `/.crosspoint/tasks/n/<id>.txt` — one note per file, written during sync, read
   and paginated on demand by the detail screen. Never fully resident. This is
   the same shape as `/Articles/*.md`.
-- `/.crosspoint/todo/ops.ndjson` — pending local operations, appended on each
+- `/.crosspoint/tasks/ops.ndjson` — pending local operations, appended on each
   local change, replayed at the next sync, truncated only after a 2xx.
   Mirrors `raindrop-done.txt` (`RaindropSyncActivity.cpp:31`).
-- `/.crosspoint/todo/cursor.txt` — opaque base64url cursor, validated with the
+- `/.crosspoint/tasks/cursor.txt` — opaque base64url cursor, validated with the
   same alphabet check as `isSafeCursor` (`RaindropSyncActivity.cpp:46-56`).
 
-`TodoStore` derives from `PersistableStore<TodoStore>` like `OpdsServerStore`,
+`TaskStore` derives from `PersistableStore<TaskStore>` like `OpdsServerStore`,
 so JSON machinery stays in `PersistableStore.cpp` and the store stays
 flash-neutral.
 
 ## Protocol
 
-### Request — `POST /api/v1/todo/sync`
+### Request — `POST /api/v1/tasks/sync`
 
 `Content-Type: application/json`, within the existing 16 KB `bodyLimit`.
 
@@ -149,23 +149,35 @@ replay.
 
 ### Response — `application/x-ndjson`
 
-One JSON object per line. First line is the header.
+One JSON object per line. First line is the header. **A note is not a JSON
+string**: when `noteBytes > 0`, exactly that many raw bytes follow the metadata
+line, terminated by a newline that is not counted in `noteBytes`.
 
 ```
 {"schema":1,"cursor":"MTg=","more":false,"reset":false,"count":3}
-{"id":"w17ab93c2","title":"Rappeler le notaire","priority":0,"done":false,"note":"…"}
-{"id":"d3f9a1c04","title":"Racheter du café en grains","priority":0,"done":false,"note":""}
+{"id":"w17ab93c2","title":"Rappeler le notaire","priority":0,"done":false,"noteBytes":124}
+Curseur + file d'ops dans une seule requête… (124 raw bytes, then \n)
+{"id":"d3f9a1c04","title":"Racheter du café en grains","priority":0,"done":false,"noteBytes":0}
 {"id":"w0091fe22","deleted":true}
 ```
 
-NDJSON is the whole point: the device reads **one line at a time**, so peak RAM
-is one task plus one note (capped at 4 KB), regardless of list size. A single
-JSON array would have to be buffered whole.
+Two reasons, and the second is the binding one:
+
+- The device reads **one line at a time**, so peak RAM is one task's metadata
+  regardless of list size. A single JSON array would have to be buffered whole.
+- The firmware's existing `StreamingJsonParser` (`lib/JsonParser/`) holds one
+  token in a **512-byte** buffer. A 4 KB note as a JSON string would not fit, and
+  widening that buffer would cost every other JSON consumer in the firmware.
+  Framing the note as raw bytes keeps it out of the parser entirely: the device
+  streams it straight to SD in chunks, and the server never escapes it.
+
+Only `title` remains an unbounded JSON string, capped at 200 bytes raw — at most
+400 once escaped, comfortably inside the 512-byte token buffer.
 
 ### Server algorithm
 
 1. Authenticate (below). Validate the body with Ajv.
-2. Apply `ops` **in array order**, each bumping `todo_seq` only on a real change.
+2. Apply `ops` **in array order**, each bumping `task_seq` only on a real change.
 3. `SELECT … WHERE seq > cursor ORDER BY seq LIMIT 200`.
    An **absent or empty cursor means a full snapshot**: every non-deleted task,
    paged the same way. That is the first-sync path and the `reset` path, and it
@@ -200,7 +212,7 @@ drift is therefore irrelevant to sync correctness.
    26 Crockford-base32 characters, shown as a QR by the existing
    `QrDisplayActivity`, with the grouped text below it as a no-camera fallback.
 2. Web (session-authenticated): the pairing page scans it and `POST`s to
-   `/api/v1/todo/pair`, which stores **`sha256(secret)`** — never the secret.
+   `/api/v1/tasks/pair`, which stores **`sha256(secret)`** — never the secret.
 3. Device stores the secret on SD, XOR-obfuscated with the hardware MAC and
    base64-encoded, using `lib/Serialization/ObfuscationUtils` — the same
    treatment `OpdsServerStore` gives passwords.
@@ -235,7 +247,7 @@ Tasks screen says pairing is required.
 
 Designed, not built in v1. `X-Sig = HMAC-SHA256(secret, method|path|body|seq)`
 with a strictly increasing `X-Seq` persisted on the device, behind a server flag
-`TODO_REQUIRE_SIG=1`. It buys three things over the bearer: the secret never
+`TASK_REQUIRE_SIG=1`. It buys three things over the bearer: the secret never
 appears in reverse-proxy logs, the body is integrity-checked, and replays are
 refused — using a counter rather than a timestamp, so it stays clock-free. It
 costs ~60 lines on each side. Behind a real certificate the bearer is enough,
@@ -271,9 +283,9 @@ Two new screens only: detail and sync summary.
 
 ## Device sync flow
 
-`NetworkBootTarget::TODO_SYNC = 9` (next free value in `src/SilentRestart.h:10`).
-Settings action and Home entry call `silentRestartToNetwork(TODO_SYNC)`; the
-minimal network boot runs `TodoSyncActivity`, which:
+`NetworkBootTarget::TASK_SYNC = 9` (next free value in `src/SilentRestart.h:10`).
+Settings action and Home entry call `silentRestartToNetwork(TASK_SYNC)`; the
+minimal network boot runs `TaskSyncActivity`, which:
 
 1. Runs `WifiSelectionActivity`.
 2. Pushes the RTC into the system clock before TLS — without it wolfSSL fails
@@ -324,14 +336,15 @@ consequence is that the manual code field is a genuine fallback, not decoration.
 
 ## Testing
 
-- **crossdrop (Vitest, existing suite):** `todo.db.test.ts` — seq bumping only
-  on visible change, tombstones, purge, the tombstone floor. `todo.api.test.ts` —
+- **crossdrop (Vitest, existing suite):** `taskDb.test.ts` — seq bumping only
+  on visible change, tombstones, purge, the tombstone floor. `task.api.test.ts` —
   op application order, ops-before-diff confirmation, empty cursor as snapshot,
   `reset` for a stale cursor, cursor paging and `more`, NDJSON framing, auth
   rejection, pairing, revocation, per-op rejection when full, limits.
-- **firmware (native CTest, `test/todo_sync/`):** the NDJSON line parser, the
-  ops-queue round trip, and the priority sort — all pure, no I/O, host-tested in
-  the style of `CountdownClock` and `PomodoroSchedule`.
+- **firmware (native CTest, `test/task_sync/`):** the response framing reader
+  (metadata line → raw note block → next line, including a note split across two
+  network chunks), the ops-queue round trip, and the priority sort — all pure, no
+  I/O, host-tested in the style of `CountdownClock` and `PomodoroSchedule`.
 - **On hardware:** pair from the phone; add a task on the web and sync; tick it
   on the device and sync back; add a task on the device offline, sync, confirm
   it appears on the web with a `d…` id; replay a sync interrupted mid-response
@@ -351,9 +364,9 @@ Each step is independently verifiable.
 
 1. **CrossDrop core** — table, migration, sync endpoint, limits, tests. No UI.
 2. **CrossDrop web** — login, list and editor, pairing page, responsive, tests.
-3. **Firmware store** — `TodoStore`, ops queue, NDJSON parser, host tests.
+3. **Firmware store** — `TaskStore`, ops queue, NDJSON parser, host tests.
 4. **Firmware screens** — list, detail, add, pomodoro title parameter.
-5. **Firmware sync** — `TodoSyncActivity`, boot target, pairing QR, settings.
+5. **Firmware sync** — `TaskSyncActivity`, boot target, pairing QR, settings.
 6. **Finishing** — i18n keys in `english.yaml` / `french.yaml` then
    `python3 scripts/gen_i18n.py`, `CHANGELOG.md` entry under *Added*, and a
    `docs/` page for the protocol.
