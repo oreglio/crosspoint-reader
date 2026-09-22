@@ -1519,7 +1519,13 @@ Create `web/templates/list.html`:
           <div class="t" :class="['p' + t.priority, sel && sel.id === t.id ? 'on' : '']" @click="select(t)">
             <span class="ring" @click.stop="toggle(t)"></span>
             <div>
-              <div class="ttl" x-text="t.title"></div>
+              <div class="ttl">
+                <span x-text="t.title"></span>
+                <!-- Marqueur d'edition non enregistree : survit au changement de
+                     selection, donc une tache en echec reste visible pendant
+                     qu'on en regarde une autre. -->
+                <span x-show="t.saveFailed" title="Modification non enregistrée">•</span>
+              </div>
               <div class="exc" x-show="t.note" x-text="t.note"></div>
             </div>
           </div>
@@ -1618,7 +1624,7 @@ function taskApp() {
     // a refuse — c'est ainsi qu'une note de 5000 caracteres disparait en
     // silence, decouverte au rechargement suivant.
     async flushSave(task) {
-      if (!task) return;
+      if (!task) return true;          // rien a sauver = rien a bloquer
       clearTimeout(this.timer);
       try {
         const res = await fetch('/web/api/tasks/' + task.id, { method: 'PATCH',
@@ -1626,15 +1632,22 @@ function taskApp() {
           body: JSON.stringify({ title: task.title, note: task.note, priority: task.priority }) });
         if (res.status === 401) { location.href = '/login'; return; }
         if (!res.ok) {
-          this.error = res.status === 400 ? 'Note ou titre trop long — non enregistré' : 'Échec de l’enregistrement';
-          this.saved = false;                 // l'edition reste en attente, pas perdue
+          // Le drapeau vit sur LA TACHE, pas dans l'indicateur global : celui-ci
+          // ne decrit que la tache selectionnee, donc un echec appartenant a une
+          // tache qu'on ne regarde plus s'evaporerait au prochain select().
+          task.saveFailed = true;
+          if (this.sel === task) {
+            this.error = res.status === 400 ? 'Note ou titre trop long — non enregistré' : 'Échec de l’enregistrement';
+            this.saved = false;
+          }
           return false;
         }
-        this.error = ''; this.saved = true;
+        task.saveFailed = false;
+        if (this.sel === task) { this.error = ''; this.saved = true; }
         return true;
       } catch (e) {
-        this.error = 'Hors ligne — non enregistré';
-        this.saved = false;
+        task.saveFailed = true;
+        if (this.sel === task) { this.error = 'Hors ligne — non enregistré'; this.saved = false; }
         return false;
       }
     },
