@@ -95,11 +95,33 @@ TEST(TaskNotePagerTest, TheSameWordIsCommittedWhenTheWindowIsFinal) {
 }
 
 TEST(TaskNotePagerTest, AlwaysProgressesEvenWhenNothingFits) {
-  // Un seul mot, plus long que la fenetre, et une largeur qui ne laisse pas
-  // passer un caractere : sans progression garantie, la pagination bouclerait.
-  const TaskNoteLineBreak brk = nextLine("abcdefghij", /*windowIsFinal=*/false, 1);
-  EXPECT_GT(brk.skipBytes, 0);
-  EXPECT_LE(brk.drawBytes, brk.skipBytes);
+  // Un seul mot, plus long que la fenetre, et une largeur qui ne laisse meme
+  // pas passer un caractere : sans progression garantie, la pagination
+  // bouclerait. En multi-octets, parce que c'est le SEUL regime qui atteint le
+  // repli `if (best == 0)` de fittingPrefix — la seule ligne du module capable
+  // d'emettre une coupure au milieu d'un caractere. La version ASCII de ce test
+  // ne distinguait pas un repli a 1 octet d'un repli sur une frontiere.
+  const std::string accented = "ééééé";  // 10 octets, cinq caracteres
+  ASSERT_EQ(accented.size(), 10u);
+  const TaskNoteLineBreak brk = nextLine(accented, /*windowIsFinal=*/false, 1);
+  // Exactement un caractere entier : ni 1 octet (moitie de caractere), ni la
+  // fenetre entiere.
+  EXPECT_EQ(brk.drawBytes, 2);
+  EXPECT_EQ(brk.skipBytes, 2);
+  EXPECT_NE(static_cast<unsigned char>(accented[brk.drawBytes]) & 0xC0, 0x80u)
+      << "la coupure de repli tombe au milieu d'un caractere";
+}
+
+TEST(TaskNotePagerTest, AWordWhoseWidthExactlyEqualsTheLineIsKept) {
+  // La frontiere d'egalite stricte du chemin "mot". A 10 px l'octet, "hello"
+  // fait exactement 50 px : il TIENT dans une ligne de 50 px et doit etre
+  // commis, pas renvoye a la ligne suivante. Le test de coupure dure epingle
+  // deja cette frontiere de son cote ; celui-ci manquait, et un `>` devenu
+  // `>=` passait inapercu — le mot serait alors coupe durement a 5 octets et
+  // l'espace suivante ne serait plus consommee (skipBytes 5 au lieu de 6).
+  const TaskNoteLineBreak brk = nextLine("hello world", /*windowIsFinal=*/true, 50);
+  EXPECT_EQ(brk.drawBytes, 5);
+  EXPECT_EQ(brk.skipBytes, 6);
 }
 
 TEST(TaskNotePagerTest, AWindowOfOneOverlongWordWithNoSpaceTerminates) {

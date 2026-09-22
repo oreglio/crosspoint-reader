@@ -325,45 +325,63 @@ void TaskListActivity::openDetailAt(int index) {
   // survivrait pas a une reorganisation. Copie dans une std::string locale
   // parce que le constructeur du detail lit la chaine avant que quoi que ce
   // soit ne bouge.
-  const std::string id = TASK_STORE.all()[static_cast<size_t>(rows[static_cast<size_t>(index)].recordIndex)].id;
+  const TaskRecord& opened = TASK_STORE.all()[static_cast<size_t>(rows[static_cast<size_t>(index)].recordIndex)];
+  const std::string id = opened.id;
+  // Etat AVANT la visite. tickedHere veut dire "cochee pendant cette visite",
+  // c'est-a-dire une TRANSITION de non-faite a faite : l'etat final seul ne
+  // peut pas l'exprimer. Voir le gestionnaire ci-dessous.
+  const bool wasDone = opened.done;
+
   startActivityForResult(std::make_unique<TaskDetailActivity>(renderer, mappedInput, id.c_str()),
-                         [this, id](const ActivityResult& result) {
+                         [this, id, wasDone](const ActivityResult& result) {
                            // Rien ne rappelle onEnter() sur une activite depilee : ActivityManager
                            // la restaure par std::move et ne fait tourner que ce gestionnaire
                            // (chemin Pop). `order`, `rows`, `openCount`, `showDone` et
                            // `tickedHere` sont donc exactement ceux d'avant la visite — ce qu'on
-                           // veut pour l'etat d'affichage, mais ce qui affiche un titre ou une
+                           // veut pour l'etat d'affichage, mais ce qui afficherait un titre ou une
                            // priorite perimes si le detail a modifie la tache. C'est ici ou nulle
                            // part que la liste l'apprend.
                            const auto* edit = std::get_if<TaskEditResult>(&result.data);
-                           if (edit == nullptr || !edit->changed) return;  // simple coup d'oeil : rien a refaire
+                           if (edit == nullptr) {
+                             // Invariant tenu par construction aujourd'hui : TaskDetailActivity ne
+                             // sort que par finishWithResult(). S'il gagnait une quatrieme sortie
+                             // qui l'oublie, la liste resterait perimee toute la visite sans log,
+                             // sans assert et sans indice visuel — la panne la plus penible a
+                             // diagnostiquer. Une ligne la rend audible.
+                             LOG_ERR(TAG, "Detail screen returned no TaskEditResult; the list may now be stale");
+                             return;
+                           }
+                           if (!edit->changed) return;  // simple coup d'oeil : rien a refaire
 
                            // Une coche faite dans le detail reste en place, attenuee, exactement
                            // comme une coche faite ici : tickedHere existe pour qu'un geste
                            // regrette se defasse sans ouvrir la section repliee, et cette raison
-                           // ne depend pas de l'ecran ou le geste a eu lieu. Du point de vue de
-                           // l'utilisateur rien ne distingue les deux — il regardait sa tache, il
-                           // l'a cochee, il est revenu.
+                           // ne depend pas de l'ecran ou le geste a eu lieu.
                            //
-                           // Conditionne a l'etat FINAL, pas a `changed` : cocher puis decocher
-                           // dans le detail ne doit rien ajouter, et un decochage retire l'entree
-                           // comme le fait deja toggleAt(). AVANT rebuildOrder(), qui lit
-                           // tickedHere pour trier.
+                           // La condition est une TRANSITION, pas un etat final. buildTaskOrder
+                           // traite tickedHere comme un contournement de `done`
+                           // (TaskListModel.cpp:32-35), donc y pousser une tache DEJA faite avant
+                           // la visite la ferait ressortir de la section "terminees" vers la liste
+                           // des ouvertes et ferait baisser le compte "N faites" — rien que pour
+                           // l'avoir renommee. D'ou `!wasDone && isDone`.
+                           //
+                           // Le retrait, lui, n'a lieu que si la tache n'est plus faite : une
+                           // tache cochee ICI puis seulement renommee dans le detail doit garder
+                           // son entree, sinon elle plongerait dans la section repliee. Meme
+                           // symetrie que toggleAt(). AVANT rebuildOrder(), qui lit tickedHere.
                            const TaskRecord* rec = TASK_STORE.find(id.c_str());
+                           const bool isDone = rec != nullptr && rec->done;
                            const auto already = std::find(tickedHere.begin(), tickedHere.end(), id);
-                           if (rec != nullptr && rec->done) {
+                           if (isDone && !wasDone) {
                              if (already == tickedHere.end()) tickedHere.push_back(id);
-                           } else if (already != tickedHere.end()) {
+                           } else if (!isDone && already != tickedHere.end()) {
                              tickedHere.erase(already);
                            }
 
                            dirty = true;
                            rebuildOrder();
-                           // La tache a pu changer de place (priorite) ou quitter l'ecran (cochee
-                           // alors que la section "terminees" est repliee, ce que tickedHere
-                           // evite desormais pour la tache qu'on vient de visiter, mais pas pour
-                           // une disparition due a un autre motif) : sans cette renormalisation,
-                           // `selected` designerait une ligne disparue.
+                           // La tache a pu changer de place (priorite) ou quitter l'ecran : sans
+                           // cette renormalisation, `selected` designerait une ligne disparue.
                            const int next = taskListNormalizeSelection(rows, activeNav().selected);
                            if (next >= 0) moveSelectionTo(next);
                            requestUpdate();

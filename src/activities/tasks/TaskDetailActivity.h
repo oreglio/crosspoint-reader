@@ -42,7 +42,10 @@ class TaskDetailActivity final : public Activity {
  private:
   // Ce que la note a donne. Distinguer "vide" de "illisible" evite d'annoncer
   // qu'une tache n'a pas de note quand c'est la carte SD qui a refuse.
-  enum class NoteState : uint8_t { Empty, Ready, Unreadable };
+  // Trois echecs distincts, pas un seul : "il n'y a pas de note", "l'index en
+  // annonce une mais le fichier a disparu" et "la carte a refuse la lecture" ne
+  // disent pas la meme chose a l'utilisateur.
+  enum class NoteState : uint8_t { Empty, Ready, Missing, Unreadable };
 
   // Lignes de note materialisees par page. La region la plus haute
   // envisageable (800 px de haut) tient 30 lignes a 26 px d'advanceY, donc 32
@@ -139,10 +142,17 @@ class TaskDetailActivity final : public Activity {
   void rebuildTitleLines();
   void computeLayout();
   bool allocateNotePool();
-  // Un seul point d'ouverture et une seule fermeture chacun, sans aucun
-  // `return` entre les deux : c'est ce qui rend la discipline de handle
-  // verifiable a la lecture, la seule verification disponible ici (SdFat
-  // n'autorise qu'un handle par chemin sur le materiel).
+  // Chacune ouvre et referme le fichier de note dans sa propre portee : aucun
+  // handle n'est detenu entre deux images, ce qui compte parce que onExit() ne
+  // tourne pas tant qu'un ecran enfant est au-dessus (un pomodoro tiendrait le
+  // handle des heures, et a travers HalStorage::shutdown()).
+  //
+  // La fermeture elle-meme vient du destructeur de HalFile, qui est RAII
+  // (lib/hal/HalStorage.cpp:280) : toute sortie ferme, `return` precoce
+  // compris. La regle "aucun `return` entre l'ouverture et le close()" reste
+  // tenue parce qu'elle rend la discipline verifiable a la lecture — la seule
+  // verification disponible ici, SdFat n'autorisant qu'un handle par chemin sur
+  // le materiel.
   void paginateNote();
   void loadPage(size_t page);
   // Decoupe `notePoolLength` octets deja lus en au plus noteLinesPerPage
@@ -158,7 +168,17 @@ class TaskDetailActivity final : public Activity {
   void editTitle();
   void editPriority();
   void startPomodoro();
-  bool appendAndApply(const TaskOp& op, const TaskRecord& next);
+  // Ecrit les deux fichiers SD PUIS prend le verrou de rendu pour appliquer la
+  // mutation en memoire : appendOp() ajoute une ligne et upsert() reserialise
+  // tout l'index, et render() ne lit rien de tout ca. Les tenir sous le verrou
+  // bloquait la tache de rendu pendant deux ecritures SD sans rien protéger.
+  // `rewrapTitle` fait rentrer rebuildTitleLines() dans ce meme verrou, pour
+  // qu'aucune image ne puisse voir le nouveau titre avec l'ancien enroulement.
+  //
+  // L'appelant ne doit donc PAS detenir le verrou (il est non recursif). Seul
+  // onEnter() appelle rebuildTitleLines() directement, verrou tenu, et il
+  // n'appelle jamais celle-ci.
+  bool appendAndApply(const TaskOp& op, const TaskRecord& next, bool rewrapTitle);
 
   // Non-const : dessiner une ligne la termine temporairement en place dans
   // notePool, exactement comme la mesure. Le declarer const mentirait.

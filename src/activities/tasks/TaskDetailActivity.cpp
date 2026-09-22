@@ -65,10 +65,16 @@ void TaskDetailActivity::onEnter() {
   RenderLock lock(*this);
   Activity::onEnter();
 
-  // La liste en dessous appelle unload() dans SON onExit, donc le store peut
-  // tres bien etre decharge ici apres un aller-retour. ensureLoaded() relit la
-  // carte au besoin. Cet ecran n'appelle JAMAIS unload() : la liste tient des
-  // indices dans ce vecteur.
+  // No-op en pratique : TaskListActivity::onExit() ne peut PAS tourner tant que
+  // cet ecran est au-dessus d'elle (c'est le meme fait de cycle de vie sur
+  // lequel repose tout le mecanisme de resultat), donc le store est forcement
+  // deja charge. L'appel reste comme garde-fou pour un futur appelant qui
+  // ouvrirait ce detail depuis ailleurs.
+  //
+  // Ce qu'il ne faut SURTOUT pas en deduire, c'est qu'un rechargement serait
+  // anodin ici : la liste en dessous tient des indices dans le vecteur du
+  // store, et le relire sous elle les ferait pointer dans un autre vecteur.
+  // Cet ecran n'appelle jamais unload().
   TASK_STORE.ensureLoaded();
 
   if (!refreshRecord()) {
@@ -131,7 +137,16 @@ void TaskDetailActivity::computeLayout() {
   pomodoroHeight = renderer.getLineHeight(LEXENDDECA_12_FONT_ID) + 2 * kFramePadding;
   pomodoroX = contentX;
   pomodoroWidth = contentWidth;
-  pomodoroY = safe.y + safe.height - metrics.buttonHintsHeight - metrics.verticalSpacing - pomodoroHeight;
+  // PAS de soustraction de buttonHintsHeight ici : getScreenSafeArea() l'a deja
+  // retiree, et dans la bonne dimension selon l'orientation — de la hauteur en
+  // portrait, de la largeur en paysage (UITheme.cpp:163-167), parce que
+  // BaseTheme::drawButtonHints() force le portrait pour dessiner la bande le
+  // long du bord physique bas. La retirer une seconde fois faisait flotter ce
+  // bloc d'une bande entiere (environ 1,5 ligne de note) en portrait, et
+  // creusait un trou inutile en paysage. Sur un appareil tactile la question
+  // ne se pose pas : drawButtonHints() sort immediatement (BaseTheme.cpp:167)
+  // et on passe donc hasFrontButtonHints=false.
+  pomodoroY = safe.y + safe.height - metrics.verticalSpacing - pomodoroHeight;
 
   statusTop = titleTop + titleHeight + kBlockGap;
 
@@ -208,6 +223,9 @@ size_t TaskDetailActivity::wrapLoadedWindow(const bool windowIsFinal, const bool
 
 void TaskDetailActivity::paginateNote() {
   pageOffsets.clear();
+  // Regle de ressources 7 du CLAUDE.md : reserver avant la boucle de push.
+  // 16 pages couvrent une note de 4 Ko (TASK_NOTE_MAX) en une allocation.
+  pageOffsets.reserve(16);
   noteState = NoteState::Empty;
   if (!notePool) return;
 
@@ -216,7 +234,16 @@ void TaskDetailActivity::paginateNote() {
     noteState = NoteState::Unreadable;
     return;
   }
-  if (record.noteBytes == 0 || !Storage.exists(path)) return;  // pas de note : ce n'est pas une erreur
+  if (record.noteBytes == 0) return;  // pas de note : ce n'est pas une erreur
+  if (!Storage.exists(path)) {
+    // L'index annonce une note dont le fichier a disparu. Dire "aucune note"
+    // ferait croire a l'utilisateur qu'il n'en a jamais ecrit — c'est
+    // exactement la distinction que NoteState existe pour porter.
+    LOG_ERR(TAG, "Task %s claims %u note bytes but %s is gone", record.id, static_cast<unsigned>(record.noteBytes),
+            path);
+    noteState = NoteState::Missing;
+    return;
+  }
 
   HalFile file;
   if (!Storage.openFileForRead(TAG, path, file)) {
@@ -224,10 +251,16 @@ void TaskDetailActivity::paginateNote() {
     return;
   }
 
-  // A partir d'ici et jusqu'au close(), aucun `return` : c'est ce qui rend la
-  // fermeture du handle verifiable a la lecture. SdFat n'autorise qu'un
-  // handle par chemin sur le materiel, et aucun test de cette branche ne peut
-  // attraper une fuite.
+  // Ce qui FERME le fichier, c'est le destructeur : HalFile est RAII
+  // (HalFile::~HalFile() { close(); }, lib/hal/HalStorage.cpp:280) et `file`
+  // est une locale, donc toute sortie ferme, `return` precoce compris. Le
+  // close() explicite est une ceinture, pas le mecanisme.
+  //
+  // La regle "aucun `return` entre l'ouverture et le close()" est tenue quand
+  // meme, mais pour une autre raison : elle rend la discipline verifiable a la
+  // lecture, ce qui est la seule verification disponible ici — SdFat n'autorise
+  // qu'un handle par chemin sur le materiel et aucun test de cette branche ne
+  // peut attraper une fuite.
   // Ecrete a TASK_NOTE_MAX : c'est ce que la sync ecrit au plus, mais le
   // fichier vit sur une carte editable a la main. L'ecretage garde aussi les
   // offsets dans un uint16_t (4096 < 65535).
@@ -290,8 +323,9 @@ void TaskDetailActivity::loadPage(const size_t page) {
     return;
   }
 
-  // Meme discipline que paginateNote() : aucun `return` entre l'ouverture et
-  // le close().
+  // Meme discipline que paginateNote() : aucun `return` entre l'ouverture et le
+  // close(). La fermeture elle-meme vient du destructeur de HalFile, pas de
+  // cette regle — voir paginateNote().
   const size_t total = std::min<size_t>(file.size(), TASK_NOTE_MAX);
   const size_t offset = pageOffsets[page];
   bool ok = offset < total && file.seekSet(offset);
@@ -368,12 +402,13 @@ void TaskDetailActivity::loop() {
   }
 }
 
-// Ni celle-ci ni rebuildTitleLines() ne prennent le verrou de rendu : elles
-// sont appelees aussi bien depuis onEnter(), qui le detient deja, que depuis
-// un gestionnaire de resultat, qui ne le detient pas. renderingMutex est un
-// xSemaphoreCreateMutex() NON recursif — un verrou imbrique serait un
-// interblocage, pas une precaution. Ce sont donc les appelants qui verrouillent.
-bool TaskDetailActivity::appendAndApply(const TaskOp& op, const TaskRecord& next) {
+// Le verrou de rendu ne couvre QUE la mutation en memoire, jamais les deux
+// ecritures SD. render() ne lit ni la file d'ops ni index.json ; upsert()
+// reserialise tout l'index, donc le tenir sous le verrou bloquait la tache de
+// rendu le temps d'une reecriture complete sans rien proteger de plus. Et
+// l'appelant ne verrouille pas : renderingMutex est un xSemaphoreCreateMutex()
+// NON recursif, un verrou imbrique serait un interblocage.
+bool TaskDetailActivity::appendAndApply(const TaskOp& op, const TaskRecord& next, const bool rewrapTitle) {
   // La file d'ops AVANT l'index, jamais l'inverse : ce sont deux ecritures SD
   // distinctes, et une coupure entre les deux doit laisser un etat reparable.
   // Une op en file sans changement local l'est (la prochaine sync l'applique) ;
@@ -381,11 +416,11 @@ bool TaskDetailActivity::appendAndApply(const TaskOp& op, const TaskRecord& next
   // TaskListActivity::toggleAt().
   if (!TASK_STORE.appendOp(op)) {
     LOG_ERR(TAG, "Could not queue the edit for %s; nothing applied", next.id);
+    RenderLock lock(*this);
     writeFailed = true;
     requestUpdate();
     return false;
   }
-  writeFailed = false;
   // upsert() sur un id DEJA present remplace en place : l'ensemble des taches
   // ne change pas, donc le modele de lignes que la liste garde en dessous
   // reste juste. Cet ecran ne cree jamais de tache : la creation appartient a
@@ -393,8 +428,15 @@ bool TaskDetailActivity::appendAndApply(const TaskOp& op, const TaskRecord& next
   // tient de simples indices `int`, qu'un push_back ne deplace pas — mais une
   // vue perimee : une tache ajoutee ici n'apparaitrait dans aucune ligne.
   TASK_STORE.upsert(next);
+
+  // Un seul verrou pour TOUT ce que render() lit, enroulement du titre compris :
+  // le decouper en deux laisserait une image montrer le nouveau titre avec
+  // l'ancien enroulement, ou la nouvelle graisse sur l'ancien texte.
+  RenderLock lock(*this);
+  writeFailed = false;
   record = next;
   changedAnything = true;
+  if (rewrapTitle) rebuildTitleLines();
   return true;
 }
 
@@ -412,9 +454,9 @@ void TaskDetailActivity::toggleDone() {
   std::snprintf(op.id, sizeof(op.id), "%s", next.id);
   op.done = next.done;
 
-  // `record` et `writeFailed` sont lus par render() sur la tache de rendu.
-  RenderLock lock(*this);
-  if (appendAndApply(op, next)) requestUpdate();
+  // Pas de verrou ici : appendAndApply() le prend lui-meme, apres les ecritures
+  // SD. La graisse du titre ne depend pas de `done`, donc rien a re-enrouler.
+  if (appendAndApply(op, next, /*rewrapTitle=*/false)) requestUpdate();
 }
 
 void TaskDetailActivity::editTitle() {
@@ -437,13 +479,9 @@ void TaskDetailActivity::editTitle() {
           op.kind = TaskOpKind::Title;
           std::snprintf(op.id, sizeof(op.id), "%s", next.id);
           std::snprintf(op.title, sizeof(op.title), "%s", next.title);
-          // Portee explicite : le verrou tombe avant editPriority(), qui
-          // empile un ecran et ne doit pas le faire verrou tenu.
-          {
-            RenderLock lock(*this);
-            if (!appendAndApply(op, next)) return;
-            rebuildTitleLines();
-          }
+          // Le titre change : l'enroulement est refait dans le meme verrou que
+          // la mutation, a l'interieur de appendAndApply().
+          if (!appendAndApply(op, next, /*rewrapTitle=*/true)) return;
         }
         editPriority();
       });
@@ -475,11 +513,9 @@ void TaskDetailActivity::editPriority() {
                            std::snprintf(op.id, sizeof(op.id), "%s", next.id);
                            op.priority = priority;
 
-                           RenderLock lock(*this);
-                           if (!appendAndApply(op, next)) return;
                            // La graisse du titre porte la priorite haute : la
                            // changer rend l'enroulement precedent caduc.
-                           rebuildTitleLines();
+                           appendAndApply(op, next, /*rewrapTitle=*/true);
                          });
 }
 
@@ -510,7 +546,12 @@ void TaskDetailActivity::drawNote() {
     return;
   }
 
-  const char* message = noteState == NoteState::Unreadable ? tr(STR_TASK_NOTE_UNREADABLE) : tr(STR_TASK_NOTE_EMPTY);
+  const char* message = tr(STR_TASK_NOTE_EMPTY);
+  if (noteState == NoteState::Unreadable) {
+    message = tr(STR_TASK_NOTE_UNREADABLE);
+  } else if (noteState == NoteState::Missing) {
+    message = tr(STR_TASK_NOTE_MISSING);
+  }
   renderer.drawText(SMALL_FONT_ID, noteX, noteY, message, true);
 }
 
@@ -518,7 +559,10 @@ void TaskDetailActivity::drawPomodoroBlock() const {
   renderer.drawRect(pomodoroX, pomodoroY, pomodoroWidth, pomodoroHeight, true);
 
   char duration[16];
-  std::snprintf(duration, sizeof(duration), I18N.get(StrId::STR_SLEEP_TIMER_VALUE_FORMAT),
+  // Cle propre plutot que STR_SLEEP_TIMER_VALUE_FORMAT : les deux valent
+  // "%u min" aujourd'hui, mais un traducteur qui reformule la minuterie de
+  // veille reformulerait silencieusement cet ecran-ci.
+  std::snprintf(duration, sizeof(duration), I18N.get(StrId::STR_TASK_POMODORO_DURATION),
                 static_cast<unsigned>(PomodoroSchedule::clamp(APP_STATE.pomodoroWorkMinutes)));
   char series[32];
   // Position dans la serie. Elle vaut toujours 1 depuis cet ecran : une
@@ -535,6 +579,12 @@ void TaskDetailActivity::drawPomodoroBlock() const {
 }
 
 void TaskDetailActivity::render(RenderLock&&) {
+  // onEnter() rend la main avant computeLayout() quand l'id est introuvable, et
+  // le Pop n'est applique qu'au tour suivant du gestionnaire : un rendu deja
+  // programme pourrait passer entre les deux et peindre une geometrie a zero
+  // avec un en-tete "1 / 1". Cosmetique et peu probable, mais le drapeau existe.
+  if (!hasRecord) return;
+
   renderer.clearScreen();
 
   const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);

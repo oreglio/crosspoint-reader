@@ -253,9 +253,14 @@ void PomodoroActivity::render(RenderLock&&) {
   const CountdownLayout layout = computeCountdownLayout(renderer, mappedInput);
 
   if (!contextTitle.empty()) {
-    // Just above the ring, not inside it: the ring belongs to the figure. When
-    // the ring is tall enough to leave no gap, the line falls back to sitting
-    // under the header rather than being drawn over the stroke.
+    // Just above the ring, not inside it: the ring belongs to the figure.
+    //
+    // The clamp is a floor against the header, NOT a collision guard — it does
+    // not avoid the ring. When outerRadius == ringHeight / 2, cy - outerRadius
+    // is ringTop, which is only 8 px below the header, so the clamp puts the
+    // line at header bottom + 4 and it overlaps the top of the stroke. Both
+    // current profiles (480x800 and 800x480) cap the radius elsewhere and have
+    // clearance; a shorter profile would not.
     const int lineHeight = renderer.getLineHeight(LEXENDDECA_12_FONT_ID);
     const int contextTop =
         std::max(header.y + header.height + 4, layout.cy - layout.outerRadius - lineHeight - kContextTitleGap);
