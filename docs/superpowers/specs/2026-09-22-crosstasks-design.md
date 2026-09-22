@@ -114,6 +114,14 @@ Two tiers, because notes must never be held in RAM as a block:
   Mirrors `raindrop-done.txt` (`RaindropSyncActivity.cpp:31`).
 - `/.crosspoint/tasks/cursor.txt` — opaque base64url cursor, validated with the
   same alphabet check as `isSafeCursor` (`RaindropSyncActivity.cpp:46-56`).
+  **Opaque means opaque**: the device stores the string and hands it back, and
+  must never decode it, parse it or reason about its contents. The server's
+  encoding is its own business and has already changed once — it now carries a
+  snapshot-mode marker so a paginated reset is not re-evaluated on every page.
+  Measured worst case is 22 characters against the 32-byte validation, and the
+  alphabet is unchanged, so a device written against this rule keeps working
+  across future changes. A device that tried to read a sequence number out of it
+  would break the next time the server needed a flag.
 
 `TaskStore` derives from `PersistableStore<TaskStore>` like `OpdsServerStore`,
 so JSON machinery stays in `PersistableStore.cpp` and the store stays
