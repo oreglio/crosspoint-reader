@@ -1485,18 +1485,32 @@ git commit -m "feat(tasks): task detail with a paginated note and an anchored po
 ### Task 7: Adding a task on the device
 
 **Files:**
-- Modify: `src/activities/tasks/TaskListActivity.cpp`
-- Modify: `src/SettingsList.h`, `src/activities/settings/SettingsActivity.h` (one `SettingAction`)
+- Modify: `src/activities/tasks/TaskListActivity.cpp`, `.h`
+- Modify: `lib/I18n/translations/english.yaml`, `french.yaml` (only if a key you need is missing)
+
+Settings rows belong to Task 10, not here — it owns `SettingAction::TaskSync` and
+`TaskPair` for the whole feature. Do not add settings plumbing in this task.
 
 **Interfaces:**
 - Consumes: `KeyboardEntryActivity`, `OptionSelectionActivity`, `TaskStore::newDeviceId`, `TaskStore::appendOp`.
 
 - [ ] **Step 1: Chain the two existing screens**
 
-From the list, a long press on `Confirm` (or the Home menu's *New task*) pushes
-`KeyboardEntryActivity` with `tr(STR_TASK_NEW)` and `maxLength = TASK_TITLE_MAX`.
-On a non-cancelled result, push `OptionSelectionActivity` with the three
-priorities. On its result:
+Entry point is the list screen only: a long press on `Confirm`. The Home menu already has
+a Tasks entry that lands here, and a second entry that saves one keystroke is not worth a
+permanent menu row.
+
+**Before opening the keyboard, refuse a full list.** `TaskStore::upsert()` returns `void`
+and silently drops a record once `records.size() >= MAX_TASKS` (src/TaskStore.cpp:172-175),
+so the caller cannot detect the failure after the fact. If you discover the cap only after
+the user has typed, you will have queued an `Add` op for a task the device cannot show —
+the server would accept it and the device would stay blank until a sync brought it back.
+So check `TASK_STORE.all().size() >= MAX_TASKS` FIRST, show `tr(STR_TASK_LIST_FULL)` in the
+status line, and do not open the keyboard at all.
+
+Then push `KeyboardEntryActivity` with `tr(STR_TASK_NEW)` and `maxLength = TASK_TITLE_MAX`.
+On a non-cancelled result, push `OptionSelectionActivity` with the three priorities. On its
+result:
 
 ```cpp
   TaskRecord rec{};
@@ -1513,16 +1527,28 @@ priorities. On its result:
   std::memcpy(op.title, rec.title, sizeof(op.title));
   op.priority = rec.priority;
 
-  if (!TaskStore::getInstance().appendOp(op)) {
-    LOG_ERR("TASK", "could not queue the add op; task not created");
+  if (!TASK_STORE.appendOp(op)) {
+    LOG_ERR(TAG, "could not queue the add op; task not created");
     return;
   }
-  TaskStore::getInstance().upsert(rec);   // visible tout de suite, avant toute sync
-  TaskStore::getInstance().saveToFile();
+  TASK_STORE.upsert(rec);   // visible tout de suite, avant toute sync
 ```
 
 The order matters: the op is queued **first**, so a power loss between the two
-writes loses the local display but not the user's intent.
+writes loses the local display but not the user's intent. This is the same ordering
+`toggleAt()` uses, for the same reason.
+
+**No explicit `saveToFile()`.** `upsert()` already calls it on both of its paths
+(src/TaskStore.cpp:168, 177); adding another would rewrite the whole index a second time
+per created task, for nothing. Use the `TASK_STORE` macro rather than
+`TaskStore::getInstance()`, matching the rest of the screen.
+
+**Then refresh the list.** Nothing re-calls `onEnter()` on an activity that is popped back
+to (`ActivityManager.cpp:384-397` restores it with `std::move` and runs only its result
+handler), so the new task will not appear unless you make it: set `dirty`, call
+`rebuildOrder()`, put the selection back through `taskListNormalizeSelection`, and
+`requestUpdate()`. Selecting the newly created task is a nice touch if it falls out
+cheaply; do not contort the code for it.
 
 - [ ] **Step 2: Verify on the device build**
 
