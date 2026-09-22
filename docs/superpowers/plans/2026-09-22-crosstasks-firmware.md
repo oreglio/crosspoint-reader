@@ -1265,8 +1265,23 @@ git commit -m "feat(tasks): SD store for the task index, op queue, cursor and se
 
 **Interfaces:**
 - Consumes: `TaskStore` (Task 4), `TaskRecord` / `taskOrderBefore` (Task 1), `UITheme`, `MappedInputManager`.
-- Produces: `class TaskListActivity : public Activity` and
+- Produces: `class TaskListActivity : public UiListActivity` and
   `ActivityManager::navigateToTaskList()`.
+
+**Derive from `src/activities/UiListActivity`, do not rebuild list mechanics.**
+`.claude/CONTEXT.md:58-59` requires list screens to share the FreeInkUI list
+configuration rather than compute their own, and roughly forty activities already
+derive from this base. It owns the viewport sync, the selection (`fui::ListNav`),
+button navigation with page jumps on hold, swipe scrolling that moves the viewport
+without the selection, touch routing and the chrome/app/footer render skeleton.
+The subclass supplies `listCount()`, `buildScreen()` and `activateIndex()`.
+A bespoke row-fitting or scroll calculation duplicates `syncListViewport` and will
+drift from the forty screens that share the real one.
+
+What IS worth extracting and host-testing is the CrossTasks-specific filter, which
+is not geometry: which rows are shown given the toggle state and the set ticked
+during this visit. Its edge cases — ticking the last open task, unticking one back,
+the toggle being on when the last completed task is unticked — need no screen.
 
 **Design rules, from the approved mockups — these are requirements, not taste:**
 
@@ -1348,7 +1363,7 @@ a tick leaves the row in place struck through.
 
 ```bash
 clang-format -i src/activities/tasks/TaskListActivity.h src/activities/tasks/TaskListActivity.cpp
-git add src/activities/task src/activities/ActivityManager.* src/activities/home/HomeActivity.cpp
+git add src/activities/tasks src/activities/ActivityManager.* src/activities/home/HomeActivity.cpp
 git commit -m "feat(tasks): Tasks list screen with weight-carried priority"
 ```
 
@@ -1408,7 +1423,7 @@ title.
 
 ```bash
 clang-format -i src/activities/tasks/TaskDetailActivity.* src/activities/util/PomodoroActivity.*
-git add src/activities/task src/activities/util/PomodoroActivity.*
+git add src/activities/tasks src/activities/util/PomodoroActivity.*
 git commit -m "feat(tasks): task detail with a paginated note and an anchored pomodoro"
 ```
 
@@ -1465,7 +1480,7 @@ Add a task, confirm it appears immediately with the chosen weight, and confirm
 
 ```bash
 clang-format -i src/activities/tasks/TaskListActivity.cpp
-git add src/activities/task src/SettingsList.h src/activities/settings/SettingsActivity.h
+git add src/activities/tasks src/SettingsList.h src/activities/settings/SettingsActivity.h
 git commit -m "feat(tasks): create a task on the device from the existing keyboard"
 ```
 
@@ -1499,7 +1514,7 @@ must be exactly the 26 characters shown, with no prefix or URL wrapper.
 
 ```bash
 clang-format -i src/activities/tasks/TaskPairActivity.*
-git add src/activities/task src/SettingsList.h
+git add src/activities/tasks src/SettingsList.h
 git commit -m "feat(tasks): pair by showing a device-generated secret as a QR"
 ```
 
@@ -1579,7 +1594,7 @@ device-namespaced and adds are idempotent.
 
 ```bash
 clang-format -i src/activities/tasks/TaskSyncActivity.* src/SilentRestart.h
-git add src/activities/task src/SilentRestart.h src/main.cpp
+git add src/activities/tasks src/SilentRestart.h src/main.cpp
 git commit -m "feat(tasks): manual two-way sync from a minimal network boot"
 ```
 
