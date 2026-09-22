@@ -1545,7 +1545,7 @@ Create `web/templates/list.html`:
       <textarea class="d-note" x-model="sel.note" @input="queueSave()"
                 placeholder="Note… elle se lira sur la liseuse."></textarea>
       <div class="d-foot">
-        <span x-text="saved ? 'Enregistré · se lira en Lexend 10 sur la liseuse' : 'Modification en cours…'"></span>
+        <span x-text="error ? error : (saved ? 'Enregistré · se lira en Lexend 10 sur la liseuse' : 'Modification en cours…')"></span>
         <a href="#" @click.prevent="remove()" style="color:inherit">Supprimer</a>
       </div>
     </div>
@@ -1555,15 +1555,23 @@ Create `web/templates/list.html`:
 <script>
 function taskApp() {
   return {
-    tasks: [], sel: null, draft: '', draftPrio: 1, showDone: false, saved: true, status: {}, timer: null,
+    tasks: [], sel: null, draft: '', draftPrio: 1, showDone: false, saved: true, status: {}, timer: null, error: '',
     get open() { return this.tasks.filter(t => !t.done); },
     get done() { return this.tasks.filter(t => t.done); },
     async load() {
-      this.tasks = (await (await fetch('/web/api/tasks')).json()).tasks;
-      this.status = await (await fetch('/web/api/status')).json();
+      // Une 401 au chargement veut dire session expiree : la page est servie
+      // sans verification, donc sans cette redirection la liste reste
+      // desesperement vide et rien ne dit pourquoi.
+      const res = await fetch('/web/api/tasks');
+      if (res.status === 401) { location.href = '/login'; return; }
+      this.tasks = (await res.json()).tasks ?? [];
+      const st = await fetch('/web/api/status');
+      this.status = st.ok ? await st.json() : {};
       if (!this.sel) this.sel = this.open[0] ?? null;
     },
-    select(t) { this.sel = t; },
+    // Vide l'enregistrement en attente AVANT de changer de tache, sinon le
+    // timer en cours ecrirait le contenu de l'ancienne dans la nouvelle.
+    async select(t) { if (!this.saved && this.sel) await this.flushSave(this.sel); this.sel = t; },
     async add() {
       const title = this.draft.trim();
       if (!title) return;
@@ -1574,20 +1582,46 @@ function taskApp() {
       this.draft = ''; await this.load();
     },
     async toggle(t) {
+      // Mise a jour optimiste, mais RECONCILIEE : sans le retour arriere, une
+      // tache cochee ici peut rester active sur la liseuse indefiniment, et
+      // rien ne recharge apres un toggle.
+      const before = t.done;
       t.done = !t.done;
-      await fetch('/web/api/tasks/' + t.id, { method: 'PATCH',
-        headers: { 'content-type': 'application/json' }, body: JSON.stringify({ done: t.done }) });
+      try {
+        const res = await fetch('/web/api/tasks/' + t.id, { method: 'PATCH',
+          headers: { 'content-type': 'application/json' }, body: JSON.stringify({ done: t.done }) });
+        if (!res.ok) { t.done = before; this.error = res.status === 401 ? 'Session expirée' : 'Échec'; }
+      } catch (e) { t.done = before; this.error = 'Hors ligne'; }
     },
     // Autosave 1 s après la dernière frappe : ni mode, ni bouton « enregistrer ».
     queueSave() {
       this.saved = false;
       clearTimeout(this.timer);
-      this.timer = setTimeout(async () => {
-        await fetch('/web/api/tasks/' + this.sel.id, { method: 'PATCH',
+      this.timer = setTimeout(() => this.flushSave(this.sel), 1000);
+    },
+    // Ecrit la tache passee en parametre, pas `this.sel` : sans ca, changer de
+    // tache pendant la fenetre de 1 s ecrirait la mauvaise.
+    // Et l'indicateur ne doit JAMAIS annoncer un enregistrement que le serveur
+    // a refuse — c'est ainsi qu'une note de 5000 caracteres disparait en
+    // silence, decouverte au rechargement suivant.
+    async flushSave(task) {
+      if (!task) return;
+      clearTimeout(this.timer);
+      try {
+        const res = await fetch('/web/api/tasks/' + task.id, { method: 'PATCH',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ title: this.sel.title, note: this.sel.note, priority: this.sel.priority }) });
-        this.saved = true;
-      }, 1000);
+          body: JSON.stringify({ title: task.title, note: task.note, priority: task.priority }) });
+        if (res.status === 401) { location.href = '/login'; return; }
+        if (!res.ok) {
+          this.error = res.status === 400 ? 'Note ou titre trop long — non enregistré' : 'Échec de l’enregistrement';
+          this.saved = false;                 // l'edition reste en attente, pas perdue
+          return;
+        }
+        this.error = ''; this.saved = true;
+      } catch (e) {
+        this.error = 'Hors ligne — non enregistré';
+        this.saved = false;
+      }
     },
     async remove() {
       if (!confirm('Supprimer cette tâche ?')) return;
@@ -1656,7 +1690,7 @@ Create `web/templates/pair.html`:
 <script>
 function pairApp() {
   return {
-    code: '', status: {}, camMsg: 'Démarrage de la caméra…',
+    code: '', status: {}, stream: null, camMsg: 'Démarrage de la caméra…',
     async load() { this.status = await (await fetch('/web/api/status')).json(); this.startCam(); },
     async startCam() {
       // getUserMedia et BarcodeDetector exigent une origine sécurisée : derrière
@@ -1664,25 +1698,41 @@ function pairApp() {
       if (!window.isSecureContext) { this.camMsg = 'Caméra indisponible hors HTTPS — utilise le code.'; return; }
       if (!('BarcodeDetector' in window)) { this.camMsg = 'Ce navigateur ne sait pas lire un QR — utilise le code.'; return; }
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-        this.$refs.cam.srcObject = stream; await this.$refs.cam.play();
+        this.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        this.$refs.cam.srcObject = this.stream; await this.$refs.cam.play();
         this.camMsg = 'Vise le QR de la liseuse.';
         const det = new BarcodeDetector({ formats: ['qr_code'] });
         const tick = async () => {
           try {
             const hits = await det.detect(this.$refs.cam);
-            if (hits.length) { this.code = hits[0].rawValue; await this.pair(); return; }
+            if (hits.length) {
+              this.code = hits[0].rawValue;
+              // Ne s'arreter QUE sur un appairage reussi. Sinon on cumulait le
+              // pire : boucle de scan morte et camera restee allumee.
+              if (await this.pair()) { this.stopCam(); return; }
+            }
           } catch (e) { /* image pas encore prête */ }
-          requestAnimationFrame(tick);
+          if (this.stream) requestAnimationFrame(tick);
         };
         requestAnimationFrame(tick);
       } catch (e) { this.camMsg = 'Caméra refusée — utilise le code.'; }
     },
+    // Rend true seulement si l'appairage a reussi : c'est ce booleen qui decide
+    // si la boucle de scan s'arrete.
     async pair() {
-      const res = await fetch('/web/pair', { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ secret: this.code, label: 'Xteink X4' }) });
-      if (!res.ok) { alert('Code invalide.'); return; }
+      try {
+        const res = await fetch('/web/pair', { method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ secret: this.code, label: 'Xteink X4' }) });
+        if (res.status === 401) { location.href = '/login'; return false; }
+        if (!res.ok) { this.camMsg = 'Code invalide — continue de viser.'; return false; }
+      } catch (e) { this.camMsg = 'Hors ligne.'; return false; }
       this.code = ''; await this.load();
+      return true;
+    },
+    stopCam() {
+      this.stream?.getTracks().forEach(t => t.stop());
+      this.stream = null;
+      this.camMsg = 'Liseuse appairée.';
     },
     async unpair() {
       if (!confirm('Révoquer cette liseuse ?')) return;
