@@ -199,6 +199,9 @@ git commit -m "feat(tasks): fixed-width task record and its total display order"
     void (*onTask)(void* ctx, const TaskRecord& rec);
     void (*onDeleted)(void* ctx, const char* id);
     void (*onNoteChunk)(void* ctx, const char* id, const char* data, size_t len, bool last);
+    // Une op refusee par le serveur, annoncee dans le tableau `rejected` de
+    // l'en-tete : `reason` vaut "full", "unknown" ou "badid".
+    void (*onRejected)(void* ctx, const char* id, const char* reason);
   };
   class TaskSyncReader {
    public:
@@ -208,6 +211,15 @@ git commit -m "feat(tasks): fixed-width task record and its total display order"
     bool sawHeader() const;
   };
   ```
+
+**The header carries a `rejected` array.** `{"rejected":[{"id":"d0000abc1","reason":"full"}]}`
+is how the server refuses one op without failing the request, and the spec
+requires the device to drop that op *and name the task* on the sync summary. The
+reader must therefore emit `onRejected` per entry — which means its field sink
+cannot stay flat: a sink that tracks only the last key seen would let the nested
+`id` and `reason` keys masquerade as header fields. Track object depth, and read
+`rejected` entries only at depth 2 inside that array. Add a fixture whose header
+carries two rejections and assert both arrive.
 
 **This is the most important task in the plan.** It is the one piece the device
 and the server must agree on byte for byte, and the only one whose bugs are
@@ -1525,7 +1537,10 @@ The sequence, in order, each step with its reason:
 8. On 2xx: write the new cursor, `clearOps()`, save the index. On `more`, loop
    from step 4 with an empty ops array.
 9. On 401: keep the secret, show `tr(STR_TASK_PAIRING_REQUIRED)`.
-10. Show the summary (received / sent / total, and any rejected task named), then
+10. Show the summary: received / sent / total, and **each rejected op named with
+    its reason** — a task the server refused because the list was full must be
+    reported by title, not silently dropped, since the device has already removed
+    it from its own queue. Then
     `silentRestart()` in `onExit()` — the Wi-Fi session leaves the heap
     fragmented, exactly as for Raindrop.
 
