@@ -48,10 +48,14 @@ TaskDetailActivity::TaskDetailActivity(GfxRenderer& renderer, MappedInputManager
 // ---------------------------------------------------------------- lifecycle
 
 void TaskDetailActivity::onEnter() {
-  // Un seul verrou sur le cycle de vie de base ET la phase de donnees : le
-  // onEnter de base programme un rendu, et la tache de rendu ne doit pas lire
-  // la geometrie ni le tampon de note avant qu'ils soient en place (meme
-  // rituel que TaskListActivity::onEnter).
+  // Un seul verrou sur la phase de donnees : la tache de rendu ne doit pas lire
+  // la geometrie ni le tampon de note avant qu'ils soient en place.
+  //
+  // ATTENTION : contrairement a UiListActivity::onEnter(), Activity::onEnter()
+  // ne programme AUCUN rendu — il ne fait que journaliser. C'est a cet ecran
+  // de le demander, en fin de onEnter() (comme BookStatsActivity et
+  // DictionaryDefinitionActivity). Sans cet appel l'ecran ne s'affichait jamais :
+  // la liste restait a l'ecran jusqu'au prochain appui.
   RenderLock lock(*this);
   Activity::onEnter();
 
@@ -83,6 +87,7 @@ void TaskDetailActivity::onEnter() {
     paginateNote();
     loadPage(0);
   }
+  requestUpdate();
 }
 
 void TaskDetailActivity::onExit() {
