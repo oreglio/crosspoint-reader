@@ -119,6 +119,15 @@ bool TaskStore::fromJson(JsonVariantConst doc) {
   return true;
 }
 
+void TaskStore::unload() {
+  // clear() seul garderait la capacite reservee : shrink_to_fit() est ce qui
+  // rend les octets au tas. `secretObfuscated` reste en RAM (quelques dizaines
+  // d'octets, et l'appairage doit survivre a la fermeture de l'ecran).
+  records.clear();
+  records.shrink_to_fit();
+  markUnloaded();
+}
+
 void TaskStore::replaceAll(std::vector<TaskRecord> next) {
   // upsert() et fromJson() refusent deja un id malforme ; replaceAll() n'a
   // aujourd'hui qu'un seul appelant (TaskSyncReader, deja valide en amont),
@@ -141,6 +150,9 @@ void TaskStore::replaceAll(std::vector<TaskRecord> next) {
 }
 
 void TaskStore::upsert(const TaskRecord& rec) {
+  // saveToFile() reserialise tout `records` : ecrire dans un store decharge
+  // (unload()) reduirait index.json a cette seule tache. Voir unload().
+  ensureLoaded();
   if (!isValidTaskId(rec.id)) {
     LOG_ERR(TAG, "Refusing to index a task with a malformed id");
     return;
@@ -162,6 +174,7 @@ void TaskStore::upsert(const TaskRecord& rec) {
 
 void TaskStore::remove(const char* id) {
   if (id == nullptr) return;
+  ensureLoaded();  // meme raison que dans upsert()
   const auto it =
       std::find_if(records.begin(), records.end(), [id](const TaskRecord& r) { return strcmp(r.id, id) == 0; });
   if (it == records.end()) return;
@@ -344,11 +357,13 @@ bool TaskStore::readSecret(char* out, size_t size) const {
 
 void TaskStore::writeSecret(const char* secret) {
   if (secret == nullptr) return;
+  ensureLoaded();  // meme raison que dans upsert()
   secretObfuscated = obfuscation::obfuscateToBase64(secret).c_str();
   saveToFile();
 }
 
 void TaskStore::clearSecret() {
+  ensureLoaded();  // meme raison que dans upsert()
   secretObfuscated.clear();
   saveToFile();
 }

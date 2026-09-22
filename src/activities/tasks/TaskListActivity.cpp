@@ -18,6 +18,42 @@ namespace fui = freeink::ui;
 
 namespace {
 constexpr char TAG[] = "TASKLIST";
+
+// Pastilles circulaires de la maquette. 16x16, 1 bit par pixel, row-major
+// MSB-first, bit a 1 = encre : c'est le contrat de fui::BitmapRef/BW1, que
+// FreeInkUIGfxRenderer::bitmap() echantillonne via forEachBitmapPixel() puis
+// pose avec drawPixel(). Ce n'est PAS le contrat pre-tourne de
+// GfxRenderer::drawIcon (cf. la note de rotation de .claude/CONTEXT.md) : rien
+// ici ne doit etre stocke tourne — et un disque est de toute facon invariant
+// par rotation.
+//
+// `static const` donc en flash (.rodata), pas en DRAM : regle de ressources 3
+// du CLAUDE.md. Le champ BitmapRef::progmem n'est lu nulle part dans le SDK
+// (verifie : il n'apparait qu'a sa declaration) et sur ESP32 la flash est
+// mappee en lecture directe, donc le dereferencement de `data` est sans
+// danger — aucun pgm_read_byte necessaire, contrairement a l'AVR.
+constexpr int16_t TASK_BULLET_PX = 16;
+
+// Anneau ouvert : tache pas encore faite.
+static const uint8_t TASK_BULLET_OPEN[] = {
+    0x00, 0x00, 0x07, 0xe0, 0x1f, 0xf8, 0x38, 0x1c, 0x30, 0x0c, 0x60, 0x06, 0x60, 0x06, 0x60, 0x06,
+    0x60, 0x06, 0x60, 0x06, 0x60, 0x06, 0x30, 0x0c, 0x38, 0x1c, 0x1f, 0xf8, 0x07, 0xe0, 0x00, 0x00,
+};
+
+// Disque plein : tache faite (ou cochee pendant cette visite).
+static const uint8_t TASK_BULLET_DONE[] = {
+    0x00, 0x00, 0x07, 0xe0, 0x1f, 0xf8, 0x3f, 0xfc, 0x3f, 0xfc, 0x7f, 0xfe, 0x7f, 0xfe, 0x7f, 0xfe,
+    0x7f, 0xfe, 0x7f, 0xfe, 0x7f, 0xfe, 0x3f, 0xfc, 0x3f, 0xfc, 0x1f, 0xf8, 0x07, 0xe0, 0x00, 0x00,
+};
+
+fui::BitmapRef taskBullet(const bool done) {
+  fui::BitmapRef ref;
+  ref.data = done ? TASK_BULLET_DONE : TASK_BULLET_OPEN;
+  ref.width = TASK_BULLET_PX;
+  ref.height = TASK_BULLET_PX;
+  ref.format = fui::BitmapFormat::BW1;
+  return ref;
+}
 }  // namespace
 
 TaskListActivity::TaskListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -26,19 +62,20 @@ TaskListActivity::TaskListActivity(GfxRenderer& renderer, MappedInputManager& ma
 void TaskListActivity::onEnter() {
   // Un seul verrou sur le cycle de vie de base ET la phase de donnees : le
   // onEnter de base programme un rendu, et la tache de rendu ne doit pas lire
-  // records/rows avant qu'ils soient en place (meme rituel que
+  // order/rows avant qu'ils soient en place (meme rituel que
   // LibraryListActivity::onEnter).
   RenderLock lock(*this);
   UiListActivity::onEnter();
 
-  // Le store ne se charge pas tout seul au premier acces (getInstance() ne
-  // fait rien lire) : c'est a l'ecran de le demander ici, jamais depuis le
-  // rendu. Voir PersistableStore::ensureLoaded().
+  // onExit() decharge le store, donc ce n'est pas seulement le premier acces
+  // qui a besoin d'un chargement : ensureLoaded() relit bien la carte a chaque
+  // reouverture de l'ecran. Jamais depuis le rendu — voir
+  // PersistableStore::ensureLoaded().
   TASK_STORE.ensureLoaded();
 
-  records = TASK_STORE.all();
   tickedHere.clear();
   showDone = false;
+  tickFailed = false;
   dirty = true;
   rebuildOrder();
 }
@@ -46,8 +83,6 @@ void TaskListActivity::onEnter() {
 void TaskListActivity::onExit() {
   // Rien ne doit rester resident pendant la lecture : clear() seul garde la
   // capacite reservee, shrink_to_fit() la rend vraiment.
-  records.clear();
-  records.shrink_to_fit();
   tickedHere.clear();
   tickedHere.shrink_to_fit();
   order.clear();
@@ -58,11 +93,17 @@ void TaskListActivity::onExit() {
   winItems.shrink_to_fit();
   doneHeaderLabel.clear();
   doneHeaderLabel.shrink_to_fit();
+  // L'index lui-meme appartient au store, pas a l'activite : sans cet appel
+  // ses ~26 Ko survivraient a l'ecran pour toute la session (main.cpp charge
+  // le store a chaque demarrage). Cet ecran est le seul detenteur d'indices
+  // dedans, et ils viennent d'etre liberes ci-dessus.
+  TASK_STORE.unload();
   Activity::onExit();
 }
 
 void TaskListActivity::rebuildOrder() {
   if (!dirty) return;
+  const std::vector<TaskRecord>& records = TASK_STORE.all();
   buildTaskOrder(records, tickedHere, order, openCount);
   buildTaskListRows(order, openCount, showDone, rows);
   doneCount = static_cast<int>(records.size()) - openCount;
@@ -73,9 +114,9 @@ int TaskListActivity::listCount() const { return static_cast<int>(rows.size()); 
 
 void TaskListActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  // Contenu sous l'en-tete + la sous-ligne de fraicheur, au-dessus des
-  // indices de boutons -- ces deux bandes sont peintes hors fui, dans
-  // render(), donc reservees ici pour que la liste ne les recouvre pas
+  // Contenu sous l'en-tete + la sous-ligne d'etat, au-dessus des indices de
+  // boutons -- ces deux bandes sont peintes hors fui, dans drawChrome() /
+  // drawFooter(), donc reservees ici pour que la liste ne les recouvre pas
   // (meme rituel que LibraryListActivity::buildScreen).
   screen.setContentMargin(
       fui::Insets{static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput) +
@@ -92,6 +133,7 @@ void TaskListActivity::buildScreen(UiScreen& screen) {
 void TaskListActivity::buildRows(UiScreen& screen) {
   auto& nav = activeNav();
   const int count = listCount();
+  const std::vector<TaskRecord>& records = TASK_STORE.all();
 
   fui::ListProps props;
   props.count = static_cast<uint16_t>(count);
@@ -101,6 +143,10 @@ void TaskListActivity::buildRows(UiScreen& screen) {
   // Les titres peuvent s'enrouler sur deux lignes plutot que d'etre tronques
   // -- une exigence de la maquette, pas une simplification.
   props.labelText.maxLines = 2;
+  // Taille native des pastilles : list() les pose en BitmapMode::Contain, donc
+  // une iconSize differente les ferait redimensionner au plus proche voisin et
+  // l'anneau prendrait une epaisseur irreguliere sur un panneau 1 bit.
+  props.iconSize = TASK_BULLET_PX;
   configureUiListSectionHeaders(props, screen.theme());
   syncListViewport(screen, props, /*hasSubtitle=*/false);
 
@@ -123,6 +169,8 @@ void TaskListActivity::buildRows(UiScreen& screen) {
       const TaskRecord& rec = records[static_cast<size_t>(row.recordIndex)];
       item.label = rec.title;
       item.actionValue = static_cast<int16_t>(i);
+      // Pastille circulaire de la maquette : anneau ouvert / disque plein.
+      item.icon = taskBullet(rec.done);
       // Priorite haute seulement : ListItem::emphasis est un booleen par
       // ligne (freeink-sdk, ajoute pour ce chantier -- fui::ListProps::
       // labelText ne portait qu'un TextStyle unique pour tout l'appel de
@@ -165,7 +213,21 @@ bool TaskListActivity::handleCustomInput() {
     showDone = !showDone;
     dirty = true;
     rebuildOrder();
-    moveSelectionTo(taskListNormalizeSelection(rows, activeNav().selected));
+    const int next = taskListNormalizeSelection(rows, activeNav().selected);
+    if (next >= 0) moveSelectionTo(next);
+    return true;
+  }
+  // Gauche/Droite appartiennent aussi aux ensembles precedent/suivant de
+  // ButtonNavigator (getPreviousButtons/getNextButtons). Sans cette
+  // consommation, MAINTENIR "☑ n" ferait defiler la liste page par page via
+  // navigateButtons() avant que le relachement ne bascule la section — et,
+  // parce que la release est consommee ici, ButtonNavigator::lastContinuousNavTime
+  // ne serait jamais remis a zero, ce qui avalerait en silence l'appui
+  // Haut/Bas suivant. Sur CET ecran ces deux boutons veulent dire "cocher la
+  // section" et "detail", jamais page precedente/suivante. Correction locale :
+  // ni UiListActivity ni LibraryListActivity ne sont touches.
+  if (mappedInput.isPressed(MappedInputManager::Button::Left) ||
+      mappedInput.isPressed(MappedInputManager::Button::Right)) {
     return true;
   }
   return false;
@@ -181,13 +243,12 @@ void TaskListActivity::navigateButtons() {
     const int prev = taskListStepSelection(rows, n.selected, -1);
     if (prev >= 0) moveSelectionTo(prev);
   });
-  // Saut de page a l'appui long : taskListPageJump() reproduit
-  // ButtonNavigator::nextPageIndex/previousPageIndex puis corrige le
-  // resultat par-dessus la ligne d'en-tete "terminees" (que rien cote
-  // ButtonNavigator ne sait eviter) -- compose et teste a l'hote dans
-  // TaskListModel, puisque cette activite ne l'est pas elle-meme. Sans ce
-  // saut, un appui long sur 120 taches n'aurait plus que le pas-a-pas pour
-  // traverser la liste.
+  // Saut de page a l'appui long : taskListPageJump() partage l'arithmetique de
+  // ButtonNavigator (util/PageIndex.h) puis corrige le resultat par-dessus la
+  // ligne d'en-tete "terminees", que rien cote ButtonNavigator ne sait eviter
+  // -- compose et teste a l'hote dans TaskListModel, puisque cette activite ne
+  // l'est pas elle-meme. Sans ce saut, un appui long sur 120 taches n'aurait
+  // plus que le pas-a-pas pour traverser la liste.
   buttonNavigator.onNextContinuous([this, &n] {
     const int jumped = taskListPageJump(rows, n.selected, n.pageRows(), +1);
     if (jumped >= 0) moveSelectionTo(jumped);
@@ -203,8 +264,36 @@ void TaskListActivity::toggleAt(int index) {
   const TaskListRow row = rows[static_cast<size_t>(index)];
   if (row.kind != TaskRowKind::Task) return;
 
-  TaskRecord& rec = records[static_cast<size_t>(row.recordIndex)];
+  // Copie (216 octets de pile, sous le seuil de 256 du CLAUDE.md) et non une
+  // reference : upsert() peut push_back et donc reallouer le vecteur du store.
+  // Invariant du jour : l'id existe deja dans l'index (il vient de la), donc
+  // upsert() prend la branche "remplace en place" et ne realloue pas — mais
+  // c'est ecrit ici plutot que suppose en silence.
+  TaskRecord rec = TASK_STORE.all()[static_cast<size_t>(row.recordIndex)];
   rec.done = !rec.done;
+
+  // La file d'ops AVANT l'index, et non l'inverse. Ce sont deux ecritures SD
+  // distinctes : une coupure entre les deux doit laisser l'etat reparable. Une
+  // op en file sans changement local l'est (Done(id, true) est idempotente, la
+  // prochaine sync l'applique) ; un index qui dit "faite" avec une file vide
+  // ne l'est pas — le serveur n'apprendrait jamais la coche et le prochain
+  // replaceAll() rouvrirait la tache sans laisser de trace du geste.
+  TaskOp op{};
+  op.kind = TaskOpKind::Done;
+  std::snprintf(op.id, sizeof(op.id), "%s", rec.id);
+  op.done = rec.done;
+  if (!TASK_STORE.appendOp(op)) {
+    // Echec d'ecriture (carte pleine, fichier verrouille) : ne rien appliquer
+    // du tout. `rec` est une copie locale, donc l'index n'a pas bouge ; il
+    // reste a le dire a l'ecran, pas seulement au port serie. Le depot n'a pas
+    // de primitive de toast reutilisable hors du lecteur, donc le message
+    // prend la sous-ligne d'etat que drawChrome() peint deja.
+    LOG_ERR(TAG, "Echec de l'enregistrement de la bascule 'fait' pour %s", rec.id);
+    tickFailed = true;
+    requestUpdate();
+    return;
+  }
+  tickFailed = false;
 
   const std::string id(rec.id);
   const auto already = std::find(tickedHere.begin(), tickedHere.end(), id);
@@ -220,17 +309,10 @@ void TaskListActivity::toggleAt(int index) {
 
   TASK_STORE.upsert(rec);
 
-  TaskOp op{};
-  op.kind = TaskOpKind::Done;
-  std::snprintf(op.id, sizeof(op.id), "%s", rec.id);
-  op.done = rec.done;
-  if (!TASK_STORE.appendOp(op)) {
-    LOG_ERR(TAG, "Echec de l'enregistrement de la bascule 'fait' pour %s", rec.id);
-  }
-
   dirty = true;
   rebuildOrder();
-  moveSelectionTo(taskListNormalizeSelection(rows, activeNav().selected));
+  const int next = taskListNormalizeSelection(rows, activeNav().selected);
+  if (next >= 0) moveSelectionTo(next);
 }
 
 void TaskListActivity::openDetailAt(int index) {
@@ -241,7 +323,7 @@ void TaskListActivity::openDetailAt(int index) {
   // TaskDetailActivity arrive avec la Tache 6 ; ce bouton n'a pas encore
   // d'ecran a ouvrir.
   LOG_INF(TAG, "Detail demande pour %s (TaskDetailActivity : Tache 6)",
-          records[static_cast<size_t>(rows[static_cast<size_t>(index)].recordIndex)].id);
+          TASK_STORE.all()[static_cast<size_t>(rows[static_cast<size_t>(index)].recordIndex)].id);
 }
 
 void TaskListActivity::startSync() {
@@ -251,9 +333,7 @@ void TaskListActivity::startSync() {
   LOG_INF(TAG, "Sync demandee (TaskSyncActivity : Tache 9)");
 }
 
-void TaskListActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-
+void TaskListActivity::drawChrome() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
   char title[48];
@@ -264,34 +344,23 @@ void TaskListActivity::render(RenderLock&&) {
     GUI.drawHeader(renderer, header, title);
   }
 
-  // Fraicheur de sync : seule l'information qu'on a vraiment (appairee ou
-  // non) est affichee ici. Un horodatage relatif ("il y a 2h") demanderait un
-  // champ que rien n'ecrit encore -- voir le rapport.
-  const int subHeaderTop = header.y + header.height;
-  const char* freshness = TASK_STORE.hasSecret() ? tr(STR_TASK_UP_TO_DATE) : tr(STR_TASK_PAIRING_REQUIRED);
-  const Rect subHeader{0, subHeaderTop, renderer.getScreenWidth(), metrics.tabBarHeight};
-  GUI.drawSubHeader(renderer, subHeader, "", freshness);
+  // Sous-ligne d'etat. Normalement la fraicheur de sync : seule l'information
+  // qu'on a vraiment (appairee ou non) y est affichee, un horodatage relatif
+  // ("il y a 2h") demanderait un champ que rien n'ecrit encore -- voir le
+  // rapport. Elle sert aussi de surface d'erreur pour une coche refusee : ce
+  // depot n'a pas de toast reutilisable hors du lecteur, et cette ligne est
+  // deja peinte a chaque rendu.
+  const char* status = tickFailed               ? tr(STR_TASK_TICK_FAILED)
+                       : TASK_STORE.hasSecret() ? tr(STR_TASK_UP_TO_DATE)
+                                                : tr(STR_TASK_PAIRING_REQUIRED);
+  const Rect subHeader{0, header.y + header.height, renderer.getScreenWidth(), metrics.tabBarHeight};
+  GUI.drawSubHeader(renderer, subHeader, "", status);
+}
 
-  renderUi();
-  // Lignes de hauteur variable (titres qui s'enroulent) : la premiere passe
-  // peut mesurer moins de lignes que l'estimation a hauteur fixe. On rejoue
-  // dans le meme cadre plutot que de laisser une selection hors-champ (meme
-  // rituel que LibraryListActivity::render).
-  for (int pass = 0; activeNav().consumeRebuildNeeded() && pass < 8; ++pass) {
-    renderer.clearScreen();
-    if (mappedInput.hasTouchHardware()) {
-      TouchHeaderBackButton::draw(renderer, uiTarget, header, title, false);
-    } else {
-      GUI.drawHeader(renderer, header, title);
-    }
-    GUI.drawSubHeader(renderer, subHeader, "", freshness);
-    renderUi();
-  }
-
+void TaskListActivity::drawFooter() {
   char doneLabel[16];
   std::snprintf(doneLabel, sizeof(doneLabel), "\xE2\x98\x91 %d", doneCount);  // "[checkbox] N"
   const auto labels =
       mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), tr(STR_TASK_TICK), doneLabel, tr(STR_TASK_DETAIL));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer();
 }

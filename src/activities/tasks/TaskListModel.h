@@ -54,12 +54,14 @@ int taskListStepSelection(const std::vector<TaskListRow>& rows, int index, int d
 // `rows` (bornes + saut par-dessus une en-tete). Rend -1 si `rows` est vide.
 int taskListNormalizeSelection(const std::vector<TaskListRow>& rows, int selected);
 
-// Saut de page (appui long sur Haut/Bas) : avance de `pageRows` lignes comme
-// ButtonNavigator::nextPageIndex/previousPageIndex (`direction` = +1 ou -1),
-// puis ramene le resultat sur une ligne Tache via taskListNormalizeSelection —
-// un saut de page peut atterrir pile sur l'en-tete "terminees", que rien cote
-// ButtonNavigator ne sait eviter. Reimplemente ici plutot que d'appeler
-// ButtonNavigator (util/ButtonNavigator.h -> MappedInputManager.h ->
-// HalGPIO.h -> Arduino.h) : ce fichier reste testable a l'hote sans le
-// framework Arduino. Rend -1 si `rows` est vide.
+// Saut de page (appui long sur Haut/Bas) : avance de `pageRows` lignes
+// (`direction` = +1 ou -1), puis ramene le resultat sur une ligne Tache via
+// taskListNormalizeSelection — un saut de page peut atterrir pile sur
+// l'en-tete "terminees", que rien cote ButtonNavigator ne sait eviter.
+// L'arithmetique elle-meme vient de util/PageIndex.h, le meme header dont
+// derivent ButtonNavigator::nextPageIndex/previousPageIndex : une seule
+// implementation pour les ~40 ecrans de liste et pour celui-ci, et elle reste
+// compilable a l'hote (PageIndex.h n'inclut ni Arduino ni le HAL, contrairement
+// a util/ButtonNavigator.h -> MappedInputManager.h -> HalGPIO.h -> Arduino.h).
+// Rend -1 si `rows` est vide.
 int taskListPageJump(const std::vector<TaskListRow>& rows, int selected, int pageRows, int direction);

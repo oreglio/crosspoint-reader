@@ -1,5 +1,7 @@
 #include "ButtonNavigator.h"
 
+#include "PageIndex.h"
+
 const MappedInputManager* ButtonNavigator::mappedInput = nullptr;
 
 void ButtonNavigator::onNext(const Callback& callback) {
@@ -88,37 +90,15 @@ int ButtonNavigator::previousIndex(const int currentIndex, const int totalItems)
 }
 
 int ButtonNavigator::nextPageIndex(const int currentIndex, const int totalItems, const int itemsPerPage) {
+  // Degenerate guard here, arithmetic in PageIndex.h: taskListPageJump shares
+  // the arithmetic but wants -1 on an empty list, not 0. See PageIndex.h.
   if (totalItems <= 0 || itemsPerPage <= 0) return 0;
 
-  // When items fit on one page, use index navigation instead
-  if (totalItems <= itemsPerPage) {
-    return nextIndex(currentIndex, totalItems);
-  }
-
-  const int lastPageIndex = (totalItems - 1) / itemsPerPage;
-  const int currentPageIndex = currentIndex / itemsPerPage;
-
-  if (currentPageIndex < lastPageIndex) {
-    return (currentPageIndex + 1) * itemsPerPage;
-  }
-
-  return 0;
+  return nextPageIndexPure(currentIndex, totalItems, itemsPerPage);
 }
 
 int ButtonNavigator::previousPageIndex(const int currentIndex, const int totalItems, const int itemsPerPage) {
   if (totalItems <= 0 || itemsPerPage <= 0) return 0;
 
-  // When items fit on one page, use index navigation instead
-  if (totalItems <= itemsPerPage) {
-    return previousIndex(currentIndex, totalItems);
-  }
-
-  const int lastPageIndex = (totalItems - 1) / itemsPerPage;
-  const int currentPageIndex = currentIndex / itemsPerPage;
-
-  if (currentPageIndex > 0) {
-    return (currentPageIndex - 1) * itemsPerPage;
-  }
-
-  return lastPageIndex * itemsPerPage;
+  return previousPageIndexPure(currentIndex, totalItems, itemsPerPage);
 }

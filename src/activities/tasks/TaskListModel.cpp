@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "util/PageIndex.h"
+
 namespace {
 
 bool isTickedHere(const std::vector<std::string>& tickedHere, const char* id) {
@@ -33,7 +35,12 @@ void buildTaskOrder(const std::vector<TaskRecord>& records, const std::vector<st
     effectiveDone[i] = (records[i].done && !isTickedHere(tickedHere, records[i].id)) ? 1 : 0;
   }
 
-  std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+  // std::sort et non std::stable_sort : taskOrderBefore est un ordre TOTAL
+  // (le dernier depart est strcmp sur des ids uniques), donc la stabilite
+  // n'ajoute aucune garantie -- et std::stable_sort demande un tampon
+  // temporaire (~480 octets pour 120 int), une allocation evitable sur un C3
+  // sans PSRAM dans un chemin rejoue a chaque coche.
+  std::sort(order.begin(), order.end(), [&](int a, int b) {
     return taskOrderBefore(records[a], records[b], effectiveDone[a] != 0, effectiveDone[b] != 0);
   });
 
@@ -63,7 +70,7 @@ int taskListStepSelection(const std::vector<TaskListRow>& rows, int index, int d
   if (total == 0) return -1;
   int next = index;
   for (int step = 0; step < total; ++step) {
-    next = (next + direction % total + total) % total;
+    next = (next + direction + total) % total;
     if (rows[next].kind == TaskRowKind::Task) return next;
   }
   // Rien de selectionnable (que des en-tetes) : ne devrait jamais arriver
@@ -87,22 +94,12 @@ int taskListPageJump(const std::vector<TaskListRow>& rows, int selected, int pag
   if (selected < 0) selected = 0;
   if (selected >= total) selected = total - 1;
 
-  // Reproduit ButtonNavigator::nextPageIndex/previousPageIndex
-  // (src/util/ButtonNavigator.cpp) sans inclure ce header : il tire
-  // MappedInputManager.h -> HalGPIO.h -> Arduino.h, incompatible avec un
-  // module hote.
-  int jumped;
-  if (total <= pageRows) {
-    jumped = direction > 0 ? (selected + 1) % total : (selected + total - 1) % total;
-  } else {
-    const int lastPageIndex = (total - 1) / pageRows;
-    const int currentPageIndex = selected / pageRows;
-    if (direction > 0) {
-      jumped = currentPageIndex < lastPageIndex ? (currentPageIndex + 1) * pageRows : 0;
-    } else {
-      jumped = currentPageIndex > 0 ? (currentPageIndex - 1) * pageRows : lastPageIndex * pageRows;
-    }
-  }
+  // Meme arithmetique que ButtonNavigator::nextPageIndex/previousPageIndex :
+  // les deux delegent a util/PageIndex.h, qui n'inclut ni Arduino ni le HAL et
+  // reste donc compilable a l'hote. Les gardes degenerees restent ici (voir le
+  // contrat de PageIndex.h) : cet appelant rend -1 sur une liste vide, pas 0.
+  const int jumped =
+      direction > 0 ? nextPageIndexPure(selected, total, pageRows) : previousPageIndexPure(selected, total, pageRows);
   // Un saut de page ignore tout des lignes non selectionnables et peut
   // atterrir pile sur l'en-tete "terminees" : cette correction est ce qui
   // rend la propriete testable a l'hote (voir TaskListModelTest.cpp).

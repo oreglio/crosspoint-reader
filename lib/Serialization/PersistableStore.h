@@ -108,6 +108,17 @@ class PersistableStore : public PersistableStoreBase {
   // ensureLoaded() reads it.
   bool loaded = false;
 
+ protected:
+  // Lets a derived store that has just dropped its in-RAM payload make the
+  // next ensureLoaded() re-read it from SD. The flag itself stays private:
+  // clearing it is only correct for a store that also released what it had
+  // loaded, and what "released" means is per-store (see TaskStore::unload()).
+  // This is NOT an unload(): the base has nothing to release.
+  void markUnloaded() {
+    loaded = false;
+    loadAttempted_ = false;
+  }
+
  public:
   bool saveToFile() const {
     std::lock_guard<std::mutex> lock(storeMutex);

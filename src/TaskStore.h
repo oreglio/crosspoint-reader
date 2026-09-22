@@ -52,6 +52,19 @@ class TaskStore : public PersistableStore<TaskStore> {
   bool fromJson(JsonVariantConst doc);
 
   const std::vector<TaskRecord>& all() const { return records; }
+  // Rend vraiment la memoire de l'index (jusqu'a 120 x 216 octets = ~26 Ko,
+  // 7 % de la RAM d'un C3) et arme le prochain ensureLoaded() pour qu'il
+  // relise la carte. main.cpp charge ce store a chaque demarrage, donc sans
+  // cet appel les 26 Ko restaient residents toute la session, y compris
+  // pendant la lecture d'un livre. Seul TaskListActivity::onExit() l'appelle :
+  // c'est le seul detenteur d'indices dans ce vecteur.
+  //
+  // ATTENTION aux ecrivains : toute methode qui appelle saveToFile()
+  // reserialise `records`, donc ecrire dans un store decharge ecraserait
+  // index.json avec une liste vide. Les mutateurs concernes (upsert, remove,
+  // writeSecret, clearSecret) appellent ensureLoaded() en entree pour cette
+  // raison ; replaceAll() n'en a pas besoin, il remplace tout l'ensemble.
+  void unload();
   void replaceAll(std::vector<TaskRecord> next);
   void upsert(const TaskRecord& rec);
   void remove(const char* id);

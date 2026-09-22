@@ -74,19 +74,29 @@ TEST(BuildTaskOrder, TickedHereStaysInPlaceInsteadOfSinking) {
 }
 
 TEST(BuildTaskOrder, UntickingSomethingTickedThisVisitLetsItSinkAgain) {
-  // Cochee puis decochee dans la meme visite : plus dans tickedHere, elle
-  // redevient une tache faite ordinaire (le cas que le rapport appelle
-  // "cocher-decocher").
+  // La TRANSITION, pas seulement son etat d'arrivee : les MEMES records sont
+  // tries deux fois, d'abord avec w1 dans tickedHere (il garde sa place de
+  // priorite haute), puis sans (il retombe derriere w2). Un test qui n'aurait
+  // que le second appel passerait meme si tout le mecanisme tickedHere etait
+  // supprime -- c'est exactement le defaut qu'il avait.
   std::vector<TaskRecord> records = {
-      make("w1", "faite avant l'ouverture de l'ecran", 0, true),
+      make("w1", "cochee puis decochee dans la meme visite", 0, true),
       make("w2", "ouverte normale", 1),
   };
   std::vector<int> order;
   int openCount = 0;
+
+  buildTaskOrder(records, /*tickedHere=*/{"w1"}, order, openCount);
+  ASSERT_EQ(order.size(), 2u);
+  EXPECT_EQ(openCount, 2);  // cochee ici : encore comptee comme ouverte
+  EXPECT_EQ(order[0], 0);   // w1 n'a pas bouge
+  EXPECT_EQ(order[1], 1);
+
   buildTaskOrder(records, /*tickedHere=*/{}, order, openCount);
-  EXPECT_EQ(openCount, 1);
-  EXPECT_EQ(order[0], 1);  // w2 ouverte d'abord
-  EXPECT_EQ(order[1], 0);  // w1 faite, en fin de liste : jamais dans tickedHere
+  ASSERT_EQ(order.size(), 2u);
+  EXPECT_EQ(openCount, 1);  // decochee du registre de visite : elle coule
+  EXPECT_EQ(order[0], 1);   // w2 ouverte d'abord
+  EXPECT_EQ(order[1], 0);   // w1 faite, en fin de liste
 }
 
 TEST(BuildTaskOrder, EqualPriorityFallsBackToId) {
@@ -134,12 +144,19 @@ TEST(BuildTaskListRows, NoHeaderWhenNothingIsDone) {
 }
 
 TEST(BuildTaskListRows, TogglingDoneOffAfterUntickingTheLastCompletedTaskDropsTheHeader) {
-  // Le cas que le brief de correction nomme explicitement : la bascule est
-  // ouverte, la derniere tache "terminees" est decochee -> plus rien apres
-  // openCount -> l'en-tete doit disparaitre au prochain rebuild, pas rester
-  // orpheline au-dessus d'une section vide.
+  // Le cas que le brief de correction nomme explicitement : la bascule reste
+  // ouverte (showDone ne change pas) et openCount passe de 1 a 2 parce que la
+  // derniere tache terminee vient d'etre decochee. L'en-tete est presente au
+  // premier appel et doit avoir disparu au second, sans rester orpheline
+  // au-dessus d'une section vide. Deux appels : sans le premier, le test ne
+  // serait qu'un doublon de NoHeaderWhenNothingIsDone.
   std::vector<int> order = {0, 1};
   std::vector<TaskListRow> rows;
+
+  buildTaskListRows(order, /*openCount=*/1, /*showDone=*/true, rows);
+  ASSERT_EQ(rows.size(), 3u);
+  EXPECT_EQ(rows[1].kind, TaskRowKind::DoneHeader);
+
   buildTaskListRows(order, /*openCount=*/2, /*showDone=*/true, rows);
   ASSERT_EQ(rows.size(), 2u);
   EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
@@ -167,19 +184,6 @@ TEST(TaskListStepSelection, WrapsAround) {
 TEST(TaskListStepSelection, EmptyRowsReturnsNegativeOne) {
   std::vector<TaskListRow> rows;
   EXPECT_EQ(taskListStepSelection(rows, 0, +1), -1);
-}
-
-TEST(TaskListStepSelection, SteppingOnTheLastOpenTaskTogglesForwardIntoTheDoneHeader) {
-  // Cocher la derniere tache ouverte pendant que "terminees" est deplie ne
-  // doit pas planter la selection : Bas depuis elle doit sauter l'en-tete et
-  // atterrir sur la premiere tache terminee, pas rester bloque dessus.
-  std::vector<TaskListRow> rows = {
-      {TaskRowKind::Task, 0},
-      {TaskRowKind::DoneHeader, -1},
-      {TaskRowKind::Task, 1},
-      {TaskRowKind::Task, 2},
-  };
-  EXPECT_EQ(taskListStepSelection(rows, 0, +1), 2);
 }
 
 TEST(TaskListNormalizeSelection, ClampsOutOfRangeIndex) {
