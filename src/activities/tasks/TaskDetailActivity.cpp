@@ -72,8 +72,12 @@ void TaskDetailActivity::onEnter() {
   TASK_STORE.ensureLoaded();
 
   if (!refreshRecord()) {
+    // L'index ne contient pas l'id que la liste vient de nous passer : c'est
+    // elle qui est desynchronisee, pas nous. On repart en demandant une
+    // reconstruction plutot qu'en la laissant afficher une ligne fantome.
     LOG_ERR(TAG, "No task with id %s in the index; closing the detail screen", taskId.c_str());
-    finish();
+    changedAnything = true;
+    finishWithResult();
     return;
   }
 
@@ -331,12 +335,12 @@ void TaskDetailActivity::loop() {
   if (!hasRecord) return;
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    finish();
+    finishWithResult();
     return;
   }
 #if CROSSINK_APP_CAP_TOUCH
   if (TouchHeaderBackButton::wasTapped(mappedInput, renderer)) {
-    finish();
+    finishWithResult();
     return;
   }
 #endif
@@ -382,9 +386,19 @@ bool TaskDetailActivity::appendAndApply(const TaskOp& op, const TaskRecord& next
     return false;
   }
   writeFailed = false;
+  // upsert() sur un id DEJA present remplace en place : pas de push_back, donc
+  // pas de reallocation du vecteur du store, et les indices que la liste tient
+  // en dessous restent valides. Cet ecran ne cree jamais de tache — la
+  // creation appartient a la liste, precisement pour cette raison.
   TASK_STORE.upsert(next);
   record = next;
+  changedAnything = true;
   return true;
+}
+
+void TaskDetailActivity::finishWithResult() {
+  setResult(TaskEditResult{changedAnything});
+  finish();
 }
 
 void TaskDetailActivity::toggleDone() {

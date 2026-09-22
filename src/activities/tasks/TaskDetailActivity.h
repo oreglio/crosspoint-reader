@@ -74,6 +74,12 @@ class TaskDetailActivity final : public Activity {
   // Derniere ecriture refusee par la file d'ops : l'ecran le dit, pas
   // seulement le port serie (meme choix que la sous-ligne d'etat de la liste).
   bool writeFailed = false;
+  // Au moins une op appliquee pendant cette visite. Rendu a la liste en
+  // sortant : elle n'est jamais re-entree (pas de onEnter() sur le chemin de
+  // depilement), donc son ordre et ses lignes restent ceux d'avant et elle
+  // afficherait un titre ou une priorite perimes. Un simple coup d'oeil, lui,
+  // ne doit rien lui couter.
+  bool changedAnything = false;
 
   // Titre deja enroule, recalcule a l'entree et apres une modification — pas a
   // chaque rendu : render() tourne sur la tache de rendu et ne doit pas
@@ -145,6 +151,9 @@ class TaskDetailActivity final : public Activity {
   size_t wrapLoadedWindow(bool windowIsFinal, bool keepLines);
   void showPage(size_t page);
 
+  // Seule porte de sortie : elle pose le resultat avant de depiler, pour qu'il
+  // n'y ait pas un chemin de sortie qui le pose et un autre qui l'oublie.
+  void finishWithResult();
   void toggleDone();
   void editTitle();
   void editPriority();

@@ -86,6 +86,17 @@ struct ReadingStatsResult {
   bool changed = false;
 };
 
+// Ce que l'ecran de detail d'une tache rapporte a la liste. Rien ne rappelle
+// onEnter() sur une activite depilee (ActivityManager.cpp, chemin Pop : elle
+// est restauree par std::move et seul son gestionnaire de resultat tourne),
+// donc la liste garde son ordre et ses lignes tels qu'elle les a laisses. Ce
+// booleen est le seul moyen qu'elle a de savoir s'ils sont encore justes —
+// sans lui, un simple coup d'oeil sur une tache lui couterait une
+// reconstruction complete, et une modification passerait inapercue.
+struct TaskEditResult {
+  bool changed = false;
+};
+
 struct ClippingResult {
   std::string text;
   uint16_t sectionPage = 0;
@@ -125,8 +136,8 @@ struct ClippingJumpResult {
 using ResultVariant =
     std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult, IntervalResult,
                  OptionSelectionResult, PageResult, NetworkModeResult, FootnoteResult, BookmarkResult,
-                 FileBrowserActionResult, FilePathResult, WordResult, ReadingStatsResult, ClippingResult,
-                 DictionaryClippingRequest, ClippingJumpResult, FrontlightPanelResult>;
+                 FileBrowserActionResult, FilePathResult, WordResult, ReadingStatsResult, TaskEditResult,
+                 ClippingResult, DictionaryClippingRequest, ClippingJumpResult, FrontlightPanelResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

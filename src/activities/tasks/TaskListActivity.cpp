@@ -327,15 +327,25 @@ void TaskListActivity::openDetailAt(int index) {
   // soit ne bouge.
   const std::string id = TASK_STORE.all()[static_cast<size_t>(rows[static_cast<size_t>(index)].recordIndex)].id;
   startActivityForResult(std::make_unique<TaskDetailActivity>(renderer, mappedInput, id.c_str()),
-                         [this](const ActivityResult&) {
-                           // Le detail peut avoir coche, renomme ou repriorise
-                           // la tache : l'ordre et les lignes sont a refaire.
-                           // Rien ne rappelle onEnter() sur une activite
-                           // depilee, donc c'est ici ou nulle part.
+                         [this](const ActivityResult& result) {
+                           // Rien ne rappelle onEnter() sur une activite depilee : ActivityManager
+                           // la restaure par std::move et ne fait tourner que ce gestionnaire
+                           // (chemin Pop). `order`, `rows`, `openCount`, `showDone` et
+                           // `tickedHere` sont donc exactement ceux d'avant la visite — ce qu'on
+                           // veut pour l'etat d'affichage, mais ce qui affiche un titre ou une
+                           // priorite perimes si le detail a modifie la tache. C'est ici ou nulle
+                           // part que la liste l'apprend.
+                           const auto* edit = std::get_if<TaskEditResult>(&result.data);
+                           if (edit == nullptr || !edit->changed) return;  // simple coup d'oeil : rien a refaire
+
                            dirty = true;
                            rebuildOrder();
+                           // La tache a pu changer de place (priorite) ou quitter l'ecran
+                           // (cochee alors que la section "terminees" est repliee) : sans cette
+                           // renormalisation, `selected` designerait une ligne disparue.
                            const int next = taskListNormalizeSelection(rows, activeNav().selected);
                            if (next >= 0) moveSelectionTo(next);
+                           requestUpdate();
                          });
 }
 

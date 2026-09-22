@@ -102,6 +102,34 @@ TEST(TaskNotePagerTest, AlwaysProgressesEvenWhenNothingFits) {
   EXPECT_LE(brk.drawBytes, brk.skipBytes);
 }
 
+TEST(TaskNotePagerTest, AWindowOfOneOverlongWordWithNoSpaceTerminates) {
+  // Le cas qui fige l'appareil plutot que de mal dessiner : une fenetre faite
+  // d'un seul mot multi-octets, sans une seule espace ni fin de ligne, donc
+  // rien pour couper sauf la coupure dure. Si celle-ci rend zero octet une
+  // seule fois, la pagination boucle indefiniment. On deroule jusqu'au bout.
+  std::string word;
+  for (int i = 0; i < 40; i++) word += "é";  // 80 octets, aucun separateur
+  ASSERT_EQ(word.size(), 80u);
+
+  size_t offset = 0;
+  size_t iterations = 0;
+  while (offset < word.size()) {
+    ASSERT_LT(++iterations, 200u) << "la coupure dure doit progresser a chaque tour";
+    const TaskNoteLineBreak brk = taskNoteNextLine(word.data() + offset, word.size() - offset, /*windowIsFinal=*/false,
+                                                   100, &measureByBytes, nullptr);
+    ASSERT_GT(brk.skipBytes, 0u);
+    // Et chaque coupure tombe sur une frontiere UTF-8 : l'octet suivant ne
+    // doit jamais etre une continuation (10xxxxxx).
+    const size_t cut = offset + brk.drawBytes;
+    if (cut < word.size()) {
+      EXPECT_EQ(static_cast<unsigned char>(word[cut]) & 0xC0, 0xC0u)
+          << "coupure au milieu d'un caractere a l'octet " << cut;
+    }
+    offset += brk.skipBytes;
+  }
+  EXPECT_EQ(offset, word.size());
+}
+
 TEST(TaskNotePagerTest, EmptyWindowConsumesNothing) {
   const TaskNoteLineBreak brk = taskNoteNextLine("", 0, true, 100, &measureByBytes, nullptr);
   EXPECT_EQ(brk.drawBytes, 0);
