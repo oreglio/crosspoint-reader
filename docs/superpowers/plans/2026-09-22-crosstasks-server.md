@@ -1436,8 +1436,15 @@ body{ margin:0; background:var(--paper); color:var(--ink); font-family:'Lexend D
 .t .ttl{ font-size:15.5px; line-height:23px; }
 .t.p0 .ttl{ font-weight:600; } .t.p1 .ttl{ font-weight:400; }
 .t.p2 .ttl{ font-weight:300; color:#4d4a44; }
+/* Sans min-width:0, un item flex refuse de retrecir sous la largeur de son
+   contenu : la colonne titre+extrait deborde la fenetre et l'ellipse ci-dessous
+   ne s'enclenche jamais. Mesure a 440 px : lignes larges de 745 px, texte coupe. */
+.t > div{ flex:1; min-width:0; }
 .t .exc{ font-family:'Bitter',Georgia,serif; font-size:13px; line-height:20px; color:#8a857c;
          margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* Le retour n'existe que sous le point de rupture : au-dessus, le volet est
+   permanent et un bouton retour n'aurait aucun sens. */
+.only-narrow{ display:none; }
 .t.on{ background:var(--tint); }
 .t.on::before{ content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--ink); }
 .t.done .ttl{ text-decoration:line-through; color:var(--muted); }
@@ -1466,6 +1473,7 @@ body{ margin:0; background:var(--paper); color:var(--ink); font-family:'Lexend D
            border-top:1px solid var(--rule); border-bottom:0; padding-bottom:26px; }
   .tasks{ padding-bottom:132px; }
   .d-head{ padding:20px 22px 0; } .d-note{ padding:22px 22px; } .d-foot{ padding:13px 22px 26px; }
+  .only-narrow{ display:block; margin-bottom:12px; }
 }
 ```
 
@@ -1534,6 +1542,8 @@ Create `web/templates/list.html`:
 
     <div class="pane-detail" x-show="sel">
       <div class="d-head">
+        <a href="#" class="only-narrow" @click.prevent="back()"
+           style="font-size:14px;color:var(--muted);text-decoration:none">‹ Tâches</a>
         <input class="d-title" x-model="sel.title" @input="queueSave()">
         <div class="d-prio prio">
           <template x-for="(lbl, p) in ['Haute','Normale','Basse']" :key="p">
@@ -1567,7 +1577,10 @@ function taskApp() {
       this.tasks = (await res.json()).tasks ?? [];
       const st = await fetch('/web/api/status');
       this.status = st.ok ? await st.json() : {};
-      if (!this.sel) this.sel = this.open[0] ?? null;
+      // Sous le point de rupture, .pane-detail est un calque plein ecran :
+      // auto-selectionner ferait atterrir le telephone dans l'editeur de la
+      // premiere tache, sans jamais montrer la liste.
+      if (!this.sel && matchMedia('(min-width: 861px)').matches) this.sel = this.open[0] ?? null;
     },
     // Vide l'enregistrement en attente AVANT de changer de tache, sinon le
     // timer en cours ecrirait le contenu de l'ancienne dans la nouvelle.
@@ -1615,13 +1628,23 @@ function taskApp() {
         if (!res.ok) {
           this.error = res.status === 400 ? 'Note ou titre trop long — non enregistré' : 'Échec de l’enregistrement';
           this.saved = false;                 // l'edition reste en attente, pas perdue
-          return;
+          return false;
         }
         this.error = ''; this.saved = true;
+        return true;
       } catch (e) {
         this.error = 'Hors ligne — non enregistré';
         this.saved = false;
+        return false;
       }
+    },
+    // Retour mobile. Rend la main a l'appelant sur le SUCCES, comme pair() :
+    // fermer le volet sur un echec ferait disparaitre le message d'erreur avec
+    // lui, et un select() ulterieur reafficherait « Enregistré » pour une
+    // edition que le serveur n'a jamais acceptee.
+    async back() {
+      if (!this.saved && this.sel && !(await this.flushSave(this.sel))) return;
+      this.sel = null;
     },
     async remove() {
       if (!confirm('Supprimer cette tâche ?')) return;
