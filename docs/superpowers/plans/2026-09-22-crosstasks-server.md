@@ -1027,7 +1027,15 @@ export function registerWebAuth(app: FastifyInstance, tasks: TaskDb, cfg: Config
 
   app.post<{ Body: { secret?: string; label?: string } }>('/web/pair', async (req, reply) => {
     if (!authed(req)) return reply.code(401).send({ error: 'non connecté' });
-    const secret = String(req.body?.secret ?? '').trim().toUpperCase().replace(/[^0-9A-HJKMNP-TV-Z]/g, '');
+    // Crockford base32 : I/L valent 1, O vaut 0, U vaut V. Il faut les CONVERTIR,
+    // pas les supprimer — tout l'interet de cet alphabet est de survivre a une
+    // transcription humaine, et le code texte n'est utilise que quand il n'y a
+    // pas de camera, c'est-a-dire quand quelqu'un le retape. Supprimer un « O »
+    // tape pour « 0 » produit un echec silencieux la ou Crockford veut corriger.
+    const secret = String(req.body?.secret ?? '')
+      .trim().toUpperCase()
+      .replace(/[IL]/g, '1').replace(/O/g, '0').replace(/U/g, 'V')
+      .replace(/[^0-9A-HJKMNP-TV-Z]/g, '');
     if (secret.length !== 26) return reply.code(400).send({ error: 'code invalide' });
     tasks.setPairing(hashSecret(secret), String(req.body?.label ?? 'Liseuse').slice(0, 60), new Date().toISOString());
     return { ok: true };
