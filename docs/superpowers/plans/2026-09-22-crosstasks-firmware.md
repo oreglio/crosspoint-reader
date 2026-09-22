@@ -1115,6 +1115,7 @@ git commit -m "feat(tasks): pending-op queue serialization, host-tested"
   `void upsert(const TaskRecord&)`, `void remove(const char* id)`,
   `bool appendOp(const TaskOp&)`, `size_t readOps(TaskOp* out, size_t max)`, `void clearOps()`,
   `bool readCursor(char* out, size_t size)`, `void writeCursor(const char* cursor)`,
+  `static bool isSafeCursor(const char* c)`,
   `bool notePath(const char* id, char* out, size_t size)`, `void clearAllNotes()`,
   `bool hasSecret()`, `bool readSecret(char* out, size_t size)`, `void writeSecret(const char* secret)`,
   `void clearSecret()`, `std::string newDeviceId()`.
@@ -1214,6 +1215,18 @@ Key points the implementation must honour, each for a stated reason:
   line plus `\n`, and closes immediately — a tick must cost one small write, not
   a rewrite of the queue.
 - `readOps` reads line by line into the caller's array, stopping at `max`.
+- **`readCursor` validates before returning.** The cursor file sits on an SD card
+  the user can edit on a PC, and its contents go straight into a request body, so
+  it is remote-grade input. Accept only the base64url alphabet
+  (`A-Z a-z 0-9 - _`), non-empty, at most 32 characters — the same check
+  `RaindropSyncActivity.cpp:46-56` already applies. Anything else is treated as
+  **absent**, which costs one full snapshot and cannot corrupt anything. Size the
+  caller's buffer at `TASK_CURSOR_BUF = 40`: the server's measured worst case is
+  22 characters and the spec's limit is 32.
+- **Never parse the cursor.** It is opaque by contract: store the bytes, hand them
+  back. The server's encoding has already changed once — it now carries a
+  snapshot-mode marker — and a device that tried to read a sequence number out of
+  it would break on the next such change.
 - Every `FsFile` is closed on every path, including the error paths.
 - `newDeviceId` uses `esp_random()` under `#ifndef SIMULATOR` and `rand()` in
   the simulator, formatted with `snprintf(buf, sizeof buf, "d%08x", value)`.
