@@ -4,6 +4,7 @@
 #include <HalDisplay.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <Memory.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 
 #include "MappedInputManager.h"
 #include "TaskStore.h"
+#include "activities/util/ConfirmationActivity.h"
 #include "components/TouchHeaderBackButton.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -185,13 +187,31 @@ void TaskPairActivity::loop() {
   }
 #endif
   if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-    renewSecret();
-    {
+    confirmRenew();
+  }
+}
+
+void TaskPairActivity::confirmRenew() {
+  // Changer le secret desappaire l'appareil cote serveur : chaque sync repond
+  // 401 jusqu'a un nouvel appairage sur le web. Un seul appui egare ne doit
+  // pas y suffire, d'ou la confirmation commune du depot, qui s'ouvre sur
+  // Annuler.
+  auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_TASK_PAIR_RENEW_TITLE),
+                                                              tr(STR_TASK_PAIR_RENEW_WARNING));
+  if (!confirmation) {
+    LOG_ERR(TAG, "OOM: ConfirmationActivity");
+    return;
+  }
+  startActivityForResult(std::move(confirmation), [this](const ActivityResult& result) {
+    if (!result.isCancelled) {
+      renewSecret();
       RenderLock lock(*this);
       renewed = true;
     }
+    // Pas de onEnter() au depilement : sans cet appel la fenetre de
+    // confirmation resterait peinte par-dessus l'ecran.
     requestUpdate();
-  }
+  });
 }
 
 // -------------------------------------------------------------------- render

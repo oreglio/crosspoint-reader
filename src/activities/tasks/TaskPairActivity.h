@@ -19,9 +19,10 @@
 //
 // Le secret stocke est reaffiche a chaque entree : en tirer un nouveau a
 // chaque visite casserait l'appairage de quiconque revient simplement relire
-// son code. Seul le bouton Droite (« changer ») en tire un neuf — et c'est
-// Droite, pas Confirmer, parce que Confirmer se presse par reflexe comme un
-// « OK » et que cette action oblige a refaire l'appairage sur le web.
+// son code. Seul le bouton Droite (« changer ») en tire un neuf, et seulement
+// apres la ConfirmationActivity du depot : cette action oblige a refaire
+// l'appairage sur le web. Droite plutot que Confirmer, parce que Confirmer se
+// presse par reflexe comme un « OK ».
 //
 // Le secret n'est JAMAIS journalise, a aucun niveau, pas meme tronque : c'est
 // le seul identifiant que l'appareil detienne et le port serie n'est pas prive.
@@ -73,6 +74,8 @@ class TaskPairActivity final : public Activity {
   // canonique (un secret non canonique ne passerait jamais l'en-tete Bearer).
   void loadOrCreateSecret();
   void renewSecret();
+  // Ouvre la confirmation ; renewSecret() ne tourne que si elle est acceptee.
+  void confirmRenew();
   void adoptSecret(const char* canonical);
   void layoutCode();
 };

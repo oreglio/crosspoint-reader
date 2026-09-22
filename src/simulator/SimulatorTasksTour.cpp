@@ -53,7 +53,11 @@ constexpr TourStep kSteps[] = {
     {"07-empty", Act::SeedEmpty, Button::Confirm},
     {"08-add-keyboard", Act::Tap, Button::Left},
     {"09-pair", Act::OpenPair, Button::Confirm},
-    {"10-pair-renewed", Act::Tap, Button::Right},
+    {"10-pair-confirm", Act::Tap, Button::Right},
+    {"11-pair-cancelled", Act::Tap, Button::Confirm},
+    {"ask-again", Act::Tap, Button::Right},
+    {"pick-confirm", Act::Tap, Button::Down},
+    {"12-pair-renewed", Act::Tap, Button::Confirm},
     {"end", Act::Finish, Button::Confirm},
 };
 constexpr size_t kStepCount = sizeof(kSteps) / sizeof(kSteps[0]);
