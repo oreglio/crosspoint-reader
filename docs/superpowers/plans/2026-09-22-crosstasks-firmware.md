@@ -1763,39 +1763,25 @@ Register them in `SettingsList.h` with a toggle and a string row, plus an
 
 - [ ] **Step 2: Add the strings**
 
-Add to **both** `english.yaml` and `french.yaml` (never edit the generated files).
+**Do not set string values in this task.** Every `STR_TASK_*` key the feature uses was added by the
+task that needed it, and several were deliberately changed after being RENDERED in the simulator and
+found to overflow or mislead: `STR_TASK_POMODORO` is `lancer` / `start` (the word "pomodoro" overflowed
+its footer box on two themes), `STR_TASK_EMPTY` was removed (the add row states emptiness, and the
+French value overflowed the sub-line by 12 px), `STR_TASK_TICK_FAILED` is `Impossible d'enregistrer` /
+`Could not save` (the old French truncated). An earlier version of this step carried a table of
+values; following it would have undone all three. There is no table any more, on purpose.
 
-**Each file holds ONE language**, as a flat `KEY: "value"` map — there is no
-`{ en: …, fr: … }` form, and writing one would corrupt both files. Open the tails of
-`lib/I18n/translations/english.yaml` and `french.yaml` and follow the shape you find there.
-
-Several of these keys were already added by Tasks 5-9 as each screen needed them. **Add
-only the ones actually missing**, and before regenerating, verify with
-`python3 -c "import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" lib/I18n/translations/english.yaml lib/I18n/translations/french.yaml`
-that both files still parse and that **every `STR_TASK_*` key present in one is present in
-the other** — a key in only one language is the failure mode this step exists to prevent.
-
-The full set the feature needs, `english.yaml` on the left, `french.yaml` on the right:
-
-| key | en | fr |
-| --- | --- | --- |
-| `STR_TASK_TITLE` | `Tasks` | `Tâches` |
-| `STR_TASK_SYNC` | `Sync tasks` | `Synchroniser les tâches` |
-| `STR_TASK_PAIR` | `Pair with server` | `Appairer au serveur` |
-| `STR_TASK_NEW` | `New task` | `Nouvelle tâche` |
-| `STR_TASK_TICK` | `tick` | `cocher` |
-| `STR_TASK_DETAIL` | `detail` | `détail` |
-| `STR_TASK_DONE_COUNT` | `done` | `faites` |
-| `STR_TASK_EMPTY` | `No tasks yet` | `Aucune tâche pour l'instant` |
-| `STR_TASK_PRIORITY_HIGH` | `High` | `Haute` |
-| `STR_TASK_PRIORITY_NORMAL` | `Normal` | `Normale` |
-| `STR_TASK_PRIORITY_LOW` | `Low` | `Basse` |
-| `STR_TASK_POMODORO` | `Pomodoro` | `Pomodoro` |
-| `STR_TASK_PAIRING_REQUIRED` | `Pairing required` | `Appairage requis` |
-| `STR_TASK_LIST_FULL` | `List full` | `Liste pleine` |
-| `STR_TASK_UP_TO_DATE` | `Up to date` | `À jour` |
-| `STR_TASK_RECEIVED` | `Received` | `Reçues` |
-| `STR_TASK_SENT` | `Sent` | `Envoyées` |
+This step is a VERIFICATION:
+1. Every `STR_TASK_*` key referenced anywhere under `src/` exists in BOTH `english.yaml` and
+   `french.yaml` — `grep -rhoE 'STR_TASK_[A-Z_]+' src/ | sort -u` against both files.
+2. No `STR_TASK_*` key exists in the yaml that nothing references (a dead key is how a removed string
+   comes back).
+3. Both files still parse:
+   `python3 -c "import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" lib/I18n/translations/english.yaml lib/I18n/translations/french.yaml`
+4. Every value is Latin-1 or a checked codepoint and fits its slot, measured with
+   `scripts/measure_label.py`: footer text under ~70 px in `inter_8_regular`, the status sub-line
+   under 200 px. French first.
+Fix only what this verification finds, and say in your report what it found.
 
 Then regenerate and verify:
 
