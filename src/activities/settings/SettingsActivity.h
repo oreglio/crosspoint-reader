@@ -53,6 +53,7 @@ enum class SettingAction {
   DownloadFonts,
   ClockSync,
   RaindropSync,
+  TaskPair,
 };
 
 struct SettingInfo {

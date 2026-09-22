@@ -8,6 +8,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <vector>
 
 #include "CrossPointSettings.h"
@@ -15,8 +16,10 @@
 #include "TaskStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/tasks/TaskPairActivity.h"
 #include "components/UITheme.h"
 
+extern GfxRenderer renderer;
 extern MappedInputManager mappedInputManager;
 extern ActivityManager activityManager;
 
@@ -24,7 +27,7 @@ namespace {
 
 using Button = MappedInputManager::Button;
 
-enum class Act : uint8_t { OpenList, Tap, SeedAllDone, SeedEmpty, Finish };
+enum class Act : uint8_t { OpenList, Tap, SeedAllDone, SeedEmpty, OpenPair, Finish };
 
 struct TourStep {
   const char* name;
@@ -49,6 +52,8 @@ constexpr TourStep kSteps[] = {
     {"06-all-done", Act::SeedAllDone, Button::Confirm},
     {"07-empty", Act::SeedEmpty, Button::Confirm},
     {"08-add-keyboard", Act::Tap, Button::Left},
+    {"09-pair", Act::OpenPair, Button::Confirm},
+    {"10-pair-renewed", Act::Tap, Button::Right},
     {"end", Act::Finish, Button::Confirm},
 };
 constexpr size_t kStepCount = sizeof(kSteps) / sizeof(kSteps[0]);
@@ -110,7 +115,7 @@ void openList() {
 void runSimulatorTasksTourTick() {
   static bool initialized = false;
   static bool active = false;
-  static size_t fired = 0;       // etapes dont l'action a ete lancee
+  static size_t fired = 0;  // etapes dont l'action a ete lancee
   // Un front d'entree doit durer UNE trame : injecte, il reste vrai a chaque
   // boucle jusqu'a ce qu'on l'efface. Par le temps, il durait ~20 trames et
   // Confirmer basculait la tache une vingtaine de fois. D'ou un compteur de
@@ -156,6 +161,9 @@ void runSimulatorTasksTourTick() {
       case Act::SeedEmpty:
         TASK_STORE.replaceAll({});
         openList();
+        break;
+      case Act::OpenPair:
+        activityManager.replaceActivity(std::make_unique<TaskPairActivity>(renderer, mappedInputManager));
         break;
       case Act::Finish:
         LOG_INF("TOUR", "tour complete");

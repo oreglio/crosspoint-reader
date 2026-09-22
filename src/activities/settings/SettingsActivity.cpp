@@ -39,6 +39,7 @@
 #include "activities/home/BookActions.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/reader/GlobalReadingStats.h"
+#include "activities/tasks/TaskPairActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
@@ -1159,6 +1160,9 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::RaindropSync:
         silentRestartToNetwork(NetworkBootTarget::RAINDROP_SYNC);
+        break;
+      case SettingAction::TaskPair:
+        startActivityForResult(std::make_unique<TaskPairActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::SdFirmwareUpdate:
         startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput), resultHandler);
