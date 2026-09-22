@@ -20,6 +20,9 @@ TaskRecord make(const char* id, const char* title, uint8_t priority, bool done =
 }  // namespace
 
 // --- buildTaskOrder ---------------------------------------------------------
+// Reuses taskOrderBefore (Task 1); these tests pin the ADDITIONAL rule this
+// file adds on top of it (tickedHere), plus a couple of sanity checks that
+// the canonical comparator is genuinely being called and not re-derived.
 
 TEST(BuildTaskOrder, OpenFirstByPriorityThenId) {
   std::vector<TaskRecord> records = {
@@ -70,6 +73,22 @@ TEST(BuildTaskOrder, TickedHereStaysInPlaceInsteadOfSinking) {
   EXPECT_EQ(order[1], 1);
 }
 
+TEST(BuildTaskOrder, UntickingSomethingTickedThisVisitLetsItSinkAgain) {
+  // Cochee puis decochee dans la meme visite : plus dans tickedHere, elle
+  // redevient une tache faite ordinaire (le cas que le rapport appelle
+  // "cocher-decocher").
+  std::vector<TaskRecord> records = {
+      make("w1", "faite avant l'ouverture de l'ecran", 0, true),
+      make("w2", "ouverte normale", 1),
+  };
+  std::vector<int> order;
+  int openCount = 0;
+  buildTaskOrder(records, /*tickedHere=*/{}, order, openCount);
+  EXPECT_EQ(openCount, 1);
+  EXPECT_EQ(order[0], 1);  // w2 ouverte d'abord
+  EXPECT_EQ(order[1], 0);  // w1 faite, en fin de liste : jamais dans tickedHere
+}
+
 TEST(BuildTaskOrder, EqualPriorityFallsBackToId) {
   std::vector<TaskRecord> records = {make("w2", "b", 1), make("w1", "a", 1)};
   std::vector<int> order;
@@ -114,6 +133,19 @@ TEST(BuildTaskListRows, NoHeaderWhenNothingIsDone) {
   for (const auto& row : rows) EXPECT_EQ(row.kind, TaskRowKind::Task);
 }
 
+TEST(BuildTaskListRows, TogglingDoneOffAfterUntickingTheLastCompletedTaskDropsTheHeader) {
+  // Le cas que le brief de correction nomme explicitement : la bascule est
+  // ouverte, la derniere tache "terminees" est decochee -> plus rien apres
+  // openCount -> l'en-tete doit disparaitre au prochain rebuild, pas rester
+  // orpheline au-dessus d'une section vide.
+  std::vector<int> order = {0, 1};
+  std::vector<TaskListRow> rows;
+  buildTaskListRows(order, /*openCount=*/2, /*showDone=*/true, rows);
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
+  EXPECT_EQ(rows[1].kind, TaskRowKind::Task);
+}
+
 // --- taskListStepSelection / taskListNormalizeSelection ----------------------
 
 TEST(TaskListStepSelection, SkipsOverTheHeaderRow) {
@@ -137,6 +169,19 @@ TEST(TaskListStepSelection, EmptyRowsReturnsNegativeOne) {
   EXPECT_EQ(taskListStepSelection(rows, 0, +1), -1);
 }
 
+TEST(TaskListStepSelection, SteppingOnTheLastOpenTaskTogglesForwardIntoTheDoneHeader) {
+  // Cocher la derniere tache ouverte pendant que "terminees" est deplie ne
+  // doit pas planter la selection : Bas depuis elle doit sauter l'en-tete et
+  // atterrir sur la premiere tache terminee, pas rester bloque dessus.
+  std::vector<TaskListRow> rows = {
+      {TaskRowKind::Task, 0},
+      {TaskRowKind::DoneHeader, -1},
+      {TaskRowKind::Task, 1},
+      {TaskRowKind::Task, 2},
+  };
+  EXPECT_EQ(taskListStepSelection(rows, 0, +1), 2);
+}
+
 TEST(TaskListNormalizeSelection, ClampsOutOfRangeIndex) {
   std::vector<TaskListRow> rows = {{TaskRowKind::Task, 0}, {TaskRowKind::Task, 1}};
   EXPECT_EQ(taskListNormalizeSelection(rows, 99), 1);
@@ -152,52 +197,43 @@ TEST(TaskListNormalizeSelection, StepsPastAHeaderLandedOnAfterRebuild) {
   EXPECT_EQ(taskListNormalizeSelection(rows, 1), 2);
 }
 
-// --- taskListVisibleRows -----------------------------------------------------
-
-TEST(TaskListVisibleRows, CountsWholeRowsThatFit) {
-  std::vector<int> heights = {30, 30, 30, 30};
-  EXPECT_EQ(taskListVisibleRows(heights, 0, 100), 3);  // 90 tient, 120 deborde
-  EXPECT_EQ(taskListVisibleRows(heights, 0, 30), 1);
-  EXPECT_EQ(taskListVisibleRows(heights, 1, 100), 3);  // reste 3 lignes a partir de l'indice 1
+TEST(TaskListNormalizeSelection, EmptyRowsReturnsNegativeOne) {
+  std::vector<TaskListRow> rows;
+  EXPECT_EQ(taskListNormalizeSelection(rows, 0), -1);
 }
 
-TEST(TaskListVisibleRows, AlwaysAtLeastOneRowEvenIfItOverflows) {
-  std::vector<int> heights = {500};
-  EXPECT_EQ(taskListVisibleRows(heights, 0, 100), 1);
+// --- taskListPageJump ---------------------------------------------------
+// TaskListActivity itself is not host-compiled (it needs GfxRenderer,
+// MappedInputManager, TaskStore), so the composition that matters --
+// "a page jump landing on the header gets corrected" -- has to live here to
+// be reachable by a host test at all. Verified by mutation on a scratch copy
+// outside the git tree: removing the taskListNormalizeSelection() call from
+// taskListPageJump() (returning `jumped` directly) makes both tests below
+// fail; restoring it makes them pass again.
+
+TEST(TaskListPageJump, ForwardJumpLandingExactlyOnTheDoneHeaderIsCorrectedToATaskRow) {
+  // ButtonNavigator::nextPageIndex(current=0, count=7, pageRows=3) rends
+  // exactement 3 -- l'index de l'en-tete -- puisque nextPageIndex ne sait
+  // rien des lignes non selectionnables.
+  std::vector<TaskListRow> rows = {
+      {TaskRowKind::Task, 0}, {TaskRowKind::Task, 1}, {TaskRowKind::Task, 2}, {TaskRowKind::DoneHeader, -1},
+      {TaskRowKind::Task, 3}, {TaskRowKind::Task, 4}, {TaskRowKind::Task, 5},
+  };
+  EXPECT_EQ(taskListPageJump(rows, /*selected=*/0, /*pageRows=*/3, /*direction=*/+1), 4);
 }
 
-TEST(TaskListVisibleRows, OutOfRangeScrollTopIsZeroRows) {
-  std::vector<int> heights = {30, 30};
-  EXPECT_EQ(taskListVisibleRows(heights, 5, 100), 0);
-  EXPECT_EQ(taskListVisibleRows(heights, -1, 100), 0);
+TEST(TaskListPageJump, BackwardJumpLandingExactlyOnTheDoneHeaderIsCorrectedToATaskRow) {
+  // ButtonNavigator::previousPageIndex(current=6, count=7, pageRows=3) rend
+  // aussi 3 : le saut arriere ignore la ligne d'en-tete tout autant que le
+  // saut avant.
+  std::vector<TaskListRow> rows = {
+      {TaskRowKind::Task, 0}, {TaskRowKind::Task, 1}, {TaskRowKind::Task, 2}, {TaskRowKind::DoneHeader, -1},
+      {TaskRowKind::Task, 3}, {TaskRowKind::Task, 4}, {TaskRowKind::Task, 5},
+  };
+  EXPECT_EQ(taskListPageJump(rows, /*selected=*/6, /*pageRows=*/3, /*direction=*/-1), 4);
 }
 
-// --- taskListClampScrollTop --------------------------------------------------
-
-TEST(TaskListClampScrollTop, SelectionAboveViewportPullsScrollUpToIt) {
-  std::vector<int> heights = {30, 30, 30, 30, 30};
-  EXPECT_EQ(taskListClampScrollTop(heights, /*selected=*/1, /*scrollTop=*/3, 90), 1);
-}
-
-TEST(TaskListClampScrollTop, SelectionBelowViewportAdvancesScrollByOneRowAtATime) {
-  std::vector<int> heights = {30, 30, 30, 30, 30};
-  // 3 lignes tiennent dans 90px ; selectionner la 5e (indice 4) doit avancer
-  // scrollTop jusqu'a ce qu'elle rentre, pas le recentrer d'un coup.
-  EXPECT_EQ(taskListClampScrollTop(heights, /*selected=*/4, /*scrollTop=*/0, 90), 2);
-}
-
-TEST(TaskListClampScrollTop, SelectionAlreadyVisibleLeavesScrollUnchanged) {
-  std::vector<int> heights = {30, 30, 30, 30};
-  EXPECT_EQ(taskListClampScrollTop(heights, /*selected=*/1, /*scrollTop=*/0, 90), 0);
-}
-
-TEST(TaskListClampScrollTop, VariableRowHeightsAreRespected) {
-  // Une ligne sur deux lignes de texte pese deux fois plus.
-  std::vector<int> heights = {30, 60, 30, 30};
-  EXPECT_EQ(taskListClampScrollTop(heights, /*selected=*/2, /*scrollTop=*/0, 90), 1);
-}
-
-TEST(TaskListClampScrollTop, EmptyHeightsReturnsZero) {
-  std::vector<int> heights;
-  EXPECT_EQ(taskListClampScrollTop(heights, 0, 0, 100), 0);
+TEST(TaskListPageJump, EmptyRowsReturnsNegativeOne) {
+  std::vector<TaskListRow> rows;
+  EXPECT_EQ(taskListPageJump(rows, 0, 3, +1), -1);
 }

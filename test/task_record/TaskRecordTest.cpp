@@ -33,7 +33,10 @@ TEST(TaskOrder, EqualPriorityFallsBackToId) {
 
 TEST(TaskOrder, SortIsStableAndTotal) {
   std::vector<TaskRecord> v{make("w3", "c", 2), make("w1", "a", 0, true), make("w2", "b", 0), make("w4", "d", 1)};
-  std::sort(v.begin(), v.end(), taskOrderBefore);
+  // taskOrderBefore est surchargee (Tache 5 ajoute une variante a 4 arguments
+  // pour l'ecran de liste) : le nom nu n'est plus deductible comme
+  // comparateur de template, d'ou le lambda qui fixe l'overload a 2 arguments.
+  std::sort(v.begin(), v.end(), [](const TaskRecord& a, const TaskRecord& b) { return taskOrderBefore(a, b); });
   EXPECT_STREQ(v[0].id, "w2");
   EXPECT_STREQ(v[1].id, "w4");
   EXPECT_STREQ(v[2].id, "w3");

@@ -1,7 +1,6 @@
 #include "TaskListModel.h"
 
 #include <algorithm>
-#include <cstring>
 
 namespace {
 
@@ -20,21 +19,28 @@ void buildTaskOrder(const std::vector<TaskRecord>& records, const std::vector<st
   order.reserve(records.size());
   for (int i = 0; i < static_cast<int>(records.size()); ++i) order.push_back(i);
 
-  // Une tache cochee pendant cette visite est triee comme si elle etait
-  // encore ouverte : c'est ce qui la garde a sa place au lieu de la faire
-  // tomber dans la section repliee qu'on vient de cocher.
-  auto effectiveDone = [&](int idx) { return records[idx].done && !isTickedHere(tickedHere, records[idx].id); };
+  // "Fait" au sens du tri : vrai `.done`, sauf pour une tache cochee PENDANT
+  // cette visite, qui reste triee comme ouverte (elle reste en place,
+  // attenuee, jusqu'a la sortie de l'ecran). Precalcule une fois en O(n) --
+  // isTickedHere fait un parcours lineaire avec comparaison de string, donc
+  // l'appeler O(n log n) fois depuis le comparateur referait le meme travail
+  // en pire, sans compter qu'un comparateur qui copierait un TaskRecord
+  // (216 octets) par argument couterait ~432 octets de pile transitoires par
+  // comparaison. Le comparateur canonique (Tache 1) prend les deux drapeaux
+  // en parametres justement pour eviter cette copie.
+  std::vector<uint8_t> effectiveDone(records.size());
+  for (size_t i = 0; i < records.size(); ++i) {
+    effectiveDone[i] = (records[i].done && !isTickedHere(tickedHere, records[i].id)) ? 1 : 0;
+  }
 
   std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
-    const bool doneA = effectiveDone(a);
-    const bool doneB = effectiveDone(b);
-    if (doneA != doneB) return !doneA;
-    if (records[a].priority != records[b].priority) return records[a].priority < records[b].priority;
-    return std::strcmp(records[a].id, records[b].id) < 0;
+    return taskOrderBefore(records[a], records[b], effectiveDone[a] != 0, effectiveDone[b] != 0);
   });
 
   openCount = 0;
-  while (openCount < static_cast<int>(order.size()) && !effectiveDone(order[openCount])) ++openCount;
+  while (openCount < static_cast<int>(order.size()) && effectiveDone[order[openCount]] == 0) {
+    ++openCount;
+  }
 }
 
 void buildTaskListRows(const std::vector<int>& order, int openCount, bool showDone, std::vector<TaskListRow>& rows) {
@@ -74,42 +80,31 @@ int taskListNormalizeSelection(const std::vector<TaskListRow>& rows, int selecte
   return taskListStepSelection(rows, selected, +1);
 }
 
-int taskListVisibleRows(const std::vector<int>& heights, int scrollTop, int contentHeight) {
-  const int total = static_cast<int>(heights.size());
-  if (scrollTop < 0 || scrollTop >= total) return 0;
-  int used = 0;
-  int count = 0;
-  for (int i = scrollTop; i < total; ++i) {
-    if (count > 0 && used + heights[i] > contentHeight) break;
-    used += heights[i];
-    ++count;
-  }
-  return count;
-}
-
-int taskListClampScrollTop(const std::vector<int>& heights, int selected, int scrollTop, int contentHeight) {
-  const int total = static_cast<int>(heights.size());
-  if (total == 0) return 0;
+int taskListPageJump(const std::vector<TaskListRow>& rows, int selected, int pageRows, int direction) {
+  const int total = static_cast<int>(rows.size());
+  if (total == 0) return -1;
+  if (pageRows <= 0) pageRows = 1;
   if (selected < 0) selected = 0;
   if (selected >= total) selected = total - 1;
-  if (scrollTop < 0) scrollTop = 0;
-  if (scrollTop >= total) scrollTop = total - 1;
-  if (scrollTop > selected) scrollTop = selected;
 
-  // `selected` deborde-t-elle par le bas de la fenetre courante ? Avance
-  // scrollTop d'une ligne a la fois jusqu'a ce qu'elle rentre : un
-  // defilement en escalier, pas un recentrage qui bougerait tout l'ecran
-  // pour une seule ligne de plus.
-  while (scrollTop < selected) {
-    int used = 0;
-    bool fits = false;
-    for (int i = scrollTop; i <= selected; ++i) {
-      used += heights[i];
-      if (used > contentHeight) break;
-      if (i == selected) fits = true;
+  // Reproduit ButtonNavigator::nextPageIndex/previousPageIndex
+  // (src/util/ButtonNavigator.cpp) sans inclure ce header : il tire
+  // MappedInputManager.h -> HalGPIO.h -> Arduino.h, incompatible avec un
+  // module hote.
+  int jumped;
+  if (total <= pageRows) {
+    jumped = direction > 0 ? (selected + 1) % total : (selected + total - 1) % total;
+  } else {
+    const int lastPageIndex = (total - 1) / pageRows;
+    const int currentPageIndex = selected / pageRows;
+    if (direction > 0) {
+      jumped = currentPageIndex < lastPageIndex ? (currentPageIndex + 1) * pageRows : 0;
+    } else {
+      jumped = currentPageIndex > 0 ? (currentPageIndex - 1) * pageRows : lastPageIndex * pageRows;
     }
-    if (fits) break;
-    ++scrollTop;
   }
-  return scrollTop;
+  // Un saut de page ignore tout des lignes non selectionnables et peut
+  // atterrir pile sur l'en-tete "terminees" : cette correction est ce qui
+  // rend la propriete testable a l'hote (voir TaskListModelTest.cpp).
+  return taskListNormalizeSelection(rows, jumped);
 }

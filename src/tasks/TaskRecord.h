@@ -27,8 +27,17 @@ struct TaskRecord {
 // Ordre d'affichage : les ouvertes d'abord, par priorité croissante (0 = haute),
 // puis l'id pour que le tri soit total — deux tâches de même priorité ne doivent
 // jamais changer de place d'un rendu à l'autre.
-inline bool taskOrderBefore(const TaskRecord& a, const TaskRecord& b) {
-  if (a.done != b.done) return !a.done;
+//
+// doneA/doneB séparés de a.done/b.done : l'écran de liste doit pouvoir trier
+// une tâche cochée pendant la visite en cours comme si elle était encore
+// ouverte (elle reste en place, atténuée, jusqu'à la sortie de l'écran) sans
+// construire une copie de TaskRecord par comparaison rien que pour forcer ce
+// bit — sizeof(TaskRecord) est 216 octets, et un comparateur de tri en copie
+// deux par appel.
+inline bool taskOrderBefore(const TaskRecord& a, const TaskRecord& b, bool doneA, bool doneB) {
+  if (doneA != doneB) return !doneA;
   if (a.priority != b.priority) return a.priority < b.priority;
   return std::strcmp(a.id, b.id) < 0;
 }
+
+inline bool taskOrderBefore(const TaskRecord& a, const TaskRecord& b) { return taskOrderBefore(a, b, a.done, b.done); }

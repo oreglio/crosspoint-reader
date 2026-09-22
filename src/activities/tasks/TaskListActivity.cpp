@@ -11,39 +11,26 @@
 #include "TaskStore.h"
 #include "components/TouchHeaderBackButton.h"
 #include "components/UITheme.h"
-#include "fontIds.h"
+#include "components/UIThemeTokens.h"
 #include "tasks/TaskOpQueue.h"
 
+namespace fui = freeink::ui;
+
 namespace {
-
 constexpr char TAG[] = "TASKLIST";
-// Air au-dessus et en dessous du bloc de texte d'une ligne, dans la hauteur
-// de ligne totale. Pas de filet entre les lignes : juste assez d'air pour
-// que le trait barre d'une tache faite ne colle pas a la ligne suivante.
-constexpr int kRowVPad = 4;
-
-// La police EpdFontFamily n'a que REGULAR/BOLD/ITALIC/BOLD_ITALIC : pas de
-// graisse "light". L'italique est le seul style existant qui s'allege
-// visuellement du normal sans changer la taille du corps (contrainte "un
-// seul corps de police, jamais un badge") ; c'est ce qui tient lieu de light
-// pour la priorite basse ici, faute d'une vraie graisse legere dans la fonte
-// embarquee. A remplacer si LexendDeca Light est un jour ajoutee au build.
-EpdFontFamily::Style styleForPriority(uint8_t priority) {
-  switch (priority) {
-    case TASK_PRIORITY_HIGH:
-      return EpdFontFamily::BOLD;
-    case TASK_PRIORITY_LOW:
-      return EpdFontFamily::ITALIC;
-    case TASK_PRIORITY_NORMAL:
-    default:
-      return EpdFontFamily::REGULAR;
-  }
-}
-
 }  // namespace
 
+TaskListActivity::TaskListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+    : UiListActivity("TaskList", renderer, mappedInput, /*wantsTouchLongPress=*/false) {}
+
 void TaskListActivity::onEnter() {
-  Activity::onEnter();
+  // Un seul verrou sur le cycle de vie de base ET la phase de donnees : le
+  // onEnter de base programme un rendu, et la tache de rendu ne doit pas lire
+  // records/rows avant qu'ils soient en place (meme rituel que
+  // LibraryListActivity::onEnter).
+  RenderLock lock(*this);
+  UiListActivity::onEnter();
+
   // Le store ne se charge pas tout seul au premier acces (getInstance() ne
   // fait rien lire) : c'est a l'ecran de le demander ici, jamais depuis le
   // rendu. Voir PersistableStore::ensureLoaded().
@@ -51,15 +38,9 @@ void TaskListActivity::onEnter() {
 
   records = TASK_STORE.all();
   tickedHere.clear();
-  order.clear();
-  rows.clear();
-  rowHeights.clear();
-  selected = 0;
-  scrollTop = 0;
   showDone = false;
   dirty = true;
   rebuildOrder();
-  requestUpdate();
 }
 
 void TaskListActivity::onExit() {
@@ -73,8 +54,10 @@ void TaskListActivity::onExit() {
   order.shrink_to_fit();
   rows.clear();
   rows.shrink_to_fit();
-  rowHeights.clear();
-  rowHeights.shrink_to_fit();
+  winItems.clear();
+  winItems.shrink_to_fit();
+  doneHeaderLabel.clear();
+  doneHeaderLabel.shrink_to_fit();
   Activity::onExit();
 }
 
@@ -83,75 +66,150 @@ void TaskListActivity::rebuildOrder() {
   buildTaskOrder(records, tickedHere, order, openCount);
   buildTaskListRows(order, openCount, showDone, rows);
   doneCount = static_cast<int>(records.size()) - openCount;
-  selected = taskListNormalizeSelection(rows, selected);
-  // Les hauteurs dependent du renderer (mesure de texte) : on se contente de
-  // les invalider ici, render() les recalcule au prochain passage.
-  rowHeights.clear();
   dirty = false;
 }
 
-void TaskListActivity::remeasureRowHeights(const int lineHeight, const int smallLineHeight, const int maxTextWidth) {
-  rowHeights.clear();
-  rowHeights.reserve(rows.size());
-  for (const auto& row : rows) {
-    if (row.kind == TaskRowKind::DoneHeader) {
-      rowHeights.push_back(smallLineHeight + 2 * kRowVPad);
-      continue;
-    }
-    const TaskRecord& rec = records[row.recordIndex];
-    const auto style = styleForPriority(rec.priority);
-    const auto lines = renderer.wrappedText(LEXENDDECA_14_FONT_ID, rec.title, maxTextWidth, /*maxLines=*/2, style);
-    const int lineCount = std::max<int>(1, static_cast<int>(lines.size()));
-    rowHeights.push_back(lineCount * lineHeight + 2 * kRowVPad);
+int TaskListActivity::listCount() const { return static_cast<int>(rows.size()); }
+
+void TaskListActivity::buildScreen(UiScreen& screen) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  // Contenu sous l'en-tete + la sous-ligne de fraicheur, au-dessus des
+  // indices de boutons -- ces deux bandes sont peintes hors fui, dans
+  // render(), donc reservees ici pour que la liste ne les recouvre pas
+  // (meme rituel que LibraryListActivity::buildScreen).
+  screen.setContentMargin(
+      fui::Insets{static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput) +
+                                       metrics.tabBarHeight),
+                  0, static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
+
+  if (rows.empty()) {
+    screen.centeredText(tr(STR_TASK_EMPTY), screen.theme().bodyText);
+    return;
   }
+  buildRows(screen);
 }
 
-void TaskListActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    finish();
-    return;
+void TaskListActivity::buildRows(UiScreen& screen) {
+  auto& nav = activeNav();
+  const int count = listCount();
+
+  fui::ListProps props;
+  props.count = static_cast<uint16_t>(count);
+  props.action = ACTION_ROW;
+  props.inputMask = fui::InputTouch;
+  props.labelText = screen.theme().bodyText;
+  // Les titres peuvent s'enrouler sur deux lignes plutot que d'etre tronques
+  // -- une exigence de la maquette, pas une simplification.
+  props.labelText.maxLines = 2;
+  configureUiListSectionHeaders(props, screen.theme());
+  syncListViewport(screen, props, /*hasSubtitle=*/false);
+
+  const size_t cap = static_cast<size_t>(nav.visibleRows > 0 ? nav.visibleRows : 1);
+  if (winItems.capacity() < cap) winItems.reserve(cap);
+  winItems.clear();
+
+  const int windowStart = static_cast<int>(props.topIndex);
+  int built = 0;
+  for (int i = windowStart; i < count && built < static_cast<int>(cap); ++i) {
+    const TaskListRow& row = rows[static_cast<size_t>(i)];
+    fui::ListItem item;
+    if (row.kind == TaskRowKind::DoneHeader) {
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%d %s", doneCount, tr(STR_TASK_DONE_COUNT));
+      doneHeaderLabel = buf;
+      item.isHeader = true;
+      item.label = doneHeaderLabel.c_str();
+    } else {
+      const TaskRecord& rec = records[static_cast<size_t>(row.recordIndex)];
+      item.label = rec.title;
+      item.actionValue = static_cast<int16_t>(i);
+      // Priorite haute seulement : ListItem::emphasis est un booleen par
+      // ligne (freeink-sdk, ajoute pour ce chantier -- fui::ListProps::
+      // labelText ne portait qu'un TextStyle unique pour tout l'appel de
+      // list(), jamais par ligne, ce qui rendait un "gras" par ligne
+      // impossible sans segmenter l'appel par bande de priorite et donc
+      // re-derive la pagination que ListNav possede deja). Deux paliers, pas
+      // trois : la priorite basse ne se distingue que par sa place en fin de
+      // tri (taskOrderBefore), pas par un style — l'exception (haute) se
+      // marque, pas la regle.
+      item.emphasis = (rec.priority == TASK_PRIORITY_HIGH);
+      // Faite ou cochee pendant cette visite (tickedHere maintient rec.done
+      // vrai dans les deux cas) : attenuee plutot que barree. list() ne rend
+      // que effectiveTop/drawnRows agreges, jamais une position Y par ligne,
+      // donc superposer un trait de barre demanderait de recalculer cette
+      // geometrie nous-memes -- ce que StateDisabled evite.
+      if (rec.done) {
+        item.state = fui::StateDisabled;
+      }
+    }
+    winItems.push_back(item);
+    ++built;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    toggleSelected();
-    return;
-  }
+
+  props.items = winItems.data();
+  props.itemsWindowFirst = static_cast<uint16_t>(windowStart);
+  props.itemsWindowCount = static_cast<uint16_t>(winItems.size());
+  screen.list(props);
+}
+
+void TaskListActivity::activateIndex(int index) { toggleAt(index); }
+
+bool TaskListActivity::handleCustomInput() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-    openDetail();
-    return;
+    openDetailAt(activeNav().selected);
+    return true;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
-    // Bouton avant restant une fois Retour/cocher/detail assignes (voir le
-    // rapport de la Tache 5) : bascule la section "terminees".
+    // Seul bouton avant restant une fois Retour/Confirmer/Droite pris (voir
+    // le rapport) : bascule la section "terminees".
     showDone = !showDone;
     dirty = true;
     rebuildOrder();
-    requestUpdate();
-    return;
+    moveSelectionTo(taskListNormalizeSelection(rows, activeNav().selected));
+    return true;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
-    selected = taskListStepSelection(rows, selected, -1);
-    requestUpdate();
-    return;
-  }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
-    selected = taskListStepSelection(rows, selected, +1);
-    requestUpdate();
-    return;
-  }
+  return false;
 }
 
-void TaskListActivity::toggleSelected() {
-  if (selected < 0 || selected >= static_cast<int>(rows.size())) return;
-  const TaskListRow row = rows[selected];
+void TaskListActivity::navigateButtons() {
+  auto& n = activeNav();
+  buttonNavigator.onNextRelease([this, &n] {
+    const int next = taskListStepSelection(rows, n.selected, +1);
+    if (next >= 0) moveSelectionTo(next);
+  });
+  buttonNavigator.onPreviousRelease([this, &n] {
+    const int prev = taskListStepSelection(rows, n.selected, -1);
+    if (prev >= 0) moveSelectionTo(prev);
+  });
+  // Saut de page a l'appui long : taskListPageJump() reproduit
+  // ButtonNavigator::nextPageIndex/previousPageIndex puis corrige le
+  // resultat par-dessus la ligne d'en-tete "terminees" (que rien cote
+  // ButtonNavigator ne sait eviter) -- compose et teste a l'hote dans
+  // TaskListModel, puisque cette activite ne l'est pas elle-meme. Sans ce
+  // saut, un appui long sur 120 taches n'aurait plus que le pas-a-pas pour
+  // traverser la liste.
+  buttonNavigator.onNextContinuous([this, &n] {
+    const int jumped = taskListPageJump(rows, n.selected, n.pageRows(), +1);
+    if (jumped >= 0) moveSelectionTo(jumped);
+  });
+  buttonNavigator.onPreviousContinuous([this, &n] {
+    const int jumped = taskListPageJump(rows, n.selected, n.pageRows(), -1);
+    if (jumped >= 0) moveSelectionTo(jumped);
+  });
+}
+
+void TaskListActivity::toggleAt(int index) {
+  if (index < 0 || index >= static_cast<int>(rows.size())) return;
+  const TaskListRow row = rows[static_cast<size_t>(index)];
   if (row.kind != TaskRowKind::Task) return;
 
-  TaskRecord& rec = records[row.recordIndex];
+  TaskRecord& rec = records[static_cast<size_t>(row.recordIndex)];
   rec.done = !rec.done;
 
   const std::string id(rec.id);
   const auto already = std::find(tickedHere.begin(), tickedHere.end(), id);
   if (rec.done) {
-    // Reste en place, barree, jusqu'a onExit() : voir le commentaire sur
+    // Reste en place, attenuee, jusqu'a onExit() : voir le commentaire sur
     // tickedHere dans le .h.
     if (already == tickedHere.end()) tickedHere.push_back(id);
   } else if (already != tickedHere.end()) {
@@ -172,115 +230,62 @@ void TaskListActivity::toggleSelected() {
 
   dirty = true;
   rebuildOrder();
-  requestUpdate();
+  moveSelectionTo(taskListNormalizeSelection(rows, activeNav().selected));
 }
 
-void TaskListActivity::openDetail() {
-  if (selected < 0 || selected >= static_cast<int>(rows.size()) || rows[selected].kind != TaskRowKind::Task) return;
+void TaskListActivity::openDetailAt(int index) {
+  if (index < 0 || index >= static_cast<int>(rows.size()) ||
+      rows[static_cast<size_t>(index)].kind != TaskRowKind::Task) {
+    return;
+  }
   // TaskDetailActivity arrive avec la Tache 6 ; ce bouton n'a pas encore
   // d'ecran a ouvrir.
-  LOG_INF(TAG, "Detail demande pour %s (TaskDetailActivity : Tache 6)", records[rows[selected].recordIndex].id);
+  LOG_INF(TAG, "Detail demande pour %s (TaskDetailActivity : Tache 6)",
+          records[static_cast<size_t>(rows[static_cast<size_t>(index)].recordIndex)].id);
 }
 
 void TaskListActivity::startSync() {
   // TaskSyncActivity arrive avec la Tache 9, qui devra aussi choisir quel
-  // bouton la declenche : les quatre boutons avant sont deja pris par
-  // Retour / cocher / detail / bascule "terminees" (voir le rapport de la
-  // Tache 5 sur la penurie de boutons face aux quatre actions demandees).
+  // bouton la declenche : les boutons avant sont deja pris par
+  // Retour / cocher / detail / bascule "terminees" (voir le rapport).
   LOG_INF(TAG, "Sync demandee (TaskSyncActivity : Tache 9)");
 }
 
 void TaskListActivity::render(RenderLock&&) {
-  rebuildOrder();
-
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const int pageWidth = renderer.getScreenWidth();
-  const int pageHeight = renderer.getScreenHeight();
-
-  const int lineHeight = renderer.getLineHeight(LEXENDDECA_14_FONT_ID);
-  const int smallLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  const int bulletDiameter = std::max(6, lineHeight * 3 / 5);
-  const int textX = metrics.contentSidePadding + bulletDiameter + metrics.contentSidePadding / 2;
-  const int maxTextWidth = std::max(1, pageWidth - textX - metrics.contentSidePadding);
-
-  if (rowHeights.empty() && !rows.empty()) {
-    remeasureRowHeights(lineHeight, smallLineHeight, maxTextWidth);
-  }
-
   renderer.clearScreen();
 
+  const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
   char title[48];
   std::snprintf(title, sizeof(title), "%s (%d)", tr(STR_TASK_TITLE), openCount);
   if (mappedInput.hasTouchHardware()) {
-    TouchHeaderBackButton::draw(renderer, header, title, false);
+    TouchHeaderBackButton::draw(renderer, uiTarget, header, title, false);
   } else {
     GUI.drawHeader(renderer, header, title);
   }
 
   // Fraicheur de sync : seule l'information qu'on a vraiment (appairee ou
   // non) est affichee ici. Un horodatage relatif ("il y a 2h") demanderait un
-  // champ que rien n'ecrit encore -- voir le rapport de la Tache 5.
+  // champ que rien n'ecrit encore -- voir le rapport.
   const int subHeaderTop = header.y + header.height;
   const char* freshness = TASK_STORE.hasSecret() ? tr(STR_TASK_UP_TO_DATE) : tr(STR_TASK_PAIRING_REQUIRED);
-  GUI.drawSubHeader(renderer, Rect{0, subHeaderTop, pageWidth, metrics.tabBarHeight}, "", freshness);
+  const Rect subHeader{0, subHeaderTop, renderer.getScreenWidth(), metrics.tabBarHeight};
+  GUI.drawSubHeader(renderer, subHeader, "", freshness);
 
-  const int listTop = subHeaderTop + metrics.tabBarHeight;
-  const int listBottom = pageHeight - metrics.buttonHintsHeight;
-  const int contentHeight = std::max(0, listBottom - listTop);
-
-  scrollTop = taskListClampScrollTop(rowHeights, selected, scrollTop, contentHeight);
-  const int visible = taskListVisibleRows(rowHeights, scrollTop, contentHeight);
-
-  int y = listTop;
-  const int rowsTotal = static_cast<int>(rows.size());
-  for (int i = scrollTop; i < scrollTop + visible && i < rowsTotal; ++i) {
-    const TaskListRow& row = rows[i];
-    const int rowH = rowHeights[i];
-
-    if (row.kind == TaskRowKind::DoneHeader) {
-      char doneHeader[32];
-      std::snprintf(doneHeader, sizeof(doneHeader), "%d %s", doneCount, tr(STR_TASK_DONE_COUNT));
-      renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding, y + kRowVPad, doneHeader);
-      y += rowH;
-      continue;
-    }
-
-    const bool isSelected = (i == selected);
-    const TaskRecord& rec = records[row.recordIndex];
-    const auto style = styleForPriority(rec.priority);
-
-    // Ligne selectionnee : fond noir plein puis texte blanc, jamais un
-    // simple filet -- c'est ce qui reste lisible apres le fantomage e-ink.
-    if (isSelected) renderer.fillRect(0, y, pageWidth, rowH, true);
-
-    // Puce circulaire : pleine si faite, creuse sinon. GfxRenderer n'a pas
-    // de drawCircle/fillCircle ; un rectangle arrondi dont le rayon vaut la
-    // moitie du cote en tient lieu.
-    const int bulletY = y + rowH / 2 - bulletDiameter / 2;
-    const int bulletX = metrics.contentSidePadding;
-    if (rec.done) {
-      renderer.fillRoundedRect(bulletX, bulletY, bulletDiameter, bulletDiameter, bulletDiameter / 2,
-                               isSelected ? Color::White : Color::Black);
+  renderUi();
+  // Lignes de hauteur variable (titres qui s'enroulent) : la premiere passe
+  // peut mesurer moins de lignes que l'estimation a hauteur fixe. On rejoue
+  // dans le meme cadre plutot que de laisser une selection hors-champ (meme
+  // rituel que LibraryListActivity::render).
+  for (int pass = 0; activeNav().consumeRebuildNeeded() && pass < 8; ++pass) {
+    renderer.clearScreen();
+    if (mappedInput.hasTouchHardware()) {
+      TouchHeaderBackButton::draw(renderer, uiTarget, header, title, false);
     } else {
-      renderer.drawRoundedRect(bulletX, bulletY, bulletDiameter, bulletDiameter, 1, bulletDiameter / 2, !isSelected);
+      GUI.drawHeader(renderer, header, title);
     }
-
-    const auto lines = renderer.wrappedText(LEXENDDECA_14_FONT_ID, rec.title, maxTextWidth, /*maxLines=*/2, style);
-    int lineY = y + kRowVPad;
-    for (const auto& line : lines) {
-      renderer.drawText(LEXENDDECA_14_FONT_ID, textX, lineY, line.c_str(), !isSelected, style);
-      if (rec.done) {
-        // Cochee pendant cette visite ou deja faite avant : dans les deux
-        // cas rec.done est vrai et la ligne reste barree en place.
-        const int textWidth = renderer.getTextWidth(LEXENDDECA_14_FONT_ID, line.c_str(), style);
-        const int strikeY = lineY + lineHeight / 2;
-        renderer.drawLine(textX, strikeY, textX + textWidth, strikeY, !isSelected);
-      }
-      lineY += lineHeight;
-    }
-
-    y += rowH;
+    GUI.drawSubHeader(renderer, subHeader, "", freshness);
+    renderUi();
   }
 
   char doneLabel[16];
@@ -288,6 +293,5 @@ void TaskListActivity::render(RenderLock&&) {
   const auto labels =
       mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), tr(STR_TASK_TICK), doneLabel, tr(STR_TASK_DETAIL));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-
   renderer.displayBuffer();
 }
