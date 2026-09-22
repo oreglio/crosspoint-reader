@@ -220,7 +220,7 @@ bool TaskListActivity::handleCustomInput() {
   }
   // Gauche/Droite appartiennent aussi aux ensembles precedent/suivant de
   // ButtonNavigator (getPreviousButtons/getNextButtons). Sans cette
-  // consommation, MAINTENIR "☑ n" ferait defiler la liste page par page via
+  // consommation, MAINTENIR "n faites" ferait defiler la liste page par page via
   // navigateButtons() avant que le relachement ne bascule la section — et,
   // parce que la release est consommee ici, ButtonNavigator::lastContinuousNavTime
   // ne serait jamais remis a zero, ce qui avalerait en silence l'appui
@@ -381,8 +381,13 @@ void TaskListActivity::drawChrome() {
 }
 
 void TaskListActivity::drawFooter() {
-  char doneLabel[16];
-  std::snprintf(doneLabel, sizeof(doneLabel), "\xE2\x98\x91 %d", doneCount);  // "[checkbox] N"
+  // Meme forme que la ligne d'en-tete de la section qu'il ouvre ("3 faites"),
+  // et aucun glyphe decoratif : les polices integrees s'arretent au Latin-1
+  // plus une petite serie maths/monnaies, et un glyphe absent est saute en
+  // silence par EpdFont.cpp. Le "☑" (U+2611) n'y figure pas — ce libelle
+  // s'affichait donc " 3". Voir .claude/CONTEXT.md.
+  char doneLabel[24];
+  std::snprintf(doneLabel, sizeof(doneLabel), "%d %s", doneCount, tr(STR_TASK_DONE_COUNT));
   const auto labels =
       mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), tr(STR_TASK_TICK), doneLabel, tr(STR_TASK_DETAIL));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

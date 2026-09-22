@@ -53,6 +53,21 @@ Refer to https://freeink.org/llms.txt for guidance.
 - Kindle EPUBs may contain paired high-res and old-Kindle fallback images. `ChapterHtmlSlimParser` should skip `<img>` nodes with `data-AmznRemoved-M8` to avoid duplicate stacked images.
 - After image/layout pipeline changes that affect cached EPUB output, clear the affected `.crosspoint/epub_<hash>/` cache if behavior looks stale.
 
+## Fonts / Glyph Coverage
+
+- The built-in faces cover Latin-1 plus a small maths/currency set (∂ ∅ ∆ ∏ ∑ − ∕ ∙ √
+  ∞ ∫ ≈ ≠ ≤ ≥, currency signs, two music notes) and **nothing above it**. No arrows
+  (U+2190–U+21FF), no ballot boxes (U+2600–U+26FF). Check
+  `lib/EpdFont/builtinFonts/` before using any codepoint above Latin-1.
+- A missing glyph is **silently skipped**: `EpdFont.cpp` flushes the pending advance
+  and `continue`s — no .notdef, no tofu, no log. The text just renders without it,
+  usually as a stray leading space, so nothing looks broken to a reviewer.
+- Neighbouring codepoints prove nothing: ≠ (U+2260) is present and ≡ (U+2261) is not.
+- So UI strings stay within Latin-1 unless the codepoint has been checked, and
+  decorative symbols in button hints are not worth it — the house solution is
+  `STR_ARROW_LEFT`/`STR_ARROW_RIGHT` (« », U+00AB/U+00BB) via `withBackArrow()`.
+  Shipped once as "☑ 3" rendering " 3" on the tasks footer.
+
 ## UI Consistency
 
 - Use FreeInkUI SDK components and input routing for list-style screens where possible. Row rendering, touch targets,

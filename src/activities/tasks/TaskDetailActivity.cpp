@@ -561,12 +561,14 @@ void TaskDetailActivity::render(RenderLock&&) {
   drawNote();
   drawPomodoroBlock();
 
-  char editLabel[24];
-  std::snprintf(editLabel, sizeof(editLabel), "\xE2\x89\xA1 %s", tr(STR_TASK_EDIT));  // "[identical to] modifier"
-  char pomodoroLabel[24];
-  std::snprintf(pomodoroLabel, sizeof(pomodoroLabel), "\xE2\x96\xB8 %s", tr(STR_TASK_POMODORO));  // "[play] pomodoro"
-  const auto labels =
-      mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), tr(STR_TASK_TICK), editLabel, pomodoroLabel);
+  // Les mots seuls, sans glyphe decoratif : les polices integrees s'arretent au
+  // Latin-1 plus une petite serie maths/monnaies, et un glyphe absent est saute
+  // en silence par EpdFont.cpp (ni .notdef, ni tofu, ni log). Un "≡" en tete de
+  // libelle ne se verrait donc pas manquer — il laisserait juste une espace.
+  // Voir .claude/CONTEXT.md. La fleche de Retour, elle, passe par
+  // withBackArrow(), dont le « est bien du Latin-1.
+  const auto labels = mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), tr(STR_TASK_TICK),
+                                            tr(STR_TASK_EDIT), tr(STR_TASK_POMODORO));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   if (++repaintsSinceFullRefresh >= kRepaintsPerFullRefresh) {
