@@ -622,20 +622,22 @@ beforeEach(() => {
   cfg = loadConfig({ RAINDROP_TOKEN: 't', DEVICE_TOKEN: TOKEN, DOMAIN: 'd.fr', DATA_DIR: mkdtempSync(join(tmpdir(), 'crossdrop-')) });
 });
 
-/** Découpe le corps NDJSON en { header, tasks, notes } selon le cadrage. */
+/** Découpe le corps NDJSON en { header, rows, notes } selon le cadrage.
+    Le champ s'appelle `rows` et non `tasks` : `tasks` est déjà la TaskDb du
+    fichier, et la déstructurer l'ombrerait — trois tests tombaient en TDZ. */
 function parse(body: string) {
   const lines = body.split('\n');
   const header = JSON.parse(lines[0]);
-  const tasks: Record<string, unknown>[] = [];
+  const rows: Record<string, unknown>[] = [];
   const notes: Record<string, string> = {};
   let i = 1;
   while (i < lines.length && lines[i] !== '') {
     const t = JSON.parse(lines[i]) as Record<string, unknown>;
-    tasks.push(t); i += 1;
+    rows.push(t); i += 1;
     const n = Number(t.noteBytes ?? 0);
     if (n > 0) { notes[t.id as string] = lines[i]; i += 1; }
   }
-  return { header, tasks, notes };
+  return { header, rows, notes };
 }
 
 async function sync(body: object) {
@@ -666,9 +668,9 @@ describe('tasks/sync', () => {
 
   it('curseur absent = instantané complet', async () => {
     tasks.upsert({ id: 'w00000001', title: 'Notaire', note: '', priority: 0, done: 0, deleted: 0, updated_at: NOW });
-    const { header, tasks } = parse((await sync({ schema: 1 })).body);
+    const { header, rows } = parse((await sync({ schema: 1 })).body);
     expect(header).toMatchObject({ schema: 1, more: false, reset: false, count: 1 });
-    expect(tasks[0]).toMatchObject({ id: 'w00000001', title: 'Notaire', priority: 0, done: false, noteBytes: 0 });
+    expect(rows[0]).toMatchObject({ id: 'w00000001', title: 'Notaire', priority: 0, done: false, noteBytes: 0 });
   });
 
   it('cadre la note en octets bruts après la ligne de métadonnées', async () => {
@@ -684,10 +686,10 @@ describe('tasks/sync', () => {
   });
 
   it('les ops sont appliquées avant le diff et reviennent confirmées', async () => {
-    const { tasks } = parse((await sync({
+    const { rows } = parse((await sync({
       schema: 1, ops: [{ op: 'add', id: 'd0000abc1', title: 'Café', priority: 0 }],
     })).body);
-    expect(tasks.map(t => t.id)).toContain('d0000abc1');
+    expect(rows.map(t => t.id)).toContain('d0000abc1');
     expect(tasks.get('d0000abc1')).toBeDefined();
   });
 
@@ -696,7 +698,7 @@ describe('tasks/sync', () => {
     const first = parse((await sync({ schema: 1 })).body);
     tasks.upsert({ id: 'w00000002', title: 'B', note: '', priority: 1, done: 0, deleted: 0, updated_at: NOW });
     const second = parse((await sync({ schema: 1, cursor: first.header.cursor })).body);
-    expect(second.tasks.map(t => t.id)).toEqual(['w00000002']);
+    expect(second.rows.map(t => t.id)).toEqual(['w00000002']);
   });
 
   it('pagine avec more:true quand il y a plus de tâches que la limite', async () => {
@@ -712,9 +714,9 @@ describe('tasks/sync', () => {
     tasks.markDeleted('w00000001');
     tasks.purgeTombstones('2026-06-01T00:00:00.000Z');
     tasks.upsert({ id: 'w00000002', title: 'B', note: '', priority: 1, done: 0, deleted: 0, updated_at: NOW });
-    const { header, tasks } = parse((await sync({ schema: 1, cursor: Buffer.from('1', 'utf8').toString('base64url') })).body);
+    const { header, rows } = parse((await sync({ schema: 1, cursor: Buffer.from('1', 'utf8').toString('base64url') })).body);
     expect(header.reset).toBe(true);
-    expect(tasks.map(t => t.id)).toEqual(['w00000002']);
+    expect(rows.map(t => t.id)).toEqual(['w00000002']);
   });
 
   it('remonte les rejets dans l’en-tête sans faire échouer la requête', async () => {
@@ -819,12 +821,18 @@ export function registerTaskRoutes(app: FastifyInstance, tasks: TaskDb, _cfg: Co
       const reset = cursor > 0 && cursor < tasks.tombstoneFloor();
       const effective = reset ? 0 : cursor;
       const limit = Math.min(body.limit ?? MAX_PAGE, MAX_PAGE);
-      const rows = reset ? tasks.snapshot(0, limit) : tasks.changesSince(effective, limit);
+      // `effective === 0`, pas `reset` : un curseur ABSENT (premier appairage) doit
+      // lui aussi passer par snapshot(), sinon changesSince(0) renvoie les
+      // tombstones de taches que la liseuse n'a jamais connues.
+      const rows = effective === 0 ? tasks.snapshot(0, limit) : tasks.changesSince(effective, limit);
 
       const last = rows.at(-1);
       const header = {
         schema: 1,
-        cursor: last ? encodeCursor(last.seq) : (body.cursor ?? encodeCursor(0)),
+        // encodeCursor(effective), pas body.cursor : apres un reset sans aucune
+        // ligne, renvoyer le curseur perime tel quel ferait rejouer le reset a
+        // chaque sync, indefiniment.
+        cursor: last ? encodeCursor(last.seq) : encodeCursor(effective),
         more: rows.length === limit,
         reset,
         count: rows.length,
