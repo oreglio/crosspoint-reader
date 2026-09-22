@@ -42,6 +42,27 @@ bool isValidTaskId(const char* id) {
   return id[TASK_ID_LEN] == '\0';
 }
 
+void clearDirectoryFiles(const char* dirPath) {
+  if (!Storage.exists(dirPath)) return;
+  HalFile dir = Storage.open(dirPath);
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    LOG_ERR(TAG, "Could not open %s to clear it", dirPath);
+    return;
+  }
+
+  char name[32];
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    file.getName(name, sizeof(name));
+    file.close();
+    const std::string path = std::string(dirPath) + "/" + name;
+    if (!Storage.remove(path.c_str())) {
+      LOG_ERR(TAG, "Failed to remove note file: %s", path.c_str());
+    }
+  }
+  dir.close();
+}
+
 }  // namespace
 
 bool TaskStore::loadFromFile() {
@@ -155,36 +176,59 @@ void TaskStore::replaceAll(std::vector<TaskRecord> next) {
 }
 
 void TaskStore::upsert(const TaskRecord& rec) {
+  if (stageUpsert(rec)) saveToFile();
+}
+
+void TaskStore::remove(const char* id) {
+  if (stageRemove(id)) saveToFile();
+}
+
+bool TaskStore::stageUpsert(const TaskRecord& rec) {
   // saveToFile() reserialise tout `records` : ecrire dans un store decharge
   // (unload()) reduirait index.json a cette seule tache. Voir unload().
   ensureLoaded();
   if (!isValidTaskId(rec.id)) {
     LOG_ERR(TAG, "Refusing to index a task with a malformed id");
-    return;
+    return false;
   }
   for (auto& existing : records) {
     if (strcmp(existing.id, rec.id) == 0) {
       existing = rec;
-      saveToFile();
-      return;
+      return true;
     }
   }
   if (records.size() >= MAX_TASKS) {
     LOG_ERR(TAG, "Dropping task %s: index already at the %zu-task cap", rec.id, MAX_TASKS);
-    return;
+    return false;
   }
   records.push_back(rec);
-  saveToFile();
+  return true;
 }
 
-void TaskStore::remove(const char* id) {
-  if (id == nullptr) return;
-  ensureLoaded();  // meme raison que dans upsert()
+bool TaskStore::stageRemove(const char* id) {
+  if (id == nullptr) return false;
+  ensureLoaded();  // meme raison que dans stageUpsert()
   const auto it =
       std::find_if(records.begin(), records.end(), [id](const TaskRecord& r) { return strcmp(r.id, id) == 0; });
-  if (it == records.end()) return;
+  if (it == records.end()) return false;
   records.erase(it);
-  saveToFile();
+  return true;
+}
+
+void TaskStore::stageReset() {
+  // Charger d'abord, meme pour tout vider : le saveToFile() du commit ecrit
+  // aussi le secret, qu'un store jamais charge porterait vide.
+  ensureLoaded();
+  records.clear();
+}
+
+void TaskStore::discardStaged() {
+  // Vider soi-meme avant de relire : fromJson() ne tourne que si index.json se
+  // lit, et a la toute premiere sync il n'existe pas encore. Le secret, lui,
+  // n'est pas touche : un echec de lecture ne doit pas desappairer en RAM.
+  records.clear();
+  loadFromFile();
+  clearStagedNotes();
 }
 
 const TaskRecord* TaskStore::find(const char* id) const {
@@ -218,7 +262,7 @@ bool TaskStore::appendOp(const TaskOp& op) {
   return ok;
 }
 
-size_t TaskStore::readOps(TaskOp* out, size_t max) const {
+size_t TaskStore::readOps(TaskOp* out, size_t max, size_t skip) const {
   if (out == nullptr || max == 0) return 0;
   HalFile file;
   if (!Storage.openFileForRead(TAG, opsPath(), file)) return 0;
@@ -245,7 +289,14 @@ size_t TaskStore::readOps(TaskOp* out, size_t max) const {
     if (overflow) {
       LOG_ERR(TAG, "Skipping an ops line too long to parse");
     } else if (lineLen > 0 && taskOpFromLine(line, lineLen, out[count])) {
-      count++;
+      // Une op sautee est quand meme decodee dans out[count], qui sert alors
+      // de brouillon : seules les ops VALIDES comptent pour `skip`, comme pour
+      // `count`, sinon deux tranches successives se chevaucheraient.
+      if (skip > 0) {
+        skip--;
+      } else {
+        count++;
+      }
     }
     lineLen = 0;
     overflow = false;
@@ -324,22 +375,65 @@ bool TaskStore::notePath(const char* id, char* out, size_t size) {
   return written > 0 && static_cast<size_t>(written) < size;
 }
 
-void TaskStore::clearAllNotes() const {
+void TaskStore::clearAllNotes() const { clearDirectoryFiles(notesDir()); }
+
+void TaskStore::clearStagedNotes() const { clearDirectoryFiles(stagedNotesDir()); }
+
+bool TaskStore::stagedNotePath(const char* id, char* out, size_t size) {
+  // Meme garde que notePath() : l'id vient du reseau.
+  char checked[48];
+  if (!notePath(id, checked, sizeof(checked))) return false;
+  const int written = std::snprintf(out, size, "%s/%s.txt", stagedNotesDir(), id);
+  return written > 0 && static_cast<size_t>(written) < size;
+}
+
+void TaskStore::commitStagedNotes() const {
+  char name[32];
+  char from[64];
+  char to[64];
+
+  if (Storage.exists(stagedNotesDir())) {
+    HalFile dir = Storage.open(stagedNotesDir());
+    if (dir && dir.isDirectory()) {
+      for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+        file.getName(name, sizeof(name));
+        file.close();
+        std::snprintf(from, sizeof(from), "%s/%s", stagedNotesDir(), name);
+        std::snprintf(to, sizeof(to), "%s/%s", notesDir(), name);
+        // SdFat refuse de renommer vers un fichier existant (O_EXCL).
+        if (Storage.exists(to)) Storage.remove(to);
+        if (!Storage.rename(from, to)) {
+          LOG_ERR(TAG, "Failed to move a synced note into place: %s", name);
+        }
+      }
+    } else {
+      LOG_ERR(TAG, "Could not open the staged notes directory");
+    }
+    if (dir) dir.close();
+  }
+
+  // Une tache supprimee, ou dont la note a ete videe sur le web, laisserait
+  // sinon son ancien fichier derriere elle.
   if (!Storage.exists(notesDir())) return;
   HalFile dir = Storage.open(notesDir());
   if (!dir || !dir.isDirectory()) {
     if (dir) dir.close();
-    LOG_ERR(TAG, "Could not open the notes directory to clear it");
     return;
   }
-
-  char name[32];
   for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
     file.getName(name, sizeof(name));
     file.close();
-    const std::string path = std::string(notesDir()) + "/" + name;
-    if (!Storage.remove(path.c_str())) {
-      LOG_ERR(TAG, "Failed to remove note file: %s", path.c_str());
+    char id[TASK_ID_LEN + 1] = {};
+    const size_t len = strlen(name);
+    bool keep = false;
+    if (len == TASK_ID_LEN + 4 && strcmp(name + TASK_ID_LEN, ".txt") == 0) {
+      std::memcpy(id, name, TASK_ID_LEN);
+      const TaskRecord* rec = find(id);
+      keep = rec != nullptr && rec->noteBytes > 0;
+    }
+    if (!keep) {
+      std::snprintf(to, sizeof(to), "%s/%s", notesDir(), name);
+      if (!Storage.remove(to)) LOG_ERR(TAG, "Failed to remove orphan note file: %s", name);
     }
   }
   dir.close();

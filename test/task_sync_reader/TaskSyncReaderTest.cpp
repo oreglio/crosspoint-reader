@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "StreamingJsonParser.h"
+#include "TaskSyncOutcome.h"
 #include "TaskSyncReader.h"
 
 namespace {
@@ -497,4 +498,96 @@ TEST(TaskSyncReader, ReadsRejectionsDeclaredBeforeTheHeaderFields) {
   EXPECT_EQ(cap.cursor, "MQ");
   EXPECT_TRUE(cap.more);
   EXPECT_FALSE(r.hasError());
+}
+
+// Octets exacts rendus par crossdrop (feat/crosstasks) a une sync appairee,
+// captures avec curl : c'est le contrat reel, pas une reconstitution.
+TEST(TaskSyncReader, ReadsTheBytesTheRealServerSends) {
+  const std::string body =
+      "{\"schema\":1,\"cursor\":\"Mg\",\"more\":false,\"reset\":false,\"count\":2,\"rejected\":[]}\n"
+      "{\"id\":\"w209d9ea6\",\"title\":\"Tache creee sur le web\",\"priority\":0,\"done\":false,\"noteBytes\":0}\n"
+      "{\"id\":\"d0000abcd\",\"title\":\"Tache creee sur la liseuse\",\"priority\":1,\"done\":false,\"noteBytes\":0}\n";
+  // 17 octets : la tranche du chemin simulateur de TaskSyncActivity.
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  feedInChunks(r, body, 17);
+
+  EXPECT_TRUE(r.isComplete());
+  EXPECT_EQ(cap.cursor, "Mg");
+  ASSERT_EQ(cap.tasks.size(), 2u);
+  EXPECT_STREQ(cap.tasks[0].id, "w209d9ea6");
+  EXPECT_EQ(cap.tasks[0].priority, 0);
+  EXPECT_STREQ(cap.tasks[1].id, "d0000abcd");
+  EXPECT_TRUE(cap.rejected.empty());
+}
+
+// Meme forme que ci-dessus (ordre des cles de JSON.stringify cote serveur),
+// avec ce que la capture n'avait pas : un rejet, une note multi-ligne en UTF-8
+// et une suppression.
+TEST(TaskSyncReader, ReadsServerShapedRejectionsNotesAndDeletions) {
+  const std::string note = "Premi\xc3\xa8re ligne\nseconde ligne";
+  const std::string body =
+      "{\"schema\":1,\"cursor\":\"czQ\",\"more\":true,\"reset\":true,\"count\":2,"
+      "\"rejected\":[{\"id\":\"d0000abc9\",\"reason\":\"full\"},{\"id\":\"w0000ffff\",\"reason\":\"unknown\"}]}\n"
+      "{\"id\":\"w209d9ea6\",\"title\":\"Avec note\",\"priority\":2,\"done\":true,\"noteBytes\":" +
+      std::to_string(note.size()) + "}\n" + note +
+      "\n"
+      "{\"id\":\"w0000aaaa\",\"deleted\":true}\n";
+  for (const size_t chunk : {1u, 17u, 4096u}) {
+    Capture cap;
+    TaskSyncReader r(callbacks(cap));
+    feedInChunks(r, body, chunk);
+
+    EXPECT_TRUE(r.isComplete()) << "chunk " << chunk;
+    EXPECT_EQ(cap.cursor, "czQ");
+    EXPECT_TRUE(cap.more);
+    EXPECT_TRUE(cap.reset);
+    ASSERT_EQ(cap.rejected.size(), 2u);
+    EXPECT_EQ(cap.rejected[0], (std::pair<std::string, std::string>{"d0000abc9", "full"}));
+    EXPECT_EQ(cap.rejected[1], (std::pair<std::string, std::string>{"w0000ffff", "unknown"}));
+    ASSERT_EQ(cap.tasks.size(), 1u);
+    EXPECT_TRUE(cap.tasks[0].done);
+    ASSERT_EQ(cap.notes.size(), 1u);
+    EXPECT_EQ(cap.notes[0].second, note);
+    ASSERT_EQ(cap.deleted.size(), 1u);
+    EXPECT_EQ(cap.deleted[0], "w0000aaaa");
+  }
+}
+
+// Une reponse coupee net apres une ligne complete n'est PAS une erreur de
+// cadrage, et le transport seul peut la voir : d'ou le bodyComplete separe.
+TEST(TaskSyncOutcome, OnlyAFullyAcceptedSuccessMayCommit) {
+  EXPECT_EQ(classifyTaskSyncResponse(200, true, true), TaskSyncOutcome::Commit);
+  EXPECT_EQ(classifyTaskSyncResponse(204, true, true), TaskSyncOutcome::Commit);
+
+  EXPECT_EQ(classifyTaskSyncResponse(200, false, true), TaskSyncOutcome::BadResponse);
+  EXPECT_EQ(classifyTaskSyncResponse(200, true, false), TaskSyncOutcome::BadResponse);
+  EXPECT_EQ(classifyTaskSyncResponse(200, false, false), TaskSyncOutcome::BadResponse);
+
+  EXPECT_EQ(classifyTaskSyncResponse(401, true, true), TaskSyncOutcome::PairingRequired);
+  EXPECT_EQ(classifyTaskSyncResponse(-1, false, false), TaskSyncOutcome::TransportFailed);
+  EXPECT_EQ(classifyTaskSyncResponse(0, false, false), TaskSyncOutcome::ServerError);
+  for (const int code : {199, 301, 400, 403, 413, 500, 502, 503}) {
+    EXPECT_EQ(classifyTaskSyncResponse(code, true, true), TaskSyncOutcome::ServerError) << code;
+  }
+}
+
+// Le lecteur, lui, ne voit que des octets : un corps arrete en plein milieu
+// d'une note ou d'une ligne ne doit jamais passer pour complet.
+TEST(TaskSyncOutcome, ATruncatedBodyIsNeverCommittable) {
+  const std::string note(100, 'x');
+  const std::string body = kHeader +
+                           "{\"id\":\"w17ab93c2\",\"title\":\"T\",\"priority\":1,\"done\":false,\"noteBytes\":" +
+                           std::to_string(note.size()) + "}\n" + note + "\n";
+  for (size_t cut = 1; cut < body.size(); cut++) {
+    Capture cap;
+    TaskSyncReader r(callbacks(cap));
+    r.feed(body.data(), cut);
+    const bool atFrameBoundary = r.isComplete();
+    // Les seules coupes « propres » sont juste apres l'en-tete et juste apres
+    // le \n qui ferme la note ; ailleurs, le lecteur doit refuser de lui-meme.
+    if (atFrameBoundary) {
+      EXPECT_TRUE(cut == kHeader.size() || cut == body.size()) << "cut " << cut;
+    }
+  }
 }

@@ -72,7 +72,10 @@ class TaskStore : public PersistableStore<TaskStore> {
   const TaskRecord* find(const char* id) const;
 
   bool appendOp(const TaskOp& op);
-  size_t readOps(TaskOp* out, size_t max) const;
+  // `skip` saute les premieres ops valides : une sync envoie au plus
+  // TASK_MAX_OPS_PER_SYNC ops par requete et lit les suivantes par tranches,
+  // sans toucher au fichier avant d'avoir tout envoye.
+  size_t readOps(TaskOp* out, size_t max, size_t skip = 0) const;
   void clearOps();
 
   bool readCursor(char* out, size_t size) const;
@@ -86,6 +89,26 @@ class TaskStore : public PersistableStore<TaskStore> {
   // arbitraire sur la carte SD.
   static bool notePath(const char* id, char* out, size_t size);
   void clearAllNotes() const;
+
+  // --- Mise en attente d'une reponse de sync ---
+  //
+  // La sync applique la reponse du serveur au fil de l'eau, mais rien ne doit
+  // atteindre la carte avant qu'elle soit entierement acceptee : un corps coupe
+  // a mi-chemin ne doit changer ni index.json, ni les notes, ni le curseur, ni
+  // la file d'ops. Les stage*() modifient donc `records` en RAM SANS
+  // sauvegarder, et les notes recues s'ecrivent sous stagedNotesDir(). Sur
+  // succes, l'appelant sauvegarde (saveToFile) puis commitStagedNotes() ; sur
+  // echec, discardStaged() relit la carte et jette les notes en attente.
+  static const char* stagedNotesDir() { return "/.crosspoint/tasks/ns"; }
+  static bool stagedNotePath(const char* id, char* out, size_t size);
+  void stageReset();
+  bool stageUpsert(const TaskRecord& rec);
+  bool stageRemove(const char* id);
+  void clearStagedNotes() const;
+  // Deplace les notes en attente dans notesDir(), puis supprime toute note
+  // dont la tache n'est plus indexee ou n'a plus de note (noteBytes == 0).
+  void commitStagedNotes() const;
+  void discardStaged();
 
   bool hasSecret() const { return !secretObfuscated.empty(); }
   bool readSecret(char* out, size_t size) const;
