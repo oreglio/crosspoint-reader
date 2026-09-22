@@ -17,7 +17,14 @@
 Copied from `AGENTS.md` and the spec. Every task inherits these.
 
 - Target `pio run -e default` — **one binary serves X3 and X4**. Never `#if` on board where a runtime capability check exists.
-- `pio run -e simulator` must also build; the simulator is the fast feedback loop for screens.
+- **`pio run -e simulator` is BROKEN on this branch and is not a gate for any task.** Pre-existing and
+  unrelated to CrossTasks: `src/SettingsList.h:1039` calls `HalGPIO::supportsMultiTouch()`, which `lib/hal`
+  provides but the simulator ignores (`lib_ignore = hal`), taking its copy from the vendored
+  `uxjulia/crossink-simulator` package where the method does not exist. Do not try to fix it, and do not
+  report it as a failure of your task. The gates are `pio run -e default` and the host suite in `test/`.
+- **There is therefore NO visual verification before the user's first flash.** Anything that only a running
+  screen would catch must instead be read: extract pure logic so the host suite can pin it, and walk the
+  error paths by hand. State in your report what you read and what remains unverified.
 - **Never hardcode screen coordinates.** Derive every position from `renderer.getScreenWidth()`, `getScreenHeight()` and `renderer.getOrientedViewableTRBL()`.
 - **All user-facing strings via `tr(STR_*)`.** New keys go in `lib/I18n/translations/english.yaml` and `french.yaml`, then `python3 scripts/gen_i18n.py`. Never hand-edit `lib/I18n/I18n*.h/cpp`. Logs stay hardcoded.
 - **No exceptions, no bare `new`.** Use `makeUniqueNoThrow<T>()` / `makeUniqueNoThrow<T[]>()` from `lib/Memory/Memory.h`. `new` is not nothrow on ESP32 — bare `new` calls `abort()`.
@@ -25,7 +32,11 @@ Copied from `AGENTS.md` and the spec. Every task inherits these.
 - Keep stack frames under 256 bytes; anything larger must be justified in a comment.
 - `std::string` is banned from the per-task hot paths; use `char[]`, `string_view` and `snprintf`. `string_view::data()` is **not** null-terminated — never hand it to a C API.
 - Files are `FsFile`, never Arduino `File`, and are **always closed explicitly**. On hardware only one reader may hold a path open at a time.
-- Buttons are `MappedInputManager::Button::*`; the action bar carries exactly four labels (`Labels::btn1…btn4`).
+- Buttons are `MappedInputManager::Button::*`. The action bar carries exactly four labels, and
+  `mapLabels(back, confirm, previous, next)` (src/MappedInputManager.h:234) binds them to the physical
+  **Back / Confirm / Left / Right** in that order — `btn1…btn4` are its OUTPUT, already reordered per device,
+  never four free slots you may assign as you like. Up/Down are not in the bar at all and remain available
+  for scrolling or paging. Any screen wanting a fifth action must move it elsewhere, not invent a slot.
 - Run `clang-format -i` on every touched C++ file before committing.
 - **Priority encoding `0 = high, 1 = normal, 2 = low`**, matching the server.
 - Ids are `'d' + 8 lowercase hex` when created here. Regex on the wire: `^[wd][0-9a-f]{8}$`.
@@ -1240,7 +1251,7 @@ In `src/main.cpp`, beside the existing store loads, add:
 - [ ] **Step 3: Verify it builds for both targets**
 
 ```bash
-pio run -e simulator && pio run -e default
+pio run -e default
 ```
 
 Expected: both succeed. `pio run -e default` must not grow the binary by more
@@ -1285,15 +1296,28 @@ the toggle being on when the last completed task is unticked — need no screen.
 
 **Design rules, from the approved mockups — these are requirements, not taste:**
 
-- One uniform body size for every title. **Priority is carried by weight only**:
-  `EpdFontFamily::Style::Bold` for 0, `Regular` for 1, `Light` for 2. No badge,
-  no pip, no rule between rows.
+- One uniform body size for every title. **Priority is carried by weight only**, in
+  **TWO tiers, not three**: `ListItem::emphasis = true` (bold) when
+  `priority == TASK_PRIORITY_HIGH`, plain otherwise. No badge, no pip, no rule between
+  rows. `EpdFontFamily::Style` (lib/EpdFont/EpdFontFamily.h:8-20) has only
+  REGULAR / BOLD / ITALIC / BOLD_ITALIC — there is no Light, so the mockups' three-weight
+  scale is not implementable. Do not substitute ITALIC for the low tier: on a 1-bit panel
+  italic attracts the eye rather than quieting it, inverting the intent, and the sort
+  already puts low-priority tasks at the bottom. Mark the exception, not the rule.
 - Circular bullets. Selected row is drawn inverted (`fillRect` then white text).
 - Completed tasks are **hidden by default**; `btn3` shows `☑ n` and toggles them
   into a section at the bottom of the same screen.
-- A task ticked during this visit **stays in place, struck through**, until
-  `onExit()` — an accidental tick must be undoable without opening the toggle.
-- Action bar: `btn1` OK/cocher, `btn2` ▸ détail, `btn3` ☑ n, `btn4` ⟳ sync.
+- A task ticked during this visit **stays in place, dimmed** (`fui::StateDisabled`), until
+  `onExit()` — an accidental tick must be undoable without opening the toggle. Dimmed and
+  not struck through: `fui::list()` reports only aggregate `effectiveTop`/`drawnRows`, never
+  a per-row Y, so overlaying a strike would mean re-deriving the row geometry that
+  `UiListActivity` exists to own.
+- Action bar: `MappedInputManager::mapLabels(back, confirm, previous, next)`
+  (src/MappedInputManager.h:234) binds its four arguments to the physical
+  **Back / Confirm / Left / Right** — it is not a free four-slot bar, and Up/Down are not in
+  it at all. Four actions is all there is: **Back = quitter, Confirm = cocher,
+  Left = ☑ n (bascule terminées), Right = ▸ détail**. Sync is NOT on this screen; Task 10
+  puts it in Settings as `SettingAction::TaskSync`.
 
 - [ ] **Step 1: Write the header**
 
@@ -1349,15 +1373,19 @@ The `.cpp` must:
 `loop()` routes `Button::Up` / `Down` to move the selection, `Confirm` to
 `toggleSelected()`, `Right` to `openDetail()`, and `Back` to finish.
 
-- [ ] **Step 3: Verify in the simulator**
+- [ ] **Step 3: Verify on the device build and the host suite**
+
+The simulator does not build on this branch (see Global Constraints) — there is no
+verification by eye here.
 
 ```bash
-pio run -e simulator
+pio run -e default
+cd test/build && cmake .. && cmake --build . -j8 && ctest
 ```
 
-Then run the simulator and navigate Home → Tasks. Confirm by eye: the three
-weights are distinguishable, no completed task is visible until the toggle, and
-a tick leaves the row in place struck through.
+Expect SUCCESS and 2 pre-existing `SectionPersistenceTest` failures, nothing more. The
+ordering and row-building rules are pinned by the host tests in `test/task_list_model/`
+instead; anything you cannot pin there, name in your report as unverified.
 
 - [ ] **Step 4: Commit**
 
@@ -1382,14 +1410,26 @@ git commit -m "feat(tasks): Tasks list screen with weight-carried priority"
 
 **Design rules, from the approved mockups:**
 
-- Title in LexendDeca 16, **weight matching its priority**. **No priority label** —
-  the weight already says it.
-- Note in **LexendDeca 10 Light** inside a bounded region, paginated. Read from
+- Title in LexendDeca 16, **`EpdFontFamily::BOLD` when `priority == TASK_PRIORITY_HIGH`,
+  `REGULAR` otherwise**. **No priority label** — the weight already says it.
+  TWO tiers, not three: `EpdFontFamily::Style` (lib/EpdFont/EpdFontFamily.h:8-20) offers
+  only REGULAR / BOLD / ITALIC / BOLD_ITALIC — there is no Light, so the mockups'
+  three-weight scale is not implementable. This matches `ListItem::emphasis` on the list
+  screen, which also marks only the exception. Do not substitute ITALIC for the low tier:
+  on a 1-bit panel italic attracts the eye rather than quieting it, which inverts the
+  intent, and the sort already puts low-priority tasks at the bottom.
+- Note in **LexendDeca 10 `REGULAR`** inside a bounded region, paginated. Read from
   `/.crosspoint/tasks/n/<id>.txt` **in chunks**; never load 4 KB into a `std::string`.
 - A framed Pomodoro block anchored above the action bar, showing the duration
   that will start and the position in the series.
 - Header shows `n / total`.
-- Action bar: `btn1` OK/cocher, `btn2` ▸ pomodoro, `btn3` ≡ modifier, `btn4` ◂ retour.
+- Action bar: `MappedInputManager::mapLabels(back, confirm, previous, next)`
+  (src/MappedInputManager.h:234) binds its four arguments to the physical
+  **Back / Confirm / Left / Right**, in that order — it is not a free four-slot bar, and
+  Up/Down are not in it at all. So: **Back = ◂ retour, Confirm = OK/cocher,
+  Left = ≡ modifier, Right = ▸ pomodoro**, and **Up/Down page the note**, which is why
+  the note's pagination must not claim Left/Right. Call it exactly as
+  `TaskListActivity::render()` does.
 
 - [ ] **Step 1: Add the pomodoro context parameter**
 
@@ -1409,15 +1449,28 @@ page's bytes in a `char[]` buffer sized from that region — not the whole note.
 `OptionSelectionActivity` for the priority, and on return writes a `Title` /
 `Prio` op through `TaskStore::appendOp`.
 
-- [ ] **Step 3: Verify in the simulator**
+- [ ] **Step 3: Verify — on the device build, NOT the simulator**
+
+`pio run -e simulator` is **broken on this branch**, pre-existing and unrelated to
+CrossTasks: `src/SettingsList.h:1039` calls `HalGPIO::supportsMultiTouch()`, which
+`lib/hal` provides but the simulator ignores (`lib_ignore = hal`), taking its copy from
+the vendored `uxjulia/crossink-simulator` package where the method does not exist. Do not
+try to fix it and do not report it as a failure of this task.
 
 ```bash
-pio run -e simulator
+pio run -e default
+cd test/build && cmake .. && cmake --build . -j8 && ctest
 ```
 
-Open a task with a long note. Confirm the note paginates, the pomodoro block
-stays anchored regardless of note length, and starting a pomodoro shows the task
-title.
+Expect SUCCESS and 2 pre-existing `SectionPersistenceTest` failures, nothing more.
+
+Since there is no visual verification available, the file-handle discipline has to be read
+rather than run. On hardware SdFat permits **one open handle per path at a time** (AGENTS.md,
+"Hardware Constraints"), while the simulator's POSIX backend allows several — so a leaked
+handle passes every simulator run and fails only on the device, as an open that returns
+false for no visible reason. Before committing, walk every `return` in the note-reading
+path, **including the error returns**, and confirm the note file is closed on each one.
+State in the report that you did this and name the paths you checked.
 
 - [ ] **Step 4: Commit**
 
@@ -1471,10 +1524,14 @@ priorities. On its result:
 The order matters: the op is queued **first**, so a power loss between the two
 writes loses the local display but not the user's intent.
 
-- [ ] **Step 2: Verify in the simulator**
+- [ ] **Step 2: Verify on the device build**
 
-Add a task, confirm it appears immediately with the chosen weight, and confirm
-`fs_/.crosspoint/tasks/ops.ndjson` contains exactly one `add` line.
+The simulator does not build on this branch (see Global Constraints), so this cannot be
+checked by eye or against `fs_/`. Run `pio run -e default` and the host suite, then READ
+the added path and confirm in your report: exactly one `add` op is appended per accepted
+entry, a cancelled `KeyboardEntryActivity` or `OptionSelectionActivity` result appends
+nothing at all, and the op is queued before the local record is written — so a power loss
+between the two loses the display, not the user's intent.
 
 - [ ] **Step 3: Commit**
 
@@ -1565,6 +1622,15 @@ The sequence, in order, each step with its reason:
 8. On 2xx: write the new cursor, `clearOps()`, save the index. On `more`, loop
    from step 4 with an empty ops array.
 9. On 401: keep the secret, show `tr(STR_TASK_PAIRING_REQUIRED)`.
+9b. **On ANY other failure — 5xx, a timeout, a TLS handshake error, a truncated
+    response, or `TaskSyncReader::hasError()` — change nothing that is persisted.**
+    Do NOT advance the cursor and do NOT `clearOps()`; leave both exactly as they
+    were and report the failure. The protocol is built so a retry is free: ops are
+    idempotent and the cursor is the server's, so the only way to lose a user's tick
+    is to clear the queue for a response that was never fully accepted. Note this is
+    the opposite of the 2xx path in step 8 — write that ordering out explicitly
+    rather than relying on an early `return`, and say in your report which failure
+    modes you traced.
 10. Show the summary: received / sent / total, and **each rejected op named with
     its reason** — a task the server refused because the list was full must be
     reported by title, not silently dropped, since the device has already removed
@@ -1626,26 +1692,39 @@ Register them in `SettingsList.h` with a toggle and a string row, plus an
 
 - [ ] **Step 2: Add the strings**
 
-Add to **both** `english.yaml` and `french.yaml` (never edit the generated files):
+Add to **both** `english.yaml` and `french.yaml` (never edit the generated files).
 
-```yaml
-STR_TASK_TITLE: { en: "Tasks",              fr: "Tâches" }
-STR_TASK_SYNC: { en: "Sync tasks",          fr: "Synchroniser les tâches" }
-STR_TASK_PAIR: { en: "Pair with server",    fr: "Appairer au serveur" }
-STR_TASK_NEW: { en: "New task",             fr: "Nouvelle tâche" }
-STR_TASK_TICK: { en: "tick",                fr: "cocher" }
-STR_TASK_DETAIL: { en: "detail",            fr: "détail" }
-STR_TASK_DONE_COUNT: { en: "done",          fr: "faites" }
-STR_TASK_PRIORITY_HIGH: { en: "High",       fr: "Haute" }
-STR_TASK_PRIORITY_NORMAL: { en: "Normal",   fr: "Normale" }
-STR_TASK_PRIORITY_LOW: { en: "Low",         fr: "Basse" }
-STR_TASK_POMODORO: { en: "Pomodoro",        fr: "Pomodoro" }
-STR_TASK_PAIRING_REQUIRED: { en: "Pairing required", fr: "Appairage requis" }
-STR_TASK_LIST_FULL: { en: "List full",      fr: "Liste pleine" }
-STR_TASK_UP_TO_DATE: { en: "Up to date",    fr: "À jour" }
-STR_TASK_RECEIVED: { en: "Received",        fr: "Reçues" }
-STR_TASK_SENT: { en: "Sent",                fr: "Envoyées" }
-```
+**Each file holds ONE language**, as a flat `KEY: "value"` map — there is no
+`{ en: …, fr: … }` form, and writing one would corrupt both files. Open the tails of
+`lib/I18n/translations/english.yaml` and `french.yaml` and follow the shape you find there.
+
+Several of these keys were already added by Tasks 5-9 as each screen needed them. **Add
+only the ones actually missing**, and before regenerating, verify with
+`python3 -c "import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" lib/I18n/translations/english.yaml lib/I18n/translations/french.yaml`
+that both files still parse and that **every `STR_TASK_*` key present in one is present in
+the other** — a key in only one language is the failure mode this step exists to prevent.
+
+The full set the feature needs, `english.yaml` on the left, `french.yaml` on the right:
+
+| key | en | fr |
+| --- | --- | --- |
+| `STR_TASK_TITLE` | `Tasks` | `Tâches` |
+| `STR_TASK_SYNC` | `Sync tasks` | `Synchroniser les tâches` |
+| `STR_TASK_PAIR` | `Pair with server` | `Appairer au serveur` |
+| `STR_TASK_NEW` | `New task` | `Nouvelle tâche` |
+| `STR_TASK_TICK` | `tick` | `cocher` |
+| `STR_TASK_DETAIL` | `detail` | `détail` |
+| `STR_TASK_DONE_COUNT` | `done` | `faites` |
+| `STR_TASK_EMPTY` | `No tasks yet` | `Aucune tâche pour l'instant` |
+| `STR_TASK_PRIORITY_HIGH` | `High` | `Haute` |
+| `STR_TASK_PRIORITY_NORMAL` | `Normal` | `Normale` |
+| `STR_TASK_PRIORITY_LOW` | `Low` | `Basse` |
+| `STR_TASK_POMODORO` | `Pomodoro` | `Pomodoro` |
+| `STR_TASK_PAIRING_REQUIRED` | `Pairing required` | `Appairage requis` |
+| `STR_TASK_LIST_FULL` | `List full` | `Liste pleine` |
+| `STR_TASK_UP_TO_DATE` | `Up to date` | `À jour` |
+| `STR_TASK_RECEIVED` | `Received` | `Reçues` |
+| `STR_TASK_SENT` | `Sent` | `Envoyées` |
 
 Then regenerate and verify:
 
@@ -1679,9 +1758,8 @@ reimplemented without reading the firmware. Link it from `docs/index.md`.
 python3 scripts/gen_i18n.py
 find src lib -name "*.cpp" -o -name "*.h" | xargs clang-format -i
 cmake -S test -B build/test && cmake --build build/test && ctest --test-dir build/test --output-on-failure
-pio run -e simulator && pio run -e default && pio run -e sticky && pio run -e x4-pro
+pio run -e default && pio run -e sticky && pio run -e x4-pro
 pio check -e default --fail-on-defect low --fail-on-defect medium --fail-on-defect high
-python3 scripts/run_simulator_smoke_test.py
 git status --short
 ```
 
