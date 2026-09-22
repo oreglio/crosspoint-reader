@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "CountdownClock.h"
 #include "MappedInputManager.h"
 #include "PomodoroSchedule.h"
@@ -16,8 +18,13 @@ class GfxRenderer;
 // a time of day, so the X3's RTC buys nothing here and the X4 needs no fallback.
 class PomodoroActivity final : public Activity {
  public:
-  PomodoroActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("Pomodoro", renderer, mappedInput) {}
+  // contextTitle: what this session is being run ON, drawn above the ring. The
+  // task detail screen passes the task's title; every other caller leaves it
+  // out. The parameter is defaulted so the existing home-menu call site keeps
+  // compiling unchanged, and nothing else about the pomodoro moves: no counter,
+  // no elapsed time, nothing synced. This screen does not know what a task is.
+  PomodoroActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const char* contextTitle = nullptr)
+      : Activity("Pomodoro", renderer, mappedInput), contextTitle(contextTitle != nullptr ? contextTitle : "") {}
 
   void onEnter() override;
   void loop() override;
@@ -41,6 +48,9 @@ class PomodoroActivity final : public Activity {
   // Which of the three lengths the custom flow is currently asking for.
   enum class CustomField : uint8_t { Work, ShortBreak, LongBreak };
 
+  // Owned copy: the caller's string may be a record that moves in a vector, and
+  // this screen can stay up for hours.
+  std::string contextTitle;
   PomodoroDurations durations = PomodoroSchedule::kClassic;
   // False chains into the next step on the press that acknowledges the previous
   // one; true makes that next step wait for its own start press.

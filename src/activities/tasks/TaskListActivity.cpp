@@ -9,6 +9,7 @@
 
 #include "MappedInputManager.h"
 #include "TaskStore.h"
+#include "activities/tasks/TaskDetailActivity.h"
 #include "components/TouchHeaderBackButton.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
@@ -320,10 +321,22 @@ void TaskListActivity::openDetailAt(int index) {
       rows[static_cast<size_t>(index)].kind != TaskRowKind::Task) {
     return;
   }
-  // TaskDetailActivity arrive avec la Tache 6 ; ce bouton n'a pas encore
-  // d'ecran a ouvrir.
-  LOG_INF(TAG, "Detail demande pour %s (TaskDetailActivity : Tache 6)",
-          TASK_STORE.all()[static_cast<size_t>(rows[static_cast<size_t>(index)].recordIndex)].id);
+  // L'id, pas l'indice : l'ecran de detail modifie le store, et un indice ne
+  // survivrait pas a une reorganisation. Copie dans une std::string locale
+  // parce que le constructeur du detail lit la chaine avant que quoi que ce
+  // soit ne bouge.
+  const std::string id = TASK_STORE.all()[static_cast<size_t>(rows[static_cast<size_t>(index)].recordIndex)].id;
+  startActivityForResult(std::make_unique<TaskDetailActivity>(renderer, mappedInput, id.c_str()),
+                         [this](const ActivityResult&) {
+                           // Le detail peut avoir coche, renomme ou repriorise
+                           // la tache : l'ordre et les lignes sont a refaire.
+                           // Rien ne rappelle onEnter() sur une activite
+                           // depilee, donc c'est ici ou nulle part.
+                           dirty = true;
+                           rebuildOrder();
+                           const int next = taskListNormalizeSelection(rows, activeNav().selected);
+                           if (next >= 0) moveSelectionTo(next);
+                         });
 }
 
 void TaskListActivity::startSync() {

@@ -35,6 +35,9 @@ void formatPreset(const PomodoroDurations& d, char* buf, const size_t len) {
 bool sameDurations(const PomodoroDurations& a, const PomodoroDurations& b) {
   return a.work == b.work && a.shortBreak == b.shortBreak && a.longBreak == b.longBreak;
 }
+
+// Air between the optional context line and the top of the ring.
+constexpr int kContextTitleGap = 6;
 }  // namespace
 
 // No suppressNextConfirmRelease() here. ActivityManager calls the current
@@ -248,6 +251,19 @@ void PomodoroActivity::render(RenderLock&&) {
   GUI.drawHeader(renderer, header, tr(STR_POMODORO));
 
   const CountdownLayout layout = computeCountdownLayout(renderer, mappedInput);
+
+  if (!contextTitle.empty()) {
+    // Just above the ring, not inside it: the ring belongs to the figure. When
+    // the ring is tall enough to leave no gap, the line falls back to sitting
+    // under the header rather than being drawn over the stroke.
+    const int lineHeight = renderer.getLineHeight(LEXENDDECA_12_FONT_ID);
+    const int contextTop =
+        std::max(header.y + header.height + 4, layout.cy - layout.outerRadius - lineHeight - kContextTitleGap);
+    const std::string shown = renderer.truncatedText(LEXENDDECA_12_FONT_ID, contextTitle.c_str(),
+                                                     layout.contextMaxWidth, EpdFontFamily::REGULAR);
+    renderer.drawCenteredText(LEXENDDECA_12_FONT_ID, contextTop, shown.c_str(), true, EpdFontFamily::REGULAR);
+  }
+
   drawCountdownRing(renderer, layout.cx, layout.cy, layout.outerRadius, layout.stroke,
                     gate == Gate::Ready ? 1.0f : clock.fractionRemaining());
 
