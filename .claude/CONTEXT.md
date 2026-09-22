@@ -71,9 +71,13 @@ Refer to https://freeink.org/llms.txt for guidance.
   overflow in the language the user actually reads, and every automated check stays green.
   Measure with `scripts/measure_label.py <face> "text" --max <px>`, which also flags absent
   glyphs. Measure against the WORST theme, not BaseTheme:
-  - **Footer button cells: 80 px in `inter_8_regular`.** MinimalTheme and LyraTheme draw hints
-    in 80 px with `SMALL_FONT_ID`; BaseTheme's 106 px in `inter_10` is the generous case and
-    validated `New task` (90 px) while it overflows on two themes of four.
+  - **Footer button text: about 70 px in `inter_8_regular`, not the 80 px cell.** MinimalTheme and
+    LyraTheme draw hints in 80 px cells with `SMALL_FONT_ID`, but the cell has a 1 px border and
+    rounded corners, so centred text needs a margin: `pomodoro` measured 79.9 px, passed the
+    80 px check, and visibly overflowed its box in the simulator. BaseTheme's 106 px in `inter_10`
+    is the generous case and validated `New task` (90 px) while it overflows on two themes of four.
+  - **Then look at it.** `scripts/run_simulator_tasks_tour.py` renders the task screens in all three
+    themes, French and English; a measurement is a filter, the simulator is the check.
   - **Sub-header right label: 200 px in `inter_8_regular`** (`BaseTheme::drawSubHeader`,
     `maxListValueWidth`), truncated with an ellipsis. Shipped once as `Enregistrement impossi…`.
   - Quickest sanity check: compare against a label already shipped in the same slot.
