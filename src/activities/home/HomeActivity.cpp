@@ -73,6 +73,7 @@ enum class HomeMenuAction {
   FileTransfer,
   Countdown,
   RaindropSync,
+  Tasks,
   Settings,
 };
 
@@ -84,11 +85,12 @@ struct HomeMenuEntry {
 
 struct HomeMenuEntries {
   // Continue Reading, Browse Files, Library, Recent Books, OPDS, Reading Stats,
-  // Bookmarks, Raindrop Sync, File Transfer, Countdown, Settings — eleven when
-  // every optional entry is present, plus one spare. Overflow silently drops the
-  // LAST item pushed, which is Settings, so this has to lead the list rather
-  // than trail it — and this capacity has to grow with every new entry.
-  static constexpr int kCapacity = 12;
+  // Bookmarks, Raindrop Sync, Tasks, File Transfer, Countdown, Settings —
+  // twelve when every optional entry is present, plus one spare. Overflow
+  // silently drops the LAST item pushed, which is Settings, so this has to
+  // lead the list rather than trail it — and this capacity has to grow with
+  // every new entry.
+  static constexpr int kCapacity = 13;
   std::array<HomeMenuEntry, kCapacity> entries{};
   int count = 0;
 
@@ -327,6 +329,10 @@ void appendHomeMenuItems(HomeMenuEntries& items, bool hasOpdsServers, bool hasRe
   if (SETTINGS.raindropEnabled) {
     items.push({tr(STR_RAINDROP_SYNC), Cloud, HomeMenuAction::RaindropSync});
   }
+  // Pas de garde de type "tasksEnabled" ici : contrairement a Raindrop, la
+  // Tache 10 (parametres/i18n) ne touche pas ce fichier, l'entree est donc
+  // toujours visible pour l'instant.
+  items.push({tr(STR_TASK_TITLE), Text, HomeMenuAction::Tasks});
   items.push({tr(STR_FILE_TRANSFER), Transfer, HomeMenuAction::FileTransfer});
   items.push({tr(STR_COUNTDOWN_TITLE), Recent, HomeMenuAction::Countdown});
   items.push({tr(STR_SETTINGS_TITLE), Settings, HomeMenuAction::Settings});
@@ -383,6 +389,8 @@ HomeMenuAction homeActionForInitialMenuItem(HomeMenuItem item) {
       return HomeMenuAction::Settings;
     case HomeMenuItem::RAINDROP:
       return HomeMenuAction::RaindropSync;
+    case HomeMenuItem::TASKS:
+      return HomeMenuAction::Tasks;
     case HomeMenuItem::NONE:
     default:
       return HomeMenuAction::ContinueReading;
@@ -1653,6 +1661,7 @@ void HomeActivity::loop() {
             openRaindropMenu();
             break;
           case HomeMenuAction::ContinueReading:
+          case HomeMenuAction::Tasks:
           case HomeMenuAction::Settings:
             break;
         }
@@ -1905,6 +1914,9 @@ void HomeActivity::loop() {
         break;
       case HomeMenuAction::RaindropSync:
         openRaindropMenu();
+        break;
+      case HomeMenuAction::Tasks:
+        onTasksOpen();
         break;
       case HomeMenuAction::Settings:
         onSettingsOpen();
@@ -2460,6 +2472,8 @@ void HomeActivity::openRaindropMenu() {
 }
 
 void HomeActivity::onLibraryOpen() { activityManager.goToLibrary(); }
+
+void HomeActivity::onTasksOpen() { activityManager.goToTaskList(); }
 
 void HomeActivity::onContinueReading() {
   if (recentBooks.empty()) return;

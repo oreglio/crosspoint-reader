@@ -95,6 +95,7 @@ class HomeActivity final : public Activity {
   void onFileBrowserOpen();
   void openRaindropMenu();
   void onLibraryOpen();
+  void onTasksOpen();
   void onContinueReading();
   void onRecentsOpen();
   void onSettingsOpen();

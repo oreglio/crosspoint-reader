@@ -21,8 +21,8 @@
 #include "browser/OpdsBookBrowserActivity.h"
 #include "components/TouchRegistry.h"
 #include "home/AlertActivity.h"
-#include "home/CrashActivity.h"
 #include "home/ArticlesActivity.h"
+#include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "home/RecentBookProgress.h"
@@ -39,6 +39,7 @@
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
+#include "tasks/TaskListActivity.h"
 #include "util/FrontlightPanelActivity.h"
 #include "util/FullScreenMessageActivity.h"
 #include "util/TwoFingerSwipe.h"
@@ -76,6 +77,7 @@ HomeMenuItem homeMenuItemForActivityName(const std::string& activityName) {
   if (activityName == "CrossPointWebServer") return HomeMenuItem::FILE_TRANSFER;
   if (activityName == "NearbyStatsSync") return HomeMenuItem::FILE_TRANSFER;
   if (activityName == "Settings") return HomeMenuItem::SETTINGS_MENU;
+  if (activityName == "TaskList") return HomeMenuItem::TASKS;
   return HomeMenuItem::NONE;
 }
 
@@ -708,6 +710,8 @@ void ActivityManager::goToArticles(std::string highlight) {
 }
 
 void ActivityManager::goToLibrary() { replaceActivity(std::make_unique<LibraryListActivity>(renderer, mappedInput)); }
+
+void ActivityManager::goToTaskList() { replaceActivity(std::make_unique<TaskListActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToRecentBooks() {
   if (SETTINGS.recentBooksView == CrossPointSettings::RECENT_BOOKS_GRID) {
