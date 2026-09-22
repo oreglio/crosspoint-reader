@@ -6,10 +6,15 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
+#include <utility>
 
 #include "MappedInputManager.h"
 #include "TaskStore.h"
 #include "activities/tasks/TaskDetailActivity.h"
+#include "activities/tasks/TaskPriorityChoices.h"
+#include "activities/util/KeyboardEntryActivity.h"
+#include "activities/util/OptionSelectionActivity.h"
 #include "components/TouchHeaderBackButton.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
@@ -47,6 +52,11 @@ static const uint8_t TASK_BULLET_DONE[] = {
     0x7f, 0xfe, 0x7f, 0xfe, 0x7f, 0xfe, 0x3f, 0xfc, 0x3f, 0xfc, 0x1f, 0xf8, 0x07, 0xe0, 0x00, 0x00,
 };
 
+// Seuil de l'appui long sur Confirmer, qui ouvre la creation. Meme valeur que
+// LibraryListActivity (LibraryListActivity.cpp:43) : le maintien doit avoir la
+// meme duree d'un ecran de liste a l'autre, sinon la main apprend deux gestes.
+constexpr unsigned long CREATE_HOLD_MS = 800;
+
 fui::BitmapRef taskBullet(const bool done) {
   fui::BitmapRef ref;
   ref.data = done ? TASK_BULLET_DONE : TASK_BULLET_OPEN;
@@ -76,7 +86,7 @@ void TaskListActivity::onEnter() {
 
   tickedHere.clear();
   showDone = false;
-  tickFailed = false;
+  notice = StatusNotice::None;
   dirty = true;
   rebuildOrder();
 }
@@ -125,7 +135,15 @@ void TaskListActivity::buildScreen(UiScreen& screen) {
                   0, static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
 
   if (rows.empty()) {
-    screen.centeredText(tr(STR_TASK_EMPTY), screen.theme().bodyText);
+    // Aucune ligne a l'ecran ne veut PAS dire aucune tache. Quand tout est fait
+    // et la section repliee, buildTaskListRows() ne produit rien du tout
+    // (TaskListModel.cpp:62 : l'en-tete et les faites n'apparaissent que si
+    // showDone), alors que l'index en contient peut-etre vingt. Afficher
+    // "aucune tache" a ce moment-la n'est pas seulement pauvre, c'est faux — et
+    // faux precisement quand la fonction vient de faire son travail. Le pied de
+    // page porte deja "N faites", qui dit comment les revoir.
+    const char* message = TASK_STORE.all().empty() ? tr(STR_TASK_EMPTY) : tr(STR_TASK_ALL_DONE);
+    screen.centeredText(message, screen.theme().bodyText);
     return;
   }
   buildRows(screen);
@@ -234,6 +252,40 @@ bool TaskListActivity::handleCustomInput() {
   return false;
 }
 
+bool TaskListActivity::handleButtons() {
+  // Retour : a l'identique de la base (UiListActivity.cpp:46-49). Il est recopie
+  // plutot que delegue parce que le Confirmer de la base, lui, ne peut PAS
+  // rester : il active sur le front d'appui.
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+    onBackButton();
+    return true;
+  }
+
+  // Confirmer au RELACHEMENT, pas a l'appui. La base active sur le front
+  // d'appui (UiListActivity.cpp:50-54) : la tache serait deja cochee, et une op
+  // Done deja en file, avant meme que le maintien ait atteint son seuil. C'est
+  // la duree du maintien qui separe les deux gestes, donc seul le relachement
+  // peut trancher. Meme decoupe que LibraryListActivity::handleButtons().
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    // Liste vide : l'appui COURT cree, et drawFooter() l'annonce. Il n'y a
+    // aucune ligne a cocher, donc le bouton fait la seule chose utile
+    // disponible — et c'est exactement l'ecran ou quelqu'un qui vient
+    // d'appairer un appareil vide chercherait comment ajouter une tache, sans
+    // quoi il conclurait que la fonction est cassee. Des qu'il y a des lignes,
+    // le bouton redevient "cocher" et la creation repasse a l'appui long, sans
+    // etre annoncee : l'action est decouverte la ou elle manque, et nulle part
+    // ailleurs.
+    if (rows.empty() || mappedInput.getHeldTime() >= CREATE_HOLD_MS) {
+      createTask();
+      return true;
+    }
+    const int selected = activeNav().selected;
+    if (selected >= 0 && selected < listCount()) activateIndex(selected);
+    return true;
+  }
+  return false;
+}
+
 void TaskListActivity::navigateButtons() {
   auto& n = activeNav();
   buttonNavigator.onNextRelease([this, &n] {
@@ -290,11 +342,14 @@ void TaskListActivity::toggleAt(int index) {
     // de primitive de toast reutilisable hors du lecteur, donc le message
     // prend la sous-ligne d'etat que drawChrome() peint deja.
     LOG_ERR(TAG, "Echec de l'enregistrement de la bascule 'fait' pour %s", rec.id);
-    tickFailed = true;
+    notice = StatusNotice::WriteFailed;
     requestUpdate();
     return;
   }
-  tickFailed = false;
+  // Une ecriture qui passe perime tout message d'erreur precedent, y compris un
+  // refus de creation : la carte repond, et le plafond n'est plus la chose que
+  // la sous-ligne doit dire en priorite.
+  notice = StatusNotice::None;
 
   const std::string id(rec.id);
   const auto already = std::find(tickedHere.begin(), tickedHere.end(), id);
@@ -388,6 +443,115 @@ void TaskListActivity::openDetailAt(int index) {
                          });
 }
 
+void TaskListActivity::createTask() {
+  // Le plafond se verifie AVANT d'ouvrir le clavier, et non apres la saisie.
+  // TaskStore::upsert() rend void et jette l'enregistrement en silence des que
+  // l'index est a MAX_TASKS (TaskStore.cpp:172-175) : l'appelant ne peut pas
+  // s'en apercevoir apres coup. Le decouvrir seulement une fois le titre tape
+  // laisserait une op Add en file pour une tache que l'appareil n'affichera
+  // jamais — le serveur l'accepterait, et l'ecran resterait vide jusqu'a ce
+  // qu'une sync la ramene. Refuser d'entree est moins mauvais que cela.
+  if (TASK_STORE.all().size() >= MAX_TASKS) {
+    LOG_ERR(TAG, "Index already at the %zu-task cap; not opening the keyboard", MAX_TASKS);
+    notice = StatusNotice::ListFull;
+    requestUpdate();
+    return;
+  }
+
+  // minLength=1 : c'est le clavier qui refuse un titre vide, comme pour la
+  // modification d'un titre existant (TaskDetailActivity::editTitle()).
+  startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_TASK_NEW), "",
+                                                                 TASK_TITLE_MAX, InputType::Text, /*minLength=*/1),
+                         [this](const ActivityResult& result) {
+                           const auto* entered = std::get_if<KeyboardResult>(&result.data);
+                           // Annulation : rien n'a ete ecrit, ni op ni index, et il n'y a donc
+                           // rien a reconstruire. Le repaint est deja programme par le depilage
+                           // (ActivityManager.cpp:400-406), comme au retour de l'ecran de detail.
+                           if (result.isCancelled || entered == nullptr) return;
+                           askPriorityForNewTask(entered->text);
+                         });
+}
+
+void TaskListActivity::askPriorityForNewTask(std::string title) {
+  // `labels` et non `rows` : ce dernier est le membre que le gestionnaire
+  // ci-dessous reconstruit, et le masquer ici se relirait mal.
+  std::vector<std::string> labels;
+  labels.reserve(TASK_PRIORITY_CHOICE_COUNT);
+  for (const uint8_t priority : TASK_PRIORITY_CHOICES) {
+    labels.emplace_back(I18N.get(taskPriorityLabelId(priority)));
+  }
+
+  startActivityForResult(
+      std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "TaskPriority", StrId::STR_TASK_PRIORITY,
+                                                std::move(labels), TASK_DEFAULT_PRIORITY_CHOICE),
+      [this, title = std::move(title)](const ActivityResult& result) {
+        const auto* choice = std::get_if<OptionSelectionResult>(&result.data);
+        // Annuler la priorite annule toute la creation. Rien n'a encore ete
+        // ecrit a ce stade — ni op, ni index — donc il n'y a rien a defaire :
+        // c'est bien ce qui justifie que les deux ecritures viennent apres les
+        // deux ecrans, et pas entre les deux.
+        if (result.isCancelled || choice == nullptr ||
+            static_cast<size_t>(choice->index) >= TASK_PRIORITY_CHOICE_COUNT) {
+          return;
+        }
+
+        TaskRecord rec{};
+        const std::string id = TaskStore::newDeviceId();
+        std::snprintf(rec.id, sizeof(rec.id), "%s", id.c_str());
+        std::snprintf(rec.title, sizeof(rec.title), "%s", title.c_str());
+        rec.priority = TASK_PRIORITY_CHOICES[choice->index];
+        rec.done = false;
+        rec.noteBytes = 0;
+
+        TaskOp op{};
+        op.kind = TaskOpKind::Add;
+        std::memcpy(op.id, rec.id, sizeof(op.id));
+        std::memcpy(op.title, rec.title, sizeof(op.title));
+        op.priority = rec.priority;
+
+        // La file d'ops AVANT l'index, comme toggleAt() et comme
+        // TaskDetailActivity::appendAndApply(). Ce sont deux ecritures SD
+        // distinctes : une coupure entre les deux doit laisser un etat
+        // reparable. Une op Add en file sans enregistrement local l'est (la
+        // prochaine sync la renvoie, puis le replaceAll() ramene la tache) ; un
+        // enregistrement local sans op ne l'est pas — le serveur n'apprendrait
+        // jamais la tache, et le premier replaceAll() l'effacerait.
+        if (!TASK_STORE.appendOp(op)) {
+          LOG_ERR(TAG, "Could not queue the add op for %s; task not created", rec.id);
+          notice = StatusNotice::WriteFailed;
+          requestUpdate();
+          return;
+        }
+        // Pas de saveToFile() explicite : upsert() l'appelle deja sur ses deux
+        // branches (TaskStore.cpp:168, 177), et un second appel reecrirait tout
+        // l'index une deuxieme fois par tache creee, pour rien.
+        TASK_STORE.upsert(rec);
+        notice = StatusNotice::None;
+
+        // Rien ne rappelle onEnter() sur une activite depilee : sans cette
+        // reconstruction la tache existe sur la carte mais n'apparait dans
+        // aucune ligne. Meme quatuor qu'au retour de l'ecran de detail.
+        dirty = true;
+        rebuildOrder();
+        const int created = rowOfTask(rec.id);
+        // La tache neuve est ouverte, donc toujours dans la partie visible de
+        // la liste : rowOfTask() ne rend -1 que si upsert() l'a refusee, et la
+        // selection reprend alors simplement sa route normale.
+        const int next = created >= 0 ? created : taskListNormalizeSelection(rows, activeNav().selected);
+        if (next >= 0) moveSelectionTo(next);
+        requestUpdate();
+      });
+}
+
+int TaskListActivity::rowOfTask(const char* id) const {
+  const std::vector<TaskRecord>& records = TASK_STORE.all();
+  for (size_t i = 0; i < rows.size(); i++) {
+    if (rows[i].kind != TaskRowKind::Task) continue;
+    if (std::strcmp(records[static_cast<size_t>(rows[i].recordIndex)].id, id) == 0) return static_cast<int>(i);
+  }
+  return -1;
+}
+
 void TaskListActivity::startSync() {
   // TaskSyncActivity arrive avec la Tache 9, qui devra aussi choisir quel
   // bouton la declenche : les boutons avant sont deja pris par
@@ -412,9 +576,10 @@ void TaskListActivity::drawChrome() {
   // rapport. Elle sert aussi de surface d'erreur pour une coche refusee : ce
   // depot n'a pas de toast reutilisable hors du lecteur, et cette ligne est
   // deja peinte a chaque rendu.
-  const char* status = tickFailed               ? tr(STR_TASK_TICK_FAILED)
-                       : TASK_STORE.hasSecret() ? tr(STR_TASK_UP_TO_DATE)
-                                                : tr(STR_TASK_PAIRING_REQUIRED);
+  const char* status = notice == StatusNotice::ListFull      ? tr(STR_TASK_LIST_FULL)
+                       : notice == StatusNotice::WriteFailed ? tr(STR_TASK_TICK_FAILED)
+                       : TASK_STORE.hasSecret()              ? tr(STR_TASK_UP_TO_DATE)
+                                                             : tr(STR_TASK_PAIRING_REQUIRED);
   const Rect subHeader{0, header.y + header.height, renderer.getScreenWidth(), metrics.tabBarHeight};
   GUI.drawSubHeader(renderer, subHeader, "", status);
 }
@@ -427,7 +592,14 @@ void TaskListActivity::drawFooter() {
   // s'affichait donc " 3". Voir .claude/CONTEXT.md.
   char doneLabel[24];
   std::snprintf(doneLabel, sizeof(doneLabel), "%d %s", doneCount, tr(STR_TASK_DONE_COUNT));
+  // Sur une liste vide, Confirmer cree au lieu de cocher (voir handleButtons())
+  // et le libelle le dit. C'est le seul endroit ou la creation est annoncee.
+  // STR_TASK_NEW_SHORT et non STR_TASK_NEW : la case ne fait que 106 px de
+  // large (BaseTheme.cpp:174) et "Nouvelle tache" en mesure 145 dans la police
+  // d'interface, ce qui deborderait sur les cases voisines — le titre long
+  // reste au clavier, qui a la place.
+  const char* confirmLabel = rows.empty() ? tr(STR_TASK_NEW_SHORT) : tr(STR_TASK_TICK);
   const auto labels =
-      mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), tr(STR_TASK_TICK), doneLabel, tr(STR_TASK_DETAIL));
+      mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), confirmLabel, doneLabel, tr(STR_TASK_DETAIL));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,14 @@ class TaskListActivity final : public UiListActivity {
   // rapport pour pourquoi ce sont les deux boutons avant qui restent une fois
   // Retour/Confirmer pris.
   bool handleCustomInput() override;
+  // Remplace entierement le Back/Confirmer de la base. UiListActivity active la
+  // ligne sur le FRONT D'APPUI de Confirmer (UiListActivity.cpp:50-54), ce qui
+  // rend un appui long indiscernable d'un appui court : la bascule "fait"
+  // partirait des l'enfoncement, et l'ecran de creation s'ouvrirait par-dessus
+  // une tache qu'on vient de cocher par accident. Ici c'est donc le
+  // RELACHEMENT qui decide, et sa duree qui choisit entre cocher et creer --
+  // exactement l'idiome de LibraryListActivity::handleButtons().
+  bool handleButtons() override;
   // Remplace le pas Suivant/Precedent de base : celui-ci ne sait pas que la
   // ligne d'en-tete "terminees" n'est pas selectionnable (fui::ListItem
   // l'affiche non selectionnee, mais rien cote fui ne fait sauter l'index du
@@ -57,6 +66,17 @@ class TaskListActivity final : public UiListActivity {
   void buildRows(UiScreen& screen);
   void toggleAt(int index);
   void openDetailAt(int index);
+  // Creation sur l'appareil, sans serveur ni Wi-Fi : refus du plafond, puis
+  // clavier, puis choix de priorite. Les deux etapes sont chainees par leurs
+  // gestionnaires de resultat, comme TaskDetailActivity::editTitle() enchaine
+  // sur editPriority().
+  void createTask();
+  void askPriorityForNewTask(std::string title);
+  // Ligne d'ecran portant la tache `id`, ou -1 si aucune. Un balayage de `rows`
+  // (121 lignes au plus) plutot qu'un indice retenu : l'enregistrement est
+  // ajoute en fin d'index mais le tri le place selon sa priorite, donc sa
+  // position a l'ecran n'est connue qu'apres rebuildOrder().
+  int rowOfTask(const char* id) const;
   void startSync();
 
   // Ids coches pendant cette visite : ils restent en place, attenues, pour
@@ -69,9 +89,14 @@ class TaskListActivity final : public UiListActivity {
   int doneCount = 0;
   bool showDone = false;
   bool dirty = true;
-  // Derniere coche refusee par la file de sync : la sous-ligne d'etat le dit
-  // a l'ecran au lieu de le laisser au seul port serie. Voir toggleAt().
-  bool tickFailed = false;
+  // Message d'erreur en cours dans la sous-ligne d'etat : une ecriture refusee
+  // par la file d'ops, ou une creation refusee parce que l'index est deja au
+  // plafond. Un seul champ et non deux booleens paralleles : la sous-ligne ne
+  // peut en afficher qu'un, et deux drapeaux poseraient la question de savoir
+  // lequel gagne et lequel efface l'autre. Voir toggleAt(), createTask() et
+  // drawChrome().
+  enum class StatusNotice : uint8_t { None, WriteFailed, ListFull };
+  StatusNotice notice = StatusNotice::None;
 
   // Fenetre de ListItem materialisee pour la page visible seulement (comme
   // LibraryListActivity::winItems), pas un tableau de la taille totale.

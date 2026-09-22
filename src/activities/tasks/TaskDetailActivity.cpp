@@ -15,6 +15,7 @@
 #include "MappedInputManager.h"
 #include "TaskStore.h"
 #include "activities/tasks/TaskNotePager.h"
+#include "activities/tasks/TaskPriorityChoices.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "activities/util/OptionSelectionActivity.h"
 #include "activities/util/PomodoroActivity.h"
@@ -35,17 +36,6 @@ constexpr char TAG[] = "TASKDETAIL";
 EpdFontFamily::Style titleStyleFor(const TaskRecord& record) {
   return record.priority == TASK_PRIORITY_HIGH ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
 }
-
-StrId priorityLabelId(const uint8_t priority) {
-  if (priority == TASK_PRIORITY_HIGH) return StrId::STR_TASK_PRIORITY_HIGH;
-  if (priority == TASK_PRIORITY_LOW) return StrId::STR_TASK_PRIORITY_LOW;
-  return StrId::STR_TASK_PRIORITY_NORMAL;
-}
-
-// Les trois valeurs de TaskRecord::priority, dans l'ordre ou elles sont
-// proposees — l'indice rendu par OptionSelectionActivity est un rang dans
-// cette table, pas une priorite.
-constexpr uint8_t kPriorityChoices[] = {TASK_PRIORITY_HIGH, TASK_PRIORITY_NORMAL, TASK_PRIORITY_LOW};
 
 constexpr int kFramePadding = 10;
 constexpr int kBlockGap = 8;
@@ -489,11 +479,11 @@ void TaskDetailActivity::editTitle() {
 
 void TaskDetailActivity::editPriority() {
   std::vector<std::string> rows;
-  rows.reserve(3);
-  uint8_t selected = 1;
-  for (size_t i = 0; i < 3; i++) {
-    rows.emplace_back(I18N.get(priorityLabelId(kPriorityChoices[i])));
-    if (kPriorityChoices[i] == record.priority) selected = static_cast<uint8_t>(i);
+  rows.reserve(TASK_PRIORITY_CHOICE_COUNT);
+  uint8_t selected = TASK_DEFAULT_PRIORITY_CHOICE;
+  for (size_t i = 0; i < TASK_PRIORITY_CHOICE_COUNT; i++) {
+    rows.emplace_back(I18N.get(taskPriorityLabelId(TASK_PRIORITY_CHOICES[i])));
+    if (TASK_PRIORITY_CHOICES[i] == record.priority) selected = static_cast<uint8_t>(i);
   }
 
   startActivityForResult(std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "TaskPriority",
@@ -501,9 +491,12 @@ void TaskDetailActivity::editPriority() {
                          [this](const ActivityResult& result) {
                            pendingFullRefresh = true;
                            const auto* choice = std::get_if<OptionSelectionResult>(&result.data);
-                           if (result.isCancelled || choice == nullptr || choice->index >= 3) return;
+                           if (result.isCancelled || choice == nullptr ||
+                               static_cast<size_t>(choice->index) >= TASK_PRIORITY_CHOICE_COUNT) {
+                             return;
+                           }
 
-                           const uint8_t priority = kPriorityChoices[choice->index];
+                           const uint8_t priority = TASK_PRIORITY_CHOICES[choice->index];
                            if (priority == record.priority) return;
 
                            TaskRecord next = record;
