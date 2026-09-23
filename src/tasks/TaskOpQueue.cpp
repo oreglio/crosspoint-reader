@@ -18,6 +18,8 @@ const char* kindName(const TaskOpKind kind) {
       return "prio";
     case TaskOpKind::Title:
       return "title";
+    case TaskOpKind::Del:
+      return "del";
   }
   return "add";
 }
@@ -37,6 +39,10 @@ bool kindFromName(const char* name, TaskOpKind& out) {
   }
   if (std::strcmp(name, "title") == 0) {
     out = TaskOpKind::Title;
+    return true;
+  }
+  if (std::strcmp(name, "del") == 0) {
+    out = TaskOpKind::Del;
     return true;
   }
   return false;

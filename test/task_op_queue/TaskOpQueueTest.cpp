@@ -45,6 +45,20 @@ TEST(TaskOpQueue, DoneAndPrioRoundTrip) {
   EXPECT_TRUE(back.done);
 }
 
+TEST(TaskOpQueue, DelRoundTripsWithOnlyItsId) {
+  char line[512];
+  TaskOp del{};
+  del.kind = TaskOpKind::Del;
+  std::snprintf(del.id, sizeof(del.id), "w17ab93c2");
+  const size_t n = taskOpToLine(del, line, sizeof(line));
+  ASSERT_GT(n, 0u);
+  EXPECT_STREQ(line, "{\"op\":\"del\",\"id\":\"w17ab93c2\"}");
+  TaskOp back{};
+  ASSERT_TRUE(taskOpFromLine(line, n, back));
+  EXPECT_EQ(back.kind, TaskOpKind::Del);
+  EXPECT_STREQ(back.id, "w17ab93c2");
+}
+
 TEST(TaskOpQueue, EscapesQuotesAndBackslashesInTitles) {
   char line[512];
   const TaskOp op = addOp("d0000abc1", "Lire \"Dune\" et C:\\temp", 1);

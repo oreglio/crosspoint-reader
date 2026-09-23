@@ -5,7 +5,9 @@
 
 #include "TaskRecord.h"
 
-enum class TaskOpKind : uint8_t { Add, Done, Prio, Title };
+// Del : suppression faite sur l'appareil. Le serveur la pose en tombstone,
+// comme une suppression web, et la rend donc aux autres clients.
+enum class TaskOpKind : uint8_t { Add, Done, Prio, Title, Del };
 
 struct TaskOp {
   TaskOpKind kind;
