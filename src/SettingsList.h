@@ -881,9 +881,9 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     add(SettingInfo::String(StrId::STR_RAINDROP_TOKEN, SETTINGS.raindropToken, sizeof(SETTINGS.raindropToken),
                             "raindropToken", StrId::STR_RAINDROP_SYNC));
 
-    // --- Taches (carte web, comme Raindrop : l'URL se colle depuis un
-    // navigateur. taskEnabled masque l'entree Taches de l'accueil ; les deux
-    // lignes Parametres restent visibles, comme celle de Raindrop.) ---
+    // --- Taches (carte web : l'URL se colle depuis un navigateur, comme pour
+    // Raindrop. taskEnabled, actif par defaut, masque l'entree Taches de
+    // l'accueil ; les deux lignes Parametres restent visibles.) ---
     add(SettingInfo::Toggle(StrId::STR_TASK_ENABLED, &CrossPointSettings::taskEnabled, "taskEnabled",
                             StrId::STR_TASK_TITLE));
     add(SettingInfo::String(StrId::STR_TASK_SERVER_URL, SETTINGS.taskServerUrl, sizeof(SETTINGS.taskServerUrl),

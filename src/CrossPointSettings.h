@@ -599,8 +599,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   char raindropServerUrl[96] = "";
   char raindropToken[64] = "";
   // Liste de taches (serveur CrossDrop). Le secret n'est PAS ici : il vit
-  // obfusque dans TaskStore, comme les mots de passe OPDS.
-  uint8_t taskEnabled = 0;
+  // obfusque dans TaskStore, comme les mots de passe OPDS. Active par defaut,
+  // contrairement a Raindrop : les taches servent entierement hors ligne
+  // (creer, cocher, detail, pomodoro), le serveur n'est qu'un complement.
+  uint8_t taskEnabled = 1;
   char taskServerUrl[96] = "";
   // Hide battery percentage
   uint8_t hideBatteryPercentage = HIDE_NEVER;
