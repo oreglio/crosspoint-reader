@@ -74,11 +74,11 @@ class TaskStore : public PersistableStore<TaskStore> {
   // relise la carte. Seul TaskListActivity::onExit() l'appelle : c'est le seul
   // detenteur d'indices dans ce vecteur.
   //
-  // RIEN ne charge ce store au demarrage (main.cpp ne le touche pas, pour ne
-  // pas payer ces 26 Ko pendant la lecture). Un LECTEUR doit donc appeler
-  // ensureLoaded() lui-meme : hasSecret() et readSecret() ne le font pas, et
-  // sur un store jamais charge ils repondent « pas de secret » alors que la
-  // carte en contient un. C'est ainsi que l'ecran d'appairage desappairait
+  // RIEN ne charge ce store a un demarrage NORMAL (pour ne pas payer ces 26 Ko
+  // pendant la lecture) ; seul le demarrage reseau TASK_SYNC le charge, dans
+  // main.cpp. Tout autre LECTEUR doit appeler ensureLoaded() lui-meme :
+  // hasSecret() et readSecret() ne le font pas, et sur un store jamais charge
+  // ils repondent « pas de secret » alors que la carte en contient un. C'est ainsi que l'ecran d'appairage desappairait
   // l'appareil apres un redemarrage.
   //
   // ATTENTION aux ecrivains : toute methode qui appelle saveIndex()
