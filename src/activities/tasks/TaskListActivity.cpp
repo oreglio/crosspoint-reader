@@ -443,7 +443,16 @@ void TaskListActivity::createTask() {
   // TaskStore::reserveFullCapacity, la meme garde que la sync). Apres une
   // lecture, le tas peut ne plus avoir ce bloc : on le dit plutot que de
   // redemarrer.
-  if (!TASK_STORE.reserveFullCapacity()) {
+  // Sous RenderLock : reserveFullCapacity() realloue le vecteur de l'index et
+  // libere l'ancien bloc, alors que la tache de rendu lit TASK_STORE.all() pour
+  // dessiner cette meme liste. Sans le verrou, une image en cours pourrait lire
+  // l'ancien bloc apres sa liberation.
+  bool reserved;
+  {
+    RenderLock lock(*this);
+    reserved = TASK_STORE.reserveFullCapacity();
+  }
+  if (!reserved) {
     notice = StatusNotice::LowMemory;
     requestUpdate();
     return;
