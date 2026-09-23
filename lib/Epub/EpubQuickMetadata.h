@@ -1,5 +1,10 @@
 #pragma once
 
+// Lives in lib/Epub rather than lib/LibraryIndex on purpose. The library index
+// builder includes <Epub.h>, so lib/Epub must not depend on lib/LibraryIndex or
+// the two libraries form a cycle. Reading dc:title and dc:creator out of an
+// EPUB is EPUB work regardless of who asked for it.
+
 // Title and author read straight out of an EPUB's package document.
 //
 // Worth doing because on a real card the metadata is not merely different from
@@ -21,7 +26,7 @@
 #include <cstddef>
 #include <string>
 
-namespace library {
+namespace epub {
 
 // How much of a package document is kept in memory.
 //
@@ -61,4 +66,4 @@ std::string opfPathFromContainer(const std::string& containerXml);
 // attributes on the element, and XML entities in the text.
 void parseOpfMetadata(const std::string& opfXml, BookMetadata& out);
 
-}  // namespace library
+}  // namespace epub

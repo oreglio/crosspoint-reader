@@ -76,7 +76,7 @@ Ours, which upstream has no copy of:
 ```
 lib/LibraryIndex/LibraryFavorites{,File}.{cpp,h}
 lib/LibraryIndex/LibraryState.{cpp,h}
-lib/LibraryIndex/LibraryMeta.{cpp,h}          <- KEPT, see below
+lib/Epub/EpubQuickMetadata.{cpp,h}            <- KEPT, moved, see below
 src/activities/library/LibraryListActivity.{cpp,h}
 test/library_favorites/
 ```
@@ -119,12 +119,18 @@ Our `Epub.h:101` signature is `(bookMetadata, writeSpineEntries, collectCssFiles
 — no `metadataOnly`, no `sharedZip`. Porting their parser path means editing the
 OPF parser in the most diverged shared file in the repo.
 
-**Decision: keep `LibraryMeta` and delegate.** Add to `lib/Epub/Epub.h` one
+**Decision: keep the reader and delegate.** Add to `lib/Epub/Epub.h` one
 declaration and to `Epub.cpp` a body that forwards to
-`library::readEpubMetadata()`. Their builder then compiles unchanged.
+`epub::readBookMetadata()`. Their builder then compiles unchanged.
+
+The reader itself moves from `lib/LibraryIndex/LibraryMeta.{cpp,h}` to
+`lib/Epub/EpubQuickMetadata.{cpp,h}`, namespace `library` → `epub`. It has to:
+`LibraryBuilder.cpp` includes `<Epub.h>`, so defining the method against
+`lib/LibraryIndex` would make the two libraries depend on each other. The
+reader needs only `Logging`, `Memory`, `Print` and `ZipFile`, all independent.
 
 This is better than porting their path, not merely cheaper:
-`LibraryMeta.h:28-37` documents the 8 KB bound and the stop at `</metadata>` as
+`EpubQuickMetadata.h` documents the 8 KB bound and the stop at `</metadata>` as
 the fix for a real `abort()` — 96 KB contiguous requested against a ~69 KB
 largest free block on the C3. Adopting their parser would replace a measured
 C3 guarantee with an unmeasured one.
@@ -168,34 +174,79 @@ descending" becomes redundant. Drop it in the v2 layout.
 is computed at use from `readName()` and `record.fileSize`, both still present.
 Verified.
 
-## Author provenance collapses to two states
+## The author comes from the book's metadata, or there is none
 
-Ours records four (`FROM_FOLDER`, `FROM_CACHE`, `FROM_OPF`, `UNKNOWN`). Theirs
-records `metadataStatus` (`NOT_ATTEMPTED`, `EXTRACTED`, `FAILED`) and exposes
-`readSourceAuthor()`.
+**This section was rewritten during execution.** The original design assumed
+upstream's index derived an author from the filename as ours does, and that
+provenance merely collapsed from four states to two. That assumption was wrong,
+and the correction is the largest behavioural change in this work.
 
-`EXTRACTED` means the author came from the book itself; the other two mean it
-came from the filename. The Details line becomes **"from the book"** versus
-**"from the filename"**.
+Their `LibraryText.h` exports no `parseFilename`, no `looksLikeMetadata` and no
+`preferFilenameTitle`. Their `LibraryBuilder.cpp` never parses a filename for an
+author at all, and says why:
 
-**Decided: every book shows a provenance line.** Today `CLIX_AUTHOR_UNKNOWN`
-draws none at all (`LibraryListActivity.cpp:1078-1080`); after the collapse
-there is no unknown state, so the line is always drawn. This is a deliberate
-choice, confirmed on review, not an accepted side effect — and it is arguably a
-correction rather than a change: that code's own reason for staying silent is
-that "naming a source for it would claim more than the build knows", and "from
-the filename" is exactly what the build knows in that case.
+> An absent author is a fact, not a gap to fill: the row joins the Unknown
+> group rather than borrowing a name from its surroundings.
 
-A sidecar file storing one byte per book was considered and rejected: it
-reintroduces a file to maintain and a migration, for a distinction nobody
-reads.
+Ours derives the author from the filename (`parseFilename`, our
+`LibraryBuilder.cpp:167`) and from the folder
+(`CLIX_AUTHOR_FROM_FOLDER`, :238), filtered by `looksLikeMetadata` — a guard
+covering hex digests, ISBN prefixes, organisation credits and
+"publisher, year" shapes.
 
-### i18n is part of this change
+**Decided: adopt their model.** The author comes from the book's own metadata
+or the book has no author. The three parsing functions disappear with the file
+they live in; nothing outside the replaced set calls them (verified — the only
+other `parseFilename` in the tree is `SdCardFontRegistry`'s, an unrelated
+function for font filenames).
 
-`STR_LIBRARY_PROV_FOLDER` / `_CACHE` / `_OPF` become two keys. That touches all
-28 `lib/I18n/translations/*.yaml` files plus a `scripts/gen_i18n.py`
-regeneration. The X3/X4 build ships EN+FR only, but the S3 builds ship every
-language, so the other 26 files cannot be left stale.
+### `libraryUseMetadata` must default to on
+
+Their extraction is gated: `extractionExpected = st.readMetadata && hasEpubExtension`
+(`LibraryBuilder.cpp:306`), and `buildLibraryIndex`'s `readMetadata` defaults to
+false. Our `CrossPointSettings.h:640` has `libraryUseMetadata = 0`. Left alone,
+the two combine to a shelf with **no authors at all** — author sort, author
+section headings and the author line under every title all empty.
+
+So the setting defaults to 1. What keeps that affordable — and what does not:
+
+- `Epub::loadMetadata` falls back to `EpubQuickMetadata`, which keeps the 8 KB
+  inflate bound and stops at `</metadata>`. This is the fix for a real
+  `abort()` — 96 KB contiguous requested against a ~69 KB largest free block.
+- `Epub::loadMetadata` tries the book's own metadata cache first. A book the
+  reader has already opened answers out of that cache header: one sector, no
+  zip, no inflate. This is the only reuse that holds unconditionally.
+- Their builder is *meant* to re-parse only books that actually changed: a
+  prior record is reused when file size, modification time, fold version,
+  `metadataEnabled` and `metadataStatus` all match **and the modification time
+  is non-zero** (`LibraryBuilder.cpp:314-318`). On this hardware that last
+  clause is fatal to the argument. `HalStorage::installDateTimeCallback()`
+  (`lib/hal/HalStorage.cpp:249`) returns at `:250` when no RTC is available, so
+  the `FsDateTime` callback is never installed and SdFat stamps date 0 into
+  every file the device writes. Every book that arrived over the web portal,
+  WebDAV, OPDS, Calibre or Raindrop therefore fails the gate permanently and is
+  re-parsed on **every** rebuild, however recently it was indexed. Only books
+  copied onto the card by a PC carry a real date and get the reuse.
+
+So on a clock-less device the honest cost model is: books copied in from a PC
+are reused; books that arrived over the wire are re-parsed every rebuild, at
+one cache-header read each once they have been opened, and at one bounded
+8 KB parse each while they have not. The decision to default extraction on
+stands — without it the shelf has no authors at all — but it rests on the
+bounded parse and the cache fast path, not on the builder's reuse gate.
+
+The first Library entry on a large, never-opened library is still the slow
+path, and it is unmeasured on the C3. That is device verification step 1.
+
+### The provenance line is removed
+
+With one source, the line can only ever say the same thing, so it stops being
+information. It is deleted, and `STR_LIBRARY_PROV_FOLDER` / `_CACHE` / `_OPF`
+go with it. Only `english.yaml` and `french.yaml` carry those keys — the
+Library is a fork feature and other languages fall back to English.
+
+Books whose metadata carries no author show no author line at all, which is
+already what the Details page does today when the author string is empty.
 
 ### `ClixFormat` has to land somewhere
 
@@ -207,7 +258,7 @@ the filename move into our screen's own header — not just the function.
 ## The sort strip goes from five tabs to four
 
 Today: `★ | Recent | A-Z | Z-A | Author`
-Target: `★ | Time | Title ▾ | Author`
+Target: `★ | Time | Title ↓ | Author`
 
 This finishes what the v1.1 spec already argued for — "Title Z-A pays a full
 tab for a rare use", and a long-press on the focused strip flipping direction.
@@ -217,6 +268,12 @@ uniform rather than Title-only: **a hold on any already-focused sort tab flips
 its direction**, and the arrow follows. `Time` gets `AddedAsc`/`AddedDesc`,
 `Author` gets `AuthorAsc`/`AuthorDesc`, both for free. A tap or short press
 activates a tab.
+
+The arrow is `↓` / `↑` (U+2193 / U+2191), not the `▾` / `▴` triangles the v1.1
+spec drew as `fillRect`. `lib/EpdFont/scripts/fontconvert.py` generates
+`0x2190-0x21FF` and `0x2200-0x22FF` and no `0x25xx` at all, so a Geometric
+Shapes triangle renders as the replacement glyph in every built-in face. The
+arrows are already in the `inter_*` UI fonts, at zero flash cost.
 
 The favorites sort menu (hold on `★`) keeps explicit entries. In a popup list,
 spelling both directions out is clearer than an arrow to decode.
@@ -270,35 +327,60 @@ after. Their builder is 1333 lines against our 1007, and the two-screen
 alternative was rejected partly on flash; the actual delta should be a number,
 not an assumption.
 
-On an X4, in this order — each step tests one assumption of this design:
+On an X4, in this order — each step tests one assumption of this design. The
+riskiest step is first on purpose: if the rebuild reboots the device, nothing
+below it can be observed anyway.
 
-1. First Library entry after the update: the index rebuilds **and the
-   favorites are still there**. Record free heap and largest allocatable block
-   during the rebuild (see Known unknown).
-2. The shelf reopens on **defaults**, not on a misread posture — the
-   `STATE_VERSION` bump working as intended.
-3. The four-tab strip: a hold flips direction on `Time`, `Title` and `Author`,
-   the arrow follows, and the choice survives a power cycle.
-4. Search on an accented title; then, on a Cyrillic or CJK book if one is
+1. **Confirm `libraryUseMetadata` is ON** in `Settings > System > Library`
+   before touching anything else. The test device already carries
+   `libraryUseMetadata: 0` in its persisted settings, and the new default only
+   applies to a settings file that has never seen the key — so on that device
+   the switch must be turned on by hand, or every step below tests an
+   authorless shelf that never parses a book.
+2. **Watchdog.** With extraction ON, use the largest card available and enter
+   the Library so the index rebuilds over the whole thing. Expected: it
+   finishes, with no watchdog reboot and no `abort()` in the serial log. Record
+   free heap and largest allocatable block during the rebuild (see Known
+   unknown), and the wall-clock time it took.
+3. **Second rebuild, immediately.** `Settings > System > Library > Rebuild
+   index`, without adding or opening anything, and time it against step 2. This
+   is the only way to see the reuse behaviour: books copied in from a PC should
+   be reused and cost nothing, while books that arrived over the wire are
+   re-parsed every time because their modification time is 0. A second pass
+   that takes as long as the first on a card full of web-portal transfers is
+   the documented behaviour, not a new defect.
+4. The favorites are still there after those rebuilds, and the shelf reopens
+   on **defaults**, not on a misread posture — the `STATE_VERSION` bump
+   working as intended.
+5. The four-tab strip: a hold flips direction on `Added`, `Titles` and
+   `Author`, the arrow follows, and the choice survives a power cycle.
+6. The `A-Z` grid under **each** sort order in turn. On `Titles` A-Z and Z-A
+   and on `Author` A-Z and Z-A, the letters offered must match the key the
+   list is actually displayed in — author letters over an author-sorted list,
+   title letters over a title-sorted one — and jumping to a letter must land
+   on the first book at that letter rather than on the top row. Under both
+   `Author` directions the given-name/surname mode line must be present. On
+   `Added`, in either direction, `OK` must not open the grid at all.
+7. Search on an accented title; then, on a Cyrillic or CJK book if one is
    available, the same search — the previously dead case.
-5. Details on a book whose author came from its filename, then on one with real
-   metadata: the two states must read differently, and every book must now show
-   a line.
-6. Delete a book and return to the shelf: no ghost row.
-7. With `libraryUseMetadata` ON, rebuild over a large library and confirm no
-   watchdog reboot.
+8. Details on a book with real metadata shows its author and no provenance
+   line; a book whose metadata carries no author shows no author line at all.
+   A book whose author used to come from its filename now shows none — that is
+   the accepted consequence of the metadata-only model, not a defect.
+9. Delete a book and return to the shelf: no ghost row.
 
 ## Known unknown
 
 Index rebuild on a large library now runs through their builder, not ours. Its
 memory behaviour on the C3 is unmeasured, and there is no recorded baseline for
 our own builder to compare it against — the figures in `.claude/CONTEXT.md` are
-for a reading session, not an index build. Step 1 is where both get a number. A
+for a reading session, not an index build. Step 2 is where both get a number. A
 regression there is a finding to take upstream rather than a reason to fork the
 core again.
 
-`LibraryMeta` staying in place means the metadata path keeps its measured 8 KB
-bound, so the riskiest part of the rebuild is the part we are *not* changing.
+Keeping our own metadata reader means that path holds its measured 8 KB bound,
+so the riskiest part of the rebuild is the part we are *not* changing — and it
+is what makes defaulting extraction on affordable at all.
 
 ## Non-goals
 

@@ -27,6 +27,7 @@
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/TocNavParser.h"
 #include "Epub/parsers/TocNcxParser.h"
+#include "EpubQuickMetadata.h"
 
 namespace {
 constexpr int kDefaultThumbHeight = 180;
@@ -2235,4 +2236,30 @@ int Epub::resolveHrefToSpineIndex(const std::string& href) const {
     if (spineFilename == targetFilename) return i;
   }
   return -1;
+}
+
+bool Epub::loadMetadata(std::string& title, std::string& author) {
+  title.clear();
+  author.clear();
+
+  // A book the reader has already opened has its title and author sitting in the
+  // cache header: one sector read, no zip, no inflate. Only an unopened book pays
+  // the walk below, which opens the archive and inflates twice.
+  auto metadataCache = makeBookMetadataCacheNoThrow(cachePath, /*cacheCumulativeSpineSizes=*/false);
+  if (metadataCache && metadataCache->load()) {
+    title = metadataCache->coreMetadata.title;
+    author = metadataCache->coreMetadata.author;
+    return true;
+  }
+  // Released before the archive is opened: on device only one reader may hold a
+  // file open at a time, and a failed load() can still own the cache handle.
+  metadataCache.reset();
+
+  epub::BookMetadata metadata;
+  if (!epub::readBookMetadata(getPath(), metadata)) {
+    return false;
+  }
+  title = metadata.title;
+  author = metadata.author;
+  return true;
 }

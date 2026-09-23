@@ -22,6 +22,7 @@
 #include "KOReaderDocumentId.h"
 #include "KOReaderEmbeddedId.h"
 #include "MappedInputManager.h"
+#include "ProgressComparison.h"
 #include "ReaderUtils.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
@@ -292,12 +293,19 @@ void KOReaderSyncActivity::performSync() {
           embeddedHash.empty() ? matchMethodName(primaryMethod) : "embedded", result, KOReaderSyncClient::lastHttpCode,
           documentHash.c_str(), remoteProgress.percentage, remoteProgress.progress.c_str());
 
+  // A second record found under another identity is RETAINED, not judged here:
+  // the two were written by different engines, so their percentages are not
+  // comparable. The choice is made further down, once both can be mapped into
+  // this reader's own chapters and pages.
+  KOReaderProgress alternateProgress;
+  std::string alternateHash;
+  DocumentMatchMethod alternateIdentity = primaryMethod;
+  bool hasAlternateProgress = false;
+
   if (smartSyncEnabled()) {
     // Probe the remaining identities. With an embedded id the candidates are
     // the configured method and its alternate; without one, just the
-    // alternate (today's behavior). Accept rule is unchanged: an alternate
-    // only replaces the accepted record when it is OK and either the current
-    // result is NOT_FOUND or it is further along.
+    // alternate.
     struct ProbeCandidate {
       std::string hash;
       DocumentMatchMethod method;
@@ -321,13 +329,22 @@ void KOReaderSyncActivity::performSync() {
               matchMethodName(candidate.method), altResult, KOReaderSyncClient::lastHttpCode, candidate.hash.c_str(),
               altProgress.percentage, altProgress.progress.c_str());
 
-      if (altResult == KOReaderSyncClient::OK &&
-          (result == KOReaderSyncClient::NOT_FOUND || altProgress.percentage > remoteProgress.percentage)) {
+      if (altResult != KOReaderSyncClient::OK) continue;
+      if (result == KOReaderSyncClient::NOT_FOUND) {
+        // Nothing to weigh it against: the only record found becomes THE record.
         documentHash = candidate.hash;
         remoteProgress = std::move(altProgress);
         remoteMatchMethod = candidate.method;
         remoteMatchedEmbedded = false;
         result = KOReaderSyncClient::OK;
+        continue;
+      }
+      // Two records, two identities. Keep the second until both are mapped.
+      if (!hasAlternateProgress) {
+        alternateProgress = std::move(altProgress);
+        alternateHash = candidate.hash;
+        alternateIdentity = candidate.method;
+        hasAlternateProgress = true;
       }
     }
   }
@@ -375,25 +392,50 @@ void KOReaderSyncActivity::performSync() {
 
   hasRemoteProgress = true;
 
-  const PositionCoordinateSpace remoteCoordinateSpace =
-      (remoteMatchedEmbedded || remoteMatchMethod == DocumentMatchMethod::FILENAME)
-          ? PositionCoordinateSpace::SourceDocument
-          : PositionCoordinateSpace::CurrentDocument;
-  bool usedRichPosition = false;
-  // The client only accepts rich positions from the official CrossPoint Sync server.
-  // Filename matching still needs source-document mapping because optimized books can diverge.
-  // Embedded ids name the pre-optimization original, so they map like filename matches.
-  if (remoteCoordinateSpace == PositionCoordinateSpace::CurrentDocument && remoteProgress.position.has_value()) {
-    const auto richMapped = ProgressMapper::fromRichPosition(epub, *remoteProgress.position, renderer);
-    if (richMapped.has_value()) {
-      remotePosition = *richMapped;
-      usedRichPosition = true;
+  // Which coordinate space a record maps from depends on the identity that
+  // found it. The client only accepts rich positions from the official
+  // CrossPoint Sync server. Filename matching still needs source-document
+  // mapping because optimized books can diverge, and an embedded id names the
+  // pre-optimization original, so it maps like a filename match.
+  const auto mapRemoteRecord = [&](const KOReaderProgress& progress, const bool matchedEmbedded,
+                                   const DocumentMatchMethod method, bool& usedRich) {
+    const PositionCoordinateSpace space = (matchedEmbedded || method == DocumentMatchMethod::FILENAME)
+                                              ? PositionCoordinateSpace::SourceDocument
+                                              : PositionCoordinateSpace::CurrentDocument;
+    usedRich = false;
+    if (space == PositionCoordinateSpace::CurrentDocument && progress.position.has_value()) {
+      const auto richMapped = ProgressMapper::fromRichPosition(epub, *progress.position, renderer);
+      if (richMapped.has_value()) {
+        usedRich = true;
+        return *richMapped;
+      }
     }
-  }
-  if (!usedRichPosition) {
-    const KOReaderPosition koPos = {remoteProgress.progress, remoteProgress.percentage};
-    remotePosition =
-        ProgressMapper::toCrossPoint(epub, koPos, currentSpineIndex, totalPagesInSpine, remoteCoordinateSpace);
+    const KOReaderPosition koPos = {progress.progress, progress.percentage};
+    return ProgressMapper::toCrossPoint(epub, koPos, currentSpineIndex, totalPagesInSpine, space);
+  };
+
+  bool usedRichPosition = false;
+  remotePosition = mapRemoteRecord(remoteProgress, remoteMatchedEmbedded, remoteMatchMethod, usedRichPosition);
+
+  // Both records are now in this reader's own chapters and pages, which is the
+  // only space where "further along" means anything across two engines.
+  if (hasAlternateProgress) {
+    bool altUsedRich = false;
+    const CrossPointPosition alternatePosition =
+        mapRemoteRecord(alternateProgress, /*matchedEmbedded=*/false, alternateIdentity, altUsedRich);
+    LOG_DBG("KOSync", "Two remote records: primary(%s) spine=%d page=%d vs alternate(%s) spine=%d page=%d",
+            remoteMatchedEmbedded ? "embedded" : matchMethodName(remoteMatchMethod), remotePosition.spineIndex,
+            remotePosition.pageNumber, matchMethodName(alternateIdentity), alternatePosition.spineIndex,
+            alternatePosition.pageNumber);
+    if (selectRemoteRecord(remotePosition, remoteProgress.percentage, alternatePosition,
+                           alternateProgress.percentage) == RemoteRecordChoice::Alternate) {
+      documentHash = alternateHash;
+      remoteProgress = std::move(alternateProgress);
+      remotePosition = alternatePosition;
+      remoteMatchMethod = alternateIdentity;
+      remoteMatchedEmbedded = false;
+      usedRichPosition = altUsedRich;
+    }
   }
   if (!remotePosition.valid) {
     {
@@ -474,27 +516,55 @@ void KOReaderSyncActivity::performSync() {
   }
 
   if (smartSyncEnabled()) {
-    static constexpr float SAME_PROGRESS_EPSILON = 0.001f;  // 0.1 percentage points
-    const float delta = localProgress.percentage - remoteProgress.percentage;
-    LOG_DBG("KOSync", "Smart decision: doc=%s local=%.6f remote=%.6f delta=%.6f remoteXpath=%s mapped=%d/%d",
-            documentHash.c_str(), localProgress.percentage, remoteProgress.percentage, delta,
-            remoteProgress.progress.c_str(), remotePosition.spineIndex, remotePosition.pageNumber);
-    if (std::fabs(delta) <= SAME_PROGRESS_EPSILON) {
-      completeAlreadySynced();
-      return;
+    // Which way to sync is decided on READING ORDER, not on percentages.
+    // The two engines paginate the same book differently — a byte-size model
+    // against CrossPoint's own layout — so a remote position can be a whole
+    // chapter ahead and still report the smaller percentage. Comparing the
+    // resolved spine and page first, and only falling back to percentages when
+    // neither side resolved, is upstream's rule (ProgressComparison.cpp,
+    // crosspoint/feat #3111), adopted here verbatim.
+    CrossPointPosition localPosition{};
+    localPosition.spineIndex = currentSpineIndex;
+    localPosition.pageNumber = currentPage;
+    localPosition.totalPages = totalPagesInSpine;
+    // The reader's own coordinates: resolved by definition, never estimated.
+    localPosition.hasResolvedSpineIndex = true;
+    localPosition.hasMappedPage = true;
+    if (currentParagraphIndex.has_value()) {
+      localPosition.paragraphIndex = *currentParagraphIndex;
+      localPosition.hasParagraphIndex = true;
     }
 
-    if (delta > 0) {
-      // Alternate hashes are only probes for newer remote state. Uploads stay
-      // on the upload identity — the embedded id when present, else the
-      // user's configured matching method — so its primary record heals.
-      documentHash = uploadHash;
-      performUpload();
-      return;
-    }
+    const ProgressComparison comparison =
+        compareProgress(localPosition, localProgress.percentage, remotePosition, remoteProgress.percentage);
+    LOG_DBG("KOSync",
+            "Smart decision: doc=%s verdict=%d local=%.6f(spine=%d page=%d) remote=%.6f(spine=%d page=%d res=%d/%d) "
+            "remoteXpath=%s",
+            documentHash.c_str(), static_cast<int>(comparison), localProgress.percentage, currentSpineIndex,
+            currentPage, remoteProgress.percentage, remotePosition.spineIndex, remotePosition.pageNumber,
+            remotePosition.hasResolvedSpineIndex, remotePosition.hasMappedPage, remoteProgress.progress.c_str());
 
-    saveProgressAndReturn(remotePosition);
-    return;
+    switch (comparison) {
+      case ProgressComparison::Synchronized:
+        completeAlreadySynced();
+        return;
+      case ProgressComparison::LocalAhead:
+        // Alternate hashes are only probes for newer remote state. Uploads stay
+        // on the upload identity — the embedded id when present, else the
+        // user's configured matching method — so its primary record heals.
+        documentHash = uploadHash;
+        performUpload();
+        return;
+      case ProgressComparison::RemoteAhead:
+        saveProgressAndReturn(remotePosition);
+        return;
+      case ProgressComparison::Unknown:
+        // Nothing resolved on either side and the percentages are not finite:
+        // there is no answer to guess at, so fall through and let the reader
+        // choose rather than picking a direction at random.
+        LOG_DBG("KOSync", "Smart sync cannot decide; falling back to the manual prompt");
+        break;
+    }
   }
   {
     RenderLock lock(*this);
@@ -742,11 +812,30 @@ void KOReaderSyncActivity::render(RenderLock&&) {
              remoteProgress.percentage * 100);
     renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 90, remotePageStr);
 
+    // WHICH identity matched, beside which device wrote it. When several
+    // readers sync the same book under different hashes — an optimized copy
+    // here, the original on a phone — a record from the wrong one looks exactly
+    // like a record from the right one, and the screen gave no way to tell.
+    // "embedded" means the id the optimized EPUB carries, which is the original
+    // file's; the other two are the configured matching method and its
+    // alternate.
+    const char* remoteIdentity = remoteMatchedEmbedded ? "embedded" : matchMethodName(remoteMatchMethod);
+    // The id itself, not only its kind. Comparing it against what another
+    // reader computed is the only way to tell "this book is not on the server"
+    // from "it is there, under an id we never ask for". Twelve hex digits are
+    // 48 bits: enough to compare by eye, short enough to leave room for the
+    // device name.
+    char identityStr[112];
+    char shortHash[13] = {};
+    strncpy(shortHash, documentHash.c_str(), sizeof(shortHash) - 1);
     if (!remoteProgress.device.empty()) {
-      char deviceStr[64];
-      snprintf(deviceStr, sizeof(deviceStr), tr(STR_DEVICE_FROM_FORMAT), remoteProgress.device.c_str());
-      renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 115, deviceStr);
+      char fromStr[64];
+      snprintf(fromStr, sizeof(fromStr), tr(STR_DEVICE_FROM_FORMAT), remoteProgress.device.c_str());
+      snprintf(identityStr, sizeof(identityStr), "%s \u00b7 %s \u00b7 %s", fromStr, remoteIdentity, shortHash);
+    } else {
+      snprintf(identityStr, sizeof(identityStr), "%s \u00b7 %s", remoteIdentity, shortHash);
     }
+    renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 115, identityStr);
 
     // Local progress - chapter and page
     renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 150, tr(STR_LOCAL_LABEL), true);

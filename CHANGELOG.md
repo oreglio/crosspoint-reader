@@ -3,7 +3,9 @@
 ### Added
 
 - Raindrop Sync (beta): syncs the article shelf published by a personal CrossDrop
-  companion server into `/Articles` as Markdown files the Library indexes.
+  companion server into `/Articles` as Markdown files. The Library leaves them
+  alone — a reading list of hundreds of articles would bury the books — and they
+  are read from the File Browser, where they stay.
   Enable it and paste the server URL + device token from the web portal
   settings; launch from the Home menu or Settings > System.
 
@@ -18,14 +20,14 @@
 
 - A `Countdown` entry on the home menu, for reading against a deadline. Pick the target hour, then the minutes, to the minute — front buttons step by one, side buttons by six hours or ten minutes, so the side pair drives the tens and the front pair the units — and the screen counts down to that time on the wall clock — remaining time large, a progress bar, and the elapsed time and target beneath it. A target at or before the current time is taken as tomorrow, so "it's 23:40, wake me at 06:00" works. On the X4, which has no clock chip of any kind, the screen asks what time it is now before asking for the end time, and counts from there — so the same "stop at 15:05" phrasing works on both devices. Once the target passes the screen keeps counting the overshoot as `+12m`. The screen stays on for the whole count but the processor drops to its low-power clock between the once-a-minute updates, so a long countdown costs far less battery than staying awake normally; the first button press brings it back to full speed. Requires a device with a working clock.
 
-- A `Library` shelf on the home screen, listing every book on the card in one place regardless of the folders they sit in. Titles wrap over up to three lines instead of being cut short — each row only as tall as its own title needs — and rows carry the author beneath the title, with Left/Right turning pages while Up/Down move the selection. Sort from the tabs above the list: Added, A-Z, Z-A or Author.
+- A `Library` shelf on the home screen, listing every book on the card in one place regardless of the folders they sit in. Titles wrap over up to three lines instead of being cut short — each row only as tall as its own title needs — and rows carry the author beneath the title, with Left/Right turning pages while Up/Down move the selection. Sort from the tabs above the list: `Added`, `Titles` or `Author`.
 - `Settings > System > Library` with a `Use book metadata` switch and a `Rebuild index` button. With metadata on, the shelf shows the title and author a book carries inside itself rather than whatever its filename happens to say — on a typical library that is a 23-character title in place of a 148-character filename, and correctly accented. Books never opened are read straight from the EPUB; books already opened cost only a cache read. One spelling is chosen per author across the whole library, so the same person does not appear three ways.
-- Search the Library by title or author from the search action in the header. On X3/X4, `Left` opens it when the first book is selected and the button hint says `Search`. Typing the start of each word is enough — `wut hei` finds `Wuthering Heights` — which matters on a screen where every keypress redraws the whole page.
-- Jump to a letter with the `A-Z` grid, opened with `OK` on an alphabetical sort. Sorted by author you choose whether the letter means the first name or the last, because no rule can tell `Lu Xun` from `Jane Austen`.
+- Search the Library by title or author from the search action in the header — the magnifier is drawn on X3/X4 too, where the side `Up` button opens it from the sort strip, and `Left` opens it when the first book is selected and the button hint says `Search`. Typing the start of each word is enough — `wut hei` finds `Wuthering Heights` — which matters on a screen where every keypress redraws the whole page.
+- Jump through a long shelf by folding it: `OK` on the `Titles` or `Author` tab collapses the list onto its own headings — every author by name, or every initial — and picking one unfolds the list there. `Back` returns to where you were. It pages like any other list, so a hundred authors are a few presses apart, and on the author tab it answers the question a grid of letters could not: you read the names themselves instead of guessing whether someone files under their first name or their last.
 - Rebuilding recognises books that were renamed or moved and keeps their place in `Recently added`, rather than treating them as new arrivals.
 - The shelf notices new books by itself: every way a book can arrive — nearby transfer, web upload, WebDAV, OPDS or Calibre download, USB transfer — marks the index stale, and the next visit to the Library rebuilds it with reconciliation, so the newcomer tops `Added` and every other book keeps its place. The first tab is now called `Added` rather than `Recent`, because the Home screen's `Recent Books` means recently *read* — this one means recently *arrived*.
-- Mark a book as a favorite from its long-press menu. Favorite rows carry a star in place of the book icon, the star tab leads the strip and shows favorites only — with its own sort menu on a long press (`Recent`, `Titles A-Z`, `Titles Z-A`, `Author`) — and the flag survives index rebuilds and moves to another folder, because it is stored in its own file keyed by file identity rather than in the rebuildable index. The shelf remembers its whole posture — view, both sorts and even the selected book — across sleep and power-off, in a tiny state file; backing out lands Home on the `Library` entry.
-- A `Details` page in the same long-press menu shows the book's title, its author together with where that author string actually came from — the folder name, the book's reading cache, or the EPUB metadata — plus the on-disk filename, folder, size and format.
+- Mark a book as a favorite from its long-press menu. Favorite rows carry a star in place of the book icon, the star tab leads the strip and shows favorites only — with its own sort menu on a long press (`Added`, `Titles A-Z`, `Titles Z-A`, `Author`) — and the flag survives index rebuilds and moves to another folder, because it is stored in its own file keyed by file identity rather than in the rebuildable index. The shelf remembers its whole posture — view, both sorts and even the selected book — across sleep and power-off, in a tiny state file; backing out lands Home on the `Library` entry.
+- A `Details` page in the same long-press menu shows the book's title, its author, and the on-disk filename, folder, size and format.
 - The long-press menu can also `Delete` a book, confirmed first. The file, its reading cache, bookmarks, clippings, recents entry and favorites entry all go; the index is reconciled on the spot so the shelf never lists a ghost. Reading stats are deliberately kept — deleting a book does not rewrite history.
 - Holding `Left` in the Library returns to the top of the list in one gesture, instead of turning back a page at a time.
 
@@ -38,9 +40,17 @@
 
 ### Changed
 
-- The Library shelf now renders through the same FreeInkUI components as the rest of the interface, which is what brings touch to it: on touch devices, tap a book to open it, hold it for its menu, tap the Added/A-Z/Z-A/Author tabs to switch order, hold the ★ tab for the favorites sort menu, use the header search icon, tap a letter in the A-Z grid to jump, and swipe to page the list. Button navigation, search, favorites, details, deletion and the remembered shelf posture all behave as before.
+- The Library shelf now renders through the same FreeInkUI components as the rest of the interface, which is what brings touch to it: on touch devices, tap a book to open it, hold it for its menu, tap the `Added`/`Titles`/`Author` tabs to switch order, hold the active one to reverse it, hold the ★ tab for the favorites sort menu, use the header search icon, tap a letter in the A-Z grid to jump, and swipe to page the list. Button navigation, search, favorites, details, deletion and the remembered shelf posture all behave as before.
 - The File Manager becomes cards on phone-sized screens: tap a card to select it, serif titles that wrap instead of crushing the table, and a download button on each card.
 - Opening a folder in the File Manager no longer reloads the whole page. Only the folder's listing is fetched, so browsing lands in a moment instead of downloading the page again each time; `Back` and `Forward` still walk through the folders you visited, and a link opened in a new tab still works. Pages now carry a validator, so reopening the portal costs nothing when nothing has changed.
+- The Library now takes a book's author from the book's own metadata rather
+  than guessing it from the file name, and reads that metadata by default. A
+  book that carries no author of its own joins the Unknown group instead of
+  borrowing a name from its file name or its folder. Searching and sorting now
+  work on Greek, Cyrillic and CJK libraries, which they never did before.
+- The Library sort strip carries one tab per sort key — ★, `Added`, `Titles`
+  and `Author` — rather than one per direction. Hold the tab you are already on
+  to reverse it; the arrow on the active tab shows which way it runs.
 
 ### Removed
 
@@ -49,6 +59,11 @@
 
 ### Fixed
 
+- When two readers have synced the same book under different document ids — an optimized copy here, the original on a phone — the shelf no longer picks between them by percentage. Both records are mapped into this reader's own chapters and pages first, and the one genuinely further along wins. The comparison screen now also names the identity that found the record, beside the device that wrote it, so a record from the wrong reader can be told from a record from the right one.
+- KOReader sync decides which way to sync from reading order rather than from percentages. The two engines paginate the same book differently, so a phone position a whole chapter ahead could report the smaller percentage and be ignored — progress simply never arrived, with nothing on screen to say why. The comparison now reads the chapter and page the remote position actually resolves to, and falls back to percentages only when neither side resolved. Books optimized on device keep syncing against their original file, unchanged.
+- The Library strip sits flush under the header. It was reserving its space from the device safe area while the header was drawn from the screen edge, so a bezel inset's worth of empty band stood between them.
+- The Library header reads `Library` rather than `Library · Title A-Z`. The direction was stated twice — the active tab already draws it as an arrow — and the longer title crowded the search action beside it.
+- The sort arrow on the Library strip can be flipped on X3/X4. The active tab drew a direction it had no way to change there: the hold that reverses it was dispatched only by touch, so on a button reader the arrow was decoration.
 - Opening or leaving the Library no longer risks closing an index handle before it has been opened.
 - Library paging now uses the rows actually measured by FreeInkUI, so variable-height author headings cannot skip books and moving up across a page boundary lands on the previous page's final book.
 - Books uploaded through the fast (WebSocket) upload path now appear in the Library without a manual index rebuild.

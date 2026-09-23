@@ -132,6 +132,10 @@ class HalFile : public Print {
   bool sync();
   bool rename(const char* newPath);
   bool isDirectory() const;
+  // FAT modify date and time packed into one word, date in the high half.
+  // Zero when the card carries no timestamp for this entry, which the library
+  // index reads as "cannot be trusted for reuse".
+  uint32_t modificationTime();
   void rewindDirectory();
   bool close();
   HalFile openNextFile();

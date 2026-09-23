@@ -311,10 +311,15 @@ encodes direction in the value, so `titleDescending` becomes redundant.
 `LibraryState.cpp` mixes byte parsing with `HalStorage` I/O, so it cannot be
 host-tested as it stands. The repo already solves this for the neighbouring
 format: `LibraryFavorites.cpp` is pure (`parseFavorites` / `serializeFavorites`)
-and `LibraryFavoritesFile.cpp` does the I/O, which is why
-`test/library_favorites/CMakeLists.txt` compiles one file and needs no stubs at
-all. Mirror that split here rather than building a storage harness for two
-asserts.
+and `LibraryFavoritesFile.cpp` does the I/O. Mirror that split here rather than
+building a storage harness for two asserts.
+
+One wrinkle the split does not remove: the codec needs `SortOrder`, which lives
+in `LibraryIndexFile.h`, and that header includes `<HalStorage.h>`. So the test
+does need a storage stub after all — but not a new one. Task 2 brought
+`test/library_index_file/stubs/{HalStorage.h,Logging.h}` into the tree, and the
+repo already shares stub directories between suites (`test/epub_grayscale`
+points at `../memory_policy/stubs`). Point at those rather than writing more.
 
 **Files:**
 - Create: `lib/LibraryIndex/LibraryStateCodec.h`
@@ -395,6 +400,7 @@ add_executable(LibraryStateTest
 )
 
 target_include_directories(LibraryStateTest PRIVATE
+  ../library_index_file/stubs
   ${REPO_ROOT}/lib/LibraryIndex
 )
 
@@ -415,7 +421,9 @@ add_subdirectory(library_state)
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `cmake -S test -B test/build && cmake --build test/build --target LibraryStateTest -j8`
-Expected: FAIL — `LibraryStateCodec.h` does not exist.
+Expected: FAIL — `LibraryStateCodec.h` does not exist. (If it instead fails on
+a missing `Arduino.h` or `HalStorage.h`, the stub path above is wrong — fix the
+include directory, not the codec.)
 
 - [ ] **Step 3: Write the pure codec**
 
@@ -597,61 +605,75 @@ in the SortOrder value itself."
 
 ---
 
-### Task 4: Two provenance strings
+### Task 4: Delete the provenance strings and default metadata on
+
+The author now comes from the book's metadata or nowhere, so the provenance
+line can only say one thing and is removed. The setting that gates extraction
+must default to on, or the shelf has no authors at all.
 
 **Files:**
 - Modify: `lib/I18n/translations/english.yaml:279-281`
 - Modify: `lib/I18n/translations/french.yaml:171-173`
-
-Only these two files carry the keys — the Library is a fork feature and other
-languages fall back to English.
+- Modify: `src/CrossPointSettings.h:640`
 
 **Interfaces:**
-- Produces: `StrId::STR_LIBRARY_AUTHOR_FROM_BOOK`, `StrId::STR_LIBRARY_AUTHOR_FROM_FILENAME`.
+- Produces: `StrId::STR_LIBRARY_PROV_FOLDER`, `_CACHE` and `_OPF` no longer exist;
+  `CrossPointSettings::libraryUseMetadata` defaults to 1.
 
-- [ ] **Step 1: Replace the three keys with two, in English**
+- [ ] **Step 1: Delete the three keys**
 
-In `lib/I18n/translations/english.yaml`, replace lines 279-281:
+Remove lines 279-281 of `lib/I18n/translations/english.yaml`
+(`STR_LIBRARY_PROV_FOLDER`, `STR_LIBRARY_PROV_CACHE`, `STR_LIBRARY_PROV_OPF`)
+and lines 171-173 of `lib/I18n/translations/french.yaml`. Only these two files
+carry them.
 
-```yaml
-STR_LIBRARY_AUTHOR_FROM_BOOK: "Author from the book's own metadata"
-STR_LIBRARY_AUTHOR_FROM_FILENAME: "Author from the file name"
+- [ ] **Step 2: Default metadata extraction on**
+
+In `src/CrossPointSettings.h`, line 640:
+
+```cpp
+  // Defaults on: upstream's index derives an author only from the book's own
+  // metadata -- it never parses a filename -- so with extraction off the shelf
+  // would have no authors at all. Affordable because Epub::loadMetadata keeps
+  // an 8 KB inflate bound and the builder re-parses only changed books.
+  uint8_t libraryUseMetadata = 1;
 ```
 
-- [ ] **Step 2: Replace them in French**
-
-In `lib/I18n/translations/french.yaml`, replace lines 171-173:
-
-```yaml
-STR_LIBRARY_AUTHOR_FROM_BOOK: "Auteur d'après les métadonnées du livre"
-STR_LIBRARY_AUTHOR_FROM_FILENAME: "Auteur d'après le nom du fichier"
-```
-
-- [ ] **Step 3: Regenerate and confirm the old keys are gone**
+- [ ] **Step 3: Regenerate and confirm the keys are gone**
 
 ```bash
 python3 scripts/gen_i18n.py
-grep -rn "STR_LIBRARY_PROV" lib/I18n/ || echo "old keys gone"
-grep -n "STR_LIBRARY_AUTHOR_FROM_BOOK\|STR_LIBRARY_AUTHOR_FROM_FILENAME" lib/I18n/I18nKeys.h
+grep -rn "STR_LIBRARY_PROV" lib/I18n/ src/ || echo "provenance keys gone"
 ```
 
-Expected: "old keys gone", and both new keys present in the generated header.
+Expected: "provenance keys gone". If `src/` still references one, Task 5 has
+not run yet — that is expected at this point and is not a failure of this task.
+
+Note that at this point in the sequence the script itself exits 1 rather than
+regenerating: it scans `src` and `lib` and fails with a CRITICAL on any `STR_*`
+a source names but `english.yaml` no longer defines, and until Task 5 lands,
+`LibraryListActivity.cpp` still names the three deleted `STR_LIBRARY_PROV_*`
+keys. The generated headers are regenerated for real by Task 5 step 1, which
+runs the same command after the last such reference is gone.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add lib/I18n
-git commit -m "i18n(library): collapse author provenance to two strings
+git add lib/I18n src/CrossPointSettings.h
+git commit -m "feat(library): author comes from metadata, so default extraction on
 
-Upstream's index records metadataStatus (not attempted / extracted / failed)
-rather than our four-way folder/cache/OPF provenance. Extracted means the book
-said so; the other two mean the file name did. Only english and french carried
-these keys."
+Upstream's index never parses a filename for an author -- \"an absent author is
+a fact, not a gap to fill\". Their extraction is gated on readMetadata, and our
+libraryUseMetadata defaulted to 0, so the two together would have produced a
+shelf with no authors at all.
+
+The provenance line goes with the filename source: with one source left it
+could only ever say the same thing."
 ```
 
 ---
 
-### Task 5: Repair the shelf against the new core
+### Task 5: Repair the build against the new core
 
 **Files:**
 - Modify: `src/activities/library/LibraryListActivity.h` (add the format enum)
@@ -662,7 +684,44 @@ these keys."
 - Consumes: everything Task 2 produces, `Task 4`'s two `StrId`s, Task 3's struct.
 - Produces: a firmware that builds on all three targets.
 
-- [ ] **Step 1: Give the format label a home**
+- [ ] **Step 1: Give `HalFile` a modification time**
+
+Upstream's builder calls `entry.modificationTime()` (`LibraryBuilder.cpp:467`)
+and our `HalFile` has no such method, so the core does not compile here. This
+is the same kind of seam as `Epub::loadMetadata` in Task 1: a small, deliberate
+edit to a shared file, outside the verbatim boundary.
+
+It is not cosmetic. `reuseMetadata` requires `modificationTime != 0`
+(`LibraryBuilder.cpp:316`); without it no prior record is ever reused and every
+rebuild re-parses every book's metadata — which is the cost argument for
+defaulting `libraryUseMetadata` to 1.
+
+Port upstream's implementation rather than inventing one. In
+`lib/hal/HalStorage.h`, beside the other `HalFile` accessors:
+
+```cpp
+  // FAT modify date and time packed into one word, date in the high half.
+  // Zero when the card carries no timestamp for this entry, which the library
+  // index reads as "cannot be trusted for reuse".
+  uint32_t modificationTime();
+```
+
+In `lib/hal/HalStorage.cpp`, beside the other wrapped calls:
+
+```cpp
+uint32_t HalFile::modificationTime() {
+  HalStorage::StorageLock lock;
+  uint16_t date = 0;
+  uint16_t time = 0;
+  if (!impl || !impl->file.getModifyDateTime(&date, &time) || date == 0) return 0;
+  return (static_cast<uint32_t>(date) << 16) | time;
+}
+```
+
+`FsFile::getModifyDateTime(uint16_t*, uint16_t*)` is SdFat's, declared at
+`FsFile.h:305`; `HalFile::Impl` already wraps an `FsFile`.
+
+- [ ] **Step 2: Give the format label a home**
 
 Upstream's `LibraryFormat.h` has neither `ClixFormat` nor `recordFormat()`.
 Add to `src/activities/library/LibraryListActivity.h`, above the class:
@@ -690,26 +749,18 @@ ShelfFormat shelfFormatForName(const std::string_view name) {
 }
 ```
 
-- [ ] **Step 2: Rewrite the Details provenance and format blocks**
+- [ ] **Step 3: Delete the provenance block, keep the format label**
 
-In `LibraryListActivity.cpp`, replace the provenance `switch` (lines 1067-1083)
-with:
+In `LibraryListActivity.cpp`, delete the whole provenance `switch` and its
+`drawBlock` (lines 1067-1083) — everything between the author `drawBlock` and
+the closing brace of `if (!author.empty())`. The author line itself stays; only
+the line naming where it came from goes.
 
-```cpp
-    // Two states, because that is what the index knows: EXTRACTED means the
-    // book carried the author itself, anything else means the file name did.
-    // Every book gets a line — saying "from the file name" claims no more than
-    // the build actually established.
-    const bool fromBook = record.metadataStatus == library::CLIX_METADATA_EXTRACTED;
-    drawBlock(fromBook ? tr(STR_LIBRARY_AUTHOR_FROM_BOOK) : tr(STR_LIBRARY_AUTHOR_FROM_FILENAME),
-              screen.theme().smallText);
-```
-
-and replace `switch (library::recordFormat(record))` (line 1094) with
+Then replace `switch (library::recordFormat(record))` (line 1094) with
 `switch (shelfFormatForName(name))`, renaming each case label from
 `library::CLIX_FORMAT_EPUB` to `ShelfFormat::Epub` and so on.
 
-- [ ] **Step 3: Move the sort orders onto their enum**
+- [ ] **Step 4: Move the sort orders onto their enum**
 
 Replace every `library::SortOrder::DateDesc` with `library::SortOrder::AddedDesc`:
 
@@ -719,11 +770,34 @@ sed -i '' 's/SortOrder::DateDesc/SortOrder::AddedDesc/g' \
   src/activities/library/LibraryListActivity.cpp src/activities/library/LibraryListActivity.h
 ```
 
-- [ ] **Step 4: Make `sortOrderLabel()` exhaustive again**
+- [ ] **Step 5: Make both `SortOrder` switches exhaustive again**
 
-The enum grew from four values to six, and this switch has no `default:` on
-purpose, so `-Werror=switch` will reject it. Replace the body of
-`LibraryListActivity::sortOrderLabel()` (around line 438):
+The enum grew from four values to six, and neither switch has a `default:` on
+purpose, so `-Werror=switch` will reject both.
+
+First `sortTabIndex` (line 69). The five-slot strip is still in place here —
+Task 6 is what collapses it — so the two new orders map onto the existing
+tabs:
+
+```cpp
+int sortTabIndex(const library::SortOrder order) {
+  switch (order) {
+    case library::SortOrder::TitleAsc:
+      return kTitleAscTab;
+    case library::SortOrder::TitleDesc:
+      return kTitleDescTab;
+    case library::SortOrder::AuthorAsc:
+    case library::SortOrder::AuthorDesc:
+      return kAuthorTab;
+    case library::SortOrder::AddedAsc:
+    case library::SortOrder::AddedDesc:
+      return kRecentTab;
+  }
+  return kRecentTab;
+}
+```
+
+Then `LibraryListActivity::sortOrderLabel()` (around line 438):
 
 ```cpp
 const char* LibraryListActivity::sortOrderLabel() const {
@@ -747,7 +821,16 @@ const char* LibraryListActivity::sortOrderLabel() const {
 
 Add the two new keys to `lib/I18n/translations/english.yaml` and
 `french.yaml` beside the existing `STR_LIBRARY_SORT_*` entries, then rerun
-`python3 scripts/gen_i18n.py`:
+`python3 scripts/gen_i18n.py`.
+
+Run it only AFTER step 3 has deleted the provenance block. The script scans
+`src` and `lib` by default and exits 1 with a CRITICAL listing any `STR_*` a
+source file references but `english.yaml` no longer defines — and until step 3
+lands, `LibraryListActivity.cpp` still names the three deleted
+`STR_LIBRARY_PROV_*` keys. Running it early is not a failure of your work; it
+just means the deletions above are not finished yet.
+
+The keys to add:
 
 ```yaml
 STR_LIBRARY_SORT_OLDEST: "Oldest first"
@@ -759,13 +842,13 @@ STR_LIBRARY_SORT_OLDEST: "Les plus anciens d'abord"
 STR_LIBRARY_SORT_AUTHOR_ZA: "Auteur Z-A"
 ```
 
-- [ ] **Step 5: Stop writing the flag that no longer exists**
+- [ ] **Step 6: Stop writing the flag that no longer exists**
 
 `LibraryListActivity.cpp:187` still sets `state.titleDescending`, which Task 3
 removed from the struct. Delete that one line from `onExit()`; `state.shelfSort`
 on the next line already carries the direction.
 
-- [ ] **Step 6: Simplify both builder call sites**
+- [ ] **Step 7: Simplify both builder call sites**
 
 In `src/activities/library/LibraryListActivity.cpp`, replace the block at
 lines 208-222 with:
@@ -792,7 +875,22 @@ In `src/activities/settings/SettingsActivity.cpp`, replace the call at lines
 
 and delete its `carried` preamble.
 
-- [ ] **Step 7: Build all three targets**
+- [ ] **Step 8: Prove no reference to a removed symbol survives**
+
+The deletions above are described by content, not by symbol. This turns them
+into something checkable. Every one of these names something the new core no
+longer has, or that this task removes:
+
+```bash
+grep -n "recordAuthorProvenance\|recordFormat\|CLIX_FORMAT_\|CLIX_AUTHOR_\|SortOrder::DateDesc\|titleDescending\|nextFirstSeen\|STR_LIBRARY_PROV\|BuildProgressFn" \
+  src/activities/library/LibraryListActivity.cpp src/activities/library/LibraryListActivity.h \
+  src/activities/settings/SettingsActivity.cpp
+```
+
+Expected: **no output**. Any hit is a deletion you made partially — finish it
+before building, because the compiler will only report the first few.
+
+- [ ] **Step 9: Build all three targets**
 
 ```bash
 pio run -e default && pio run -e sticky && pio run -e x4-pro
@@ -801,12 +899,12 @@ pio run -e default && pio run -e sticky && pio run -e x4-pro
 Expected: SUCCESS on all three. Fix whatever the compiler names; do **not**
 resolve anything by editing the eight adopted core files.
 
-- [ ] **Step 8: Run the host tests**
+- [ ] **Step 10: Run the host tests**
 
 Run: `cmake --build test/build -j8 && (cd test/build && ctest -j8)`
 Expected: only the two known `SectionPersistenceTest` failures.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 clang-format -i src/activities/library/LibraryListActivity.h src/activities/library/LibraryListActivity.cpp src/activities/settings/SettingsActivity.cpp
@@ -814,8 +912,8 @@ git add src/activities/library src/activities/settings/SettingsActivity.cpp
 git commit -m "feat(library): run the shelf on upstream's index core
 
 SortOrder::DateDesc becomes AddedDesc; the format label is derived from the
-file name now that the record has no format field; author provenance collapses
-to 'from the book' or 'from the file name'.
+file name now that the record has no format field; the provenance line is gone
+with the filename-derived author it used to describe.
 
 Both builder call sites lose their progress callback and firstSeen preamble.
 The callback was our only watchdog feed — upstream's builder feeds it itself
@@ -826,17 +924,51 @@ at LibraryBuilder.cpp:86, which is the only reason dropping it is safe."
 
 ### Task 6: Four tabs, uniform hold-to-flip, no gap above the strip
 
+Line numbers below are anchored to commit `e3124f9f` and every one of them
+moved when Task 5 rewrote this file — by up to fourteen lines. Find each site by
+its symbol name, and treat the number as a hint only.
+
 **Files:**
 - Modify: `src/activities/library/LibraryListActivity.cpp:62-110` and the strip handlers
 - Modify: `src/activities/library/LibraryListActivity.cpp:1198-1204` (content margin)
 
 **Interfaces:**
 - Consumes: `library::SortOrder` with both directions per order.
-- Produces: a four-slot strip, `★ | Time | Title ▾ | Author`.
+- Produces: a four-slot strip, `★ | Time | Title ↓ | Author`.
 
-- [ ] **Step 1: Replace the tab constants**
+- [ ] **Step 1: Give the two new sort labels the prefix their neighbours carry**
 
-In `LibraryListActivity.cpp`, replace lines 62-67:
+Task 5 added `STR_LIBRARY_SORT_OLDEST` and `STR_LIBRARY_SORT_AUTHOR_ZA` with
+the exact strings the plan named, and the plan named them wrong: every other
+value `sortOrderLabel()` can return carries a `Library · ` prefix, because that
+function feeds the **header title** at `LibraryListActivity.cpp:1231`.
+
+Today the mismatch is invisible — `orderForTab()` never returns `AddedAsc` or
+`AuthorDesc`, so neither label is reachable. This task is what makes them
+reachable, so fix them here, before the header starts reading `Oldest first`
+where it used to read `Library · Recently added`.
+
+In `lib/I18n/translations/english.yaml`:
+
+```yaml
+STR_LIBRARY_SORT_OLDEST: "Library · Oldest first"
+STR_LIBRARY_SORT_AUTHOR_ZA: "Library · Author Z-A"
+```
+
+In `lib/I18n/translations/french.yaml`:
+
+```yaml
+STR_LIBRARY_SORT_OLDEST: "Bibliothèque · Les plus anciens d'abord"
+STR_LIBRARY_SORT_AUTHOR_ZA: "Bibliothèque · Auteur Z-A"
+```
+
+Then `python3 scripts/gen_i18n.py`. It succeeds now — Task 5 removed the last
+source reference to a deleted key.
+
+- [ ] **Step 2: Replace the tab constants**
+
+In `LibraryListActivity.cpp`, find the block of tab constants that begins
+`constexpr int kFavTab = 0;` (line 74 as of commit e3124f9f) and replace it:
 
 ```cpp
 constexpr int kFavTab = 0;
@@ -857,9 +989,10 @@ constexpr int kAuthorTab = 3;
 constexpr int kTabSlots = kAuthorTab + 1;
 ```
 
-- [ ] **Step 2: Fold direction into the tab, not into a slot**
+- [ ] **Step 3: Fold direction into the tab, not into a slot**
 
-Replace `sortTabIndex` (lines 69-80) and `orderForTab` (lines 83-88):
+Replace the whole of `sortTabIndex` and `orderForTab` (lines 81 and 97 as of
+commit e3124f9f) and add `orderIsDescending` beside them:
 
 ```cpp
 int sortTabIndex(const library::SortOrder order) {
@@ -891,9 +1024,9 @@ bool orderIsDescending(const library::SortOrder order) {
 }
 ```
 
-- [ ] **Step 3: Label the tabs and carry the arrow**
+- [ ] **Step 4: Label the tabs and carry the arrow**
 
-Replace `tabLabelFor` (lines 92-98):
+Replace `tabLabelFor` (line 106 as of commit e3124f9f):
 
 ```cpp
 // The arrow is appended by tabLabel(), which knows the active order; this
@@ -906,23 +1039,27 @@ const char* tabLabelFor(const int tab) {
 }
 ```
 
-and replace `LibraryListActivity::tabLabel` (line 104):
+and replace `LibraryListActivity::tabLabel` (line 118 as of commit e3124f9f):
 
 ```cpp
 const char* LibraryListActivity::tabLabel(const int index) const {
   const char* base = tabLabelFor(index);
   if (base == nullptr || index != activeTab()) return base;
   // Only the active tab shows which way it runs; a row of arrows reads as noise.
-  static char withArrow[32];
-  snprintf(withArrow, sizeof(withArrow), "%s %s", base, orderIsDescending(sSortOrder) ? "▾" : "▴");
+  // That invariant is what makes one shared buffer safe here:
+  // UiTabListActivity.cpp:121 collects every tab's pointer into one array and
+  // renders them together, so a second arrow-bearing tab would overwrite the
+  // first. The inactive tabs return stable tr() pointers instead.
+  static char withArrow[64];
+  snprintf(withArrow, sizeof(withArrow), "%s %s", base, orderIsDescending(sSortOrder) ? "↓" : "↑");
   return withArrow;
 }
 ```
 
-- [ ] **Step 4: Give each tab a resting direction when it is activated**
+- [ ] **Step 5: Give each tab a resting direction when it is activated**
 
-`onTabAction` (line 413) calls the old single-argument `orderForTab`. Replace
-that call:
+`LibraryListActivity::onTabAction` (line 415 as of commit e3124f9f) calls the
+old single-argument `orderForTab`. Replace that call:
 
 ```cpp
     sSortOrder = orderForTab(index, /*descending=*/index == kTimeTab);
@@ -933,9 +1070,10 @@ reader; Title and Author rest ascending. Leave the rest of `onTabAction`
 untouched — `applyFilter()`, the nav reset, `app.clearTapFlash()` and
 `requestUpdate()` all still apply.
 
-- [ ] **Step 5: Make a hold on the focused tab flip its direction**
+- [ ] **Step 6: Make a hold on the focused tab flip its direction**
 
-Replace `LibraryListActivity::onTabLongPress` (line 430) in full:
+Replace `LibraryListActivity::onTabLongPress` (line 432 as of commit e3124f9f)
+in full:
 
 ```cpp
 void LibraryListActivity::onTabLongPress(const int index) {
@@ -956,9 +1094,10 @@ void LibraryListActivity::onTabLongPress(const int index) {
 Nothing writes the state here: `onExit()` is the single write per visit, and it
 reads `sSortOrder` directly.
 
-- [ ] **Step 6: Remove the gap above the strip**
+- [ ] **Step 7: Remove the gap above the strip**
 
-Replace lines 1202-1204:
+Replace the `screen.setContentMargin(...)` call (line 1191 as of commit
+e3124f9f):
 
 ```cpp
   screen.setContentMargin(
@@ -976,7 +1115,7 @@ with:
                   static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
 ```
 
-- [ ] **Step 7: Build and run the simulator**
+- [ ] **Step 8: Build and run the simulator**
 
 ```bash
 pio run -e default && pio run -e simulator
@@ -984,7 +1123,7 @@ pio run -e default && pio run -e simulator
 
 Expected: SUCCESS on both.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 clang-format -i src/activities/library/LibraryListActivity.cpp
@@ -1021,10 +1160,21 @@ version 3 index written by an older build of this firmware fails it and is
 rebuilt — which is the entire migration mechanism.
 ```
 
-Then reconcile the record layout table in that section with the adopted
-`ClixRecord`: `authorRank`, `dateRank` and `flags` are gone; `metadataStatus`
-and `modificationTime` are new. Read
-`lib/LibraryIndex/LibraryFormat.h` and describe what is actually there.
+Then reconcile the rest of the section. These are the five differences between
+what the document describes and the adopted format — all verified against
+`lib/LibraryIndex/LibraryFormat.h` and `LibraryIndexFile.h`:
+
+| Document says | Adopted format |
+|---|---|
+| Permutations are `authorOrder` then **date order** | `authorOrder` then **`arrivalOrder`** |
+| Name blob holds **name, author, title** | **path hash, filename, display author, title, source author** |
+| Header flags `WALK_COMPLETE` and `RANKS_DEGRADED` | `RANKS_DEGRADED` and **`DEDUP_DEGRADED`**; `WALK_COMPLETE` no longer exists |
+| Record carries `authorRank`, `dateRank`, `flags` | none of those; it carries **`metadataStatus`** and **`modificationTime`** |
+| Author provenance is stored in `flags` bits 3-4 | not stored at all — `metadataStatus` says only whether extraction was attempted, succeeded or failed |
+
+The `### Records are exactly 128 bytes` prose still holds: `fold[96]` and
+`authorKey[12]` are unchanged, and the fixed stride is still what lets the
+reader seek to record *n* without an offset table.
 
 - [ ] **Step 2: Record the boundary where the next session will look**
 
@@ -1043,7 +1193,29 @@ Append to the "Divergences assumées vis-à-vis d'upstream" section of
   parce que le builder inclut `<Epub.h>` : l'inverse créerait un cycle.
 ```
 
-- [ ] **Step 3: Measure the flash delta**
+- [ ] **Step 3: Add the CHANGELOG entry**
+
+`CLAUDE.md` requires a user-facing entry for every feature change. Add under
+`## [Unreleased]`, in the existing `### Changed` and `### Removed` sections:
+
+```markdown
+- The Library now takes a book's author from the book's own metadata rather
+  than guessing it from the file name, and reads that metadata by default. A
+  book that carries no author of its own joins the Unknown group instead of
+  borrowing a name from its file name or its folder. Searching and sorting now
+  work on Greek, Cyrillic and CJK libraries, which they never did before.
+- The Library sort strip is four tabs instead of five: ★, Time, Title and
+  Author. Hold the tab you are already on to reverse its direction — the arrow
+  on the tab shows which way it runs.
+```
+
+```markdown
+- The Library book details no longer name where the author came from. With the
+  author now taken only from the book itself, the line could only ever say one
+  thing.
+```
+
+- [ ] **Step 4: Measure the flash delta**
 
 ```bash
 pio run -e x4-pro 2>&1 | grep "Flash:"
@@ -1053,10 +1225,10 @@ Record the number in the commit message against the pre-change 94.2 %
 (6,171,977 of 6,553,600 bytes). The two-screen alternative was rejected partly
 on flash headroom, so the real delta belongs on the record.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add docs/file-formats.md .claude/CONTEXT.md
+git add docs/file-formats.md .claude/CONTEXT.md CHANGELOG.md
 git commit -m "docs(library): CLX1 is version 2 now, and the core is upstream's
 
 The adopted core writes format version 2 where this fork wrote 3. Validation is
