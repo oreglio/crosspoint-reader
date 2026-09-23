@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "activities/Activity.h"
+#include "activities/tasks/TaskKeepAwake.h"
 #include "tasks/TaskOpQueue.h"
 #include "tasks/TaskRecord.h"
 
@@ -35,6 +36,10 @@ class TaskDetailActivity final : public Activity {
   TaskDetailActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const char* taskId);
 
   void onEnter() override;
+  // « Garder l'ecran allume » choisi dans la liste vaut aussi ici, le temps de
+  // lire une note (TaskKeepAwake.h). Rien ne tourne : horloge basse permise.
+  bool preventAutoSleep() override { return task_keep_awake::active; }
+  bool allowPowerSavingWhileAwake() const override { return true; }
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;

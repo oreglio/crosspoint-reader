@@ -52,8 +52,8 @@ Holding **Confirm** on a task (about a second) opens its menu: **Tick** (or
 **Reopen**), **View**, **Edit** (title, then priority), **Keep screen on**,
 **Task text size** (the same setting as in Settings, applied on the spot),
 **Delete** and, last, **Sync tasks**. **Keep screen on** stops the device from
-going to sleep while the list is on screen; leaving the list turns it off
-again. Deleting asks for confirmation first; the task disappears at once
+going to sleep while you stay in Tasks (the list and a task's page); leaving
+Tasks turns it off again. Deleting asks for confirmation first; the task disappears at once
 and the next sync deletes it on the server too. **Sync tasks** from this menu
 comes back to the list when the sync screen closes.
 

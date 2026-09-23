@@ -122,7 +122,7 @@ void TaskListActivity::onEnter() {
   uiTarget.setFont(fui::GfxRendererTarget::FONT_BODY, listFontId);
 
   showDone = false;
-  keepAwake = false;
+  task_keep_awake::active = false;
   notice = StatusNotice::None;
   dirty = true;
   rebuildOrder();
@@ -409,7 +409,7 @@ void TaskListActivity::openTaskMenu(const int index) {
         options.emplace_back(tr(STR_TASK_MENU_EDIT));
         break;
       case MenuAction::KeepAwake:
-        options.emplace_back(keepAwake ? tr(STR_TASK_MENU_ALLOW_SLEEP) : tr(STR_TASK_MENU_KEEP_AWAKE));
+        options.emplace_back(task_keep_awake::active ? tr(STR_TASK_MENU_ALLOW_SLEEP) : tr(STR_TASK_MENU_KEEP_AWAKE));
         break;
       case MenuAction::TextSize:
         options.emplace_back(tr(STR_TASK_FONT_SIZE));
@@ -439,7 +439,7 @@ void TaskListActivity::openTaskMenu(const int index) {
       case MenuAction::KeepAwake:
         // Pour la visite seulement : onEnter() le remet a faux, donc quitter la
         // liste rend la veille, et la batterie ne paie jamais un oubli.
-        keepAwake = !keepAwake;
+        task_keep_awake::active = !task_keep_awake::active;
         break;
       case MenuAction::TextSize:
         chooseTextSize();

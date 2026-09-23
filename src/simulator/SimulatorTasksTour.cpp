@@ -91,6 +91,18 @@ constexpr TourStep kSteps[] = {
 };
 constexpr size_t kStepCount = sizeof(kSteps) / sizeof(kSteps[0]);
 
+// CROSSINK_SIMULATOR_TASKS_TOUR=keepawake : active « Garder l'ecran allume »
+// par le menu, puis laisse l'appareil inactif ; l'appelant regarde si le
+// journal annonce une mise en veille. Pas d'etape Finish : c'est l'appelant
+// qui arrete le simulateur, apres le delai de veille.
+constexpr TourStep kKeepAwakeSteps[] = {
+    {"list", Act::OpenList, Button::Confirm}, {"hold", Act::Hold, Button::Confirm},
+    {"down-1", Act::Tap, Button::Down},       {"down-2", Act::Tap, Button::Down},
+    {"down-3", Act::Tap, Button::Down},       {"toggle", Act::Tap, Button::Confirm},
+    {"detail", Act::Tap, Button::Right},
+};
+constexpr size_t kKeepAwakeStepCount = sizeof(kKeepAwakeSteps) / sizeof(kKeepAwakeSteps[0]);
+
 constexpr unsigned long kStartMs = 3500;
 constexpr unsigned long kPeriodMs = 1300;
 
@@ -157,6 +169,8 @@ void openList() {
 void runSimulatorTasksTourTick() {
   static bool initialized = false;
   static bool active = false;
+  static const TourStep* steps = kSteps;
+  static size_t stepCount = kStepCount;
   static size_t fired = 0;  // etapes dont l'action a ete lancee
   // Un front d'entree doit durer UNE trame : injecte, il reste vrai a chaque
   // boucle jusqu'a ce qu'on l'efface. Par le temps, il durait ~20 trames et
@@ -167,7 +181,18 @@ void runSimulatorTasksTourTick() {
   if (!initialized) {
     initialized = true;
     active = enabled();
-    if (active) LOG_INF("TOUR", "tasks tour enabled, %u steps", static_cast<unsigned>(kStepCount));
+    const char* mode = std::getenv("CROSSINK_SIMULATOR_TASKS_TOUR");
+    if (mode != nullptr && std::strncmp(mode, "keepawake", 9) == 0) {
+      steps = kKeepAwakeSteps;
+      // « keepawake-control » : meme parcours sans la validation finale, le
+      // temoin qui doit, lui, s'endormir.
+      // « keepawake-detail » : puis ouvre le detail d'une tache (l'option doit
+      // y valoir aussi) ; « keepawake » s'arrete sur la liste.
+      stepCount = std::strcmp(mode, "keepawake-control") == 0  ? kKeepAwakeStepCount - 2
+                  : std::strcmp(mode, "keepawake-detail") == 0 ? kKeepAwakeStepCount
+                                                               : kKeepAwakeStepCount - 1;
+    }
+    if (active) LOG_INF("TOUR", "tasks tour enabled, %u steps", static_cast<unsigned>(stepCount));
   }
   if (!active) return;
 
@@ -176,13 +201,13 @@ void runSimulatorTasksTourTick() {
 
   const size_t index = (now - kStartMs) / kPeriodMs;
   const unsigned long phase = (now - kStartMs) % kPeriodMs;
-  if (index >= kStepCount) return;
+  if (index >= stepCount) return;
 
   if (index >= fired) {
     // Nouvelle etape : lancer son action une seule fois.
     fired = index + 1;
     tapStage = 0;
-    const TourStep& step = kSteps[index];
+    const TourStep& step = steps[index];
     LOG_INF("TOUR", "step %u %s", static_cast<unsigned>(index), step.name);
     if (index == 0) {
       applyRequestedLanguage();
@@ -235,7 +260,7 @@ void runSimulatorTasksTourTick() {
   if (tapStage == 1) {
     tapStage = 2;
     mappedInputManager.simulatorClearInputFrame();
-    mappedInputManager.simulatorInjectRelease(kSteps[index].button);
+    mappedInputManager.simulatorInjectRelease(steps[index].button);
   } else if (tapStage == 2) {
     tapStage = 0;
     mappedInputManager.simulatorClearInputFrame();

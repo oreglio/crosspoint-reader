@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "activities/UiListActivity.h"
+#include "activities/tasks/TaskKeepAwake.h"
 #include "activities/tasks/TaskListModel.h"
 #include "components/OptionPopup.h"
 #include "tasks/TaskRecord.h"
@@ -41,7 +42,7 @@ class TaskListActivity final : public UiListActivity {
   // liste est au premier plan. Rien ne tourne pendant ce temps, donc le
   // processeur peut descendre a son horloge basse entre deux gestes, comme
   // pour le compte a rebours (CountdownActivity).
-  bool preventAutoSleep() override { return keepAwake; }
+  bool preventAutoSleep() override { return task_keep_awake::active; }
   bool allowPowerSavingWhileAwake() const override { return true; }
 
  protected:
@@ -102,7 +103,6 @@ class TaskListActivity final : public UiListActivity {
   int openCount = 0;
   int doneCount = 0;
   bool showDone = false;
-  bool keepAwake = false;
   // Police de la liste, choisie par le reglage « Taille du texte des taches ».
   int listFontId = 0;
   static int taskListFontId();
