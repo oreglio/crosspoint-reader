@@ -210,6 +210,34 @@ size_t taskOpToLine(const TaskOp& op, char* out, size_t outSize) {
   return pos;
 }
 
+size_t taskOpToRecord(const TaskOp& op, char* out, size_t outSize) {
+  if (outSize < 3) return 0;
+  out[0] = '\n';
+  // taskOpToLine() pose un terminateur apres la ligne : il est ecrase par le
+  // '\n' final, d'ou la place d'un octet gardee en fin de tampon.
+  const size_t len = taskOpToLine(op, out + 1, outSize - 2);
+  if (len == 0) return 0;
+  out[1 + len] = '\n';
+  return len + 2;
+}
+
+bool TaskOpLineSplitter::feed(const char byte, TaskOp& out) {
+  if (byte == '\r') return false;  // jamais ecrit par la file, tolere en lecture
+  if (byte != '\n') {
+    if (len_ < sizeof(line_)) {
+      line_[len_++] = byte;
+    } else {
+      overflow_ = true;
+    }
+    return false;
+  }
+  const bool usable = !overflow_ && len_ > 0 && taskOpFromLine(line_, len_, out);
+  lastTooLong_ = overflow_;
+  len_ = 0;
+  overflow_ = false;
+  return usable;
+}
+
 bool taskOpFromLine(const char* line, const size_t len, TaskOp& out) {
   OpSink sink;
   const JsonCallbacks cb{&sink,  opKey,         opString,    opNumber,     opBool,

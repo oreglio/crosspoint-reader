@@ -182,20 +182,11 @@ void TaskSyncActivity::runSync() {
 
   // Les lignes recues grossissent `records` depuis le rappel TLS : sa capacite
   // est portee a MAX_TASKS maintenant, avant toute connexion, quand le tas est
-  // au mieux (voir TaskStore::reserveForSync). reserve() aborte en cas
-  // d'echec, d'ou la verification prealable. La marge couvre l'en-tete et
-  // l'alignement de l'allocateur ; la marge TLS, elle, est reverifiee par la
-  // garde "before request" une fois ce bloc pris.
-  if (!TASK_STORE.hasSyncCapacity()) {
-    constexpr uint32_t RECORDS_BYTES = MAX_TASKS * sizeof(TaskRecord);
-    constexpr uint32_t ALLOCATOR_MARGIN = 1024;
-    if (ESP.getMaxAllocHeap() < RECORDS_BYTES + ALLOCATOR_MARGIN) {
-      LOG_ERR(TAG, "No contiguous block for the task index: need %u, largest %u", RECORDS_BYTES + ALLOCATOR_MARGIN,
-              ESP.getMaxAllocHeap());
-      fail(Failure::LowMemory);
-      return;
-    }
-    TASK_STORE.reserveForSync();
+  // au mieux (voir TaskStore::reserveFullCapacity). La marge TLS, elle, est
+  // reverifiee par la garde "before request" une fois ce bloc pris.
+  if (!TASK_STORE.reserveFullCapacity()) {
+    fail(Failure::LowMemory);
+    return;
   }
 
   Storage.mkdir(TaskStore::stagedNotesDir());
@@ -409,38 +400,42 @@ TaskSyncActivity::Failure TaskSyncActivity::runRound(freeink::SecureHttpClient& 
   // ------------------------------------------------------------ succes
   // Ordre choisi pour qu'une coupure a n'importe quel point laisse un etat
   // que la sync suivante repare d'elle-meme :
-  //  1. l'index (tmp puis remplacement, promu au chargement s'il le faut) —
-  //     s'il ne s'ecrit pas, rien d'autre ne change et le curseur est efface ;
-  //  2. les notes (sur reset, les anciennes d'abord) — un echec arrete le tour
+  //  1. le compteur d'ops acquittees EN PREMIER — un 2xx complet prouve que le
+  //     serveur a accepte la tranche, quoi qu'il arrive ensuite a la carte, et
+  //     ces ops ne doivent plus repartir (leur rejeu ecraserait une
+  //     modification faite entre-temps sur le web). S'il ne s'ecrit pas, rien
+  //     d'autre ne change ;
+  //  2. l'index (tmp puis remplacement, promu au chargement s'il le faut) —
+  //     s'il ne s'ecrit pas, le curseur est efface, et l'instantane complet de
+  //     la sync suivante reflete deja les ops acquittees ;
+  //  3. les notes (sur reset, les anciennes d'abord) — un echec arrete le tour
   //     sans avancer le curseur, et le serveur renverra les lignes et leurs
   //     notes ;
-  //  3. le compteur d'ops acquittees — ces ops ne repartiront plus ;
   //  4. le curseur en dernier — tant qu'il n'a pas avance, le serveur renvoie
   //     les memes lignes.
   // La file d'ops, elle, n'est videe qu'apres le dernier tour (runSync).
   LOG_INF(TAG, "Heap before commit: %u free, %u max alloc", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  if (!TASK_STORE.writeAckedOps(opsOffset + opsSent)) {
+    TASK_STORE.discardStaged();
+    rollBackRoundRejections();
+    return Failure::StorageFailed;
+  }
+  // A partir d'ici les ops du tour sont acquittees et ne repartiront plus :
+  // leurs rejets doivent rester affiches, meme si la suite echoue.
   if (!TASK_STORE.saveIndex()) {
     LOG_ERR(TAG, "Could not save the task index; nothing applied, cursor dropped");
     TASK_STORE.discardStaged();
     // Etat de l'index inconnu : sans curseur, la prochaine sync repart d'un
     // instantane complet, qui le reconstruit quel qu'il soit.
     TASK_STORE.clearCursor();
-    rollBackRoundRejections();
     return Failure::StorageFailed;
   }
   bool notesOk = roundReset_ ? TASK_STORE.clearAllNotes() : true;
   notesOk = TASK_STORE.commitStagedNotes() && notesOk;
   if (!notesOk) {
     LOG_ERR(TAG, "Synced notes not all in place; the cursor stays so the server resends them");
-    rollBackRoundRejections();
     return Failure::StorageFailed;
   }
-  if (!TASK_STORE.writeAckedOps(opsOffset + opsSent)) {
-    rollBackRoundRejections();
-    return Failure::StorageFailed;
-  }
-  // A partir d'ici les ops du tour sont acquittees et ne repartiront plus :
-  // leurs rejets doivent rester affiches, meme si la suite echoue.
   received_ += roundReceived_;
   if (!TASK_STORE.writeCursor(roundCursor_)) {
     LOG_ERR(TAG, "Could not save the cursor; dropping it for a full snapshot next time");

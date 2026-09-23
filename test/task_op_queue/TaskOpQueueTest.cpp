@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "StreamingJsonParser.h"
 #include "TaskOpQueue.h"
@@ -177,4 +178,77 @@ TEST(TaskOpQueue, RefusesMoreThanFiftyOpsEvenWithRoomToSpare) {
   // Mais exactement 50 doit passer, preuve que la limite est bien 50 et non
   // un effet de bord du test precedent.
   EXPECT_GT(taskOpsToRequestBody(many, TASK_MAX_OPS_PER_SYNC, "", body, sizeof(body)), 0u);
+}
+
+namespace {
+TaskOp doneOp(const char* id, bool done) {
+  TaskOp op{};
+  op.kind = TaskOpKind::Done;
+  std::snprintf(op.id, sizeof(op.id), "%s", id);
+  op.done = done;
+  return op;
+}
+
+std::string recordOf(const TaskOp& op) {
+  char buf[TASK_OP_RECORD_MAX];
+  const size_t n = taskOpToRecord(op, buf, sizeof(buf));
+  return std::string(buf, n);
+}
+
+// Ce que la file rend d'un contenu donne, octet par octet comme TaskStore.
+std::vector<TaskOp> splitQueue(const std::string& content) {
+  std::vector<TaskOp> ops;
+  TaskOpLineSplitter splitter;
+  TaskOp op{};
+  for (const char c : content) {
+    if (splitter.feed(c, op)) ops.push_back(op);
+  }
+  return ops;
+}
+}  // namespace
+
+// Un enregistrement coupe par une coupure de courant (ou dont un write a ete
+// refuse) laisse un fragment sans '\n' final. L'op ajoutee ensuite doit
+// survivre : c'est celle d'un geste que l'utilisateur a vu reussir.
+TEST(TaskOpQueue, TornRecordDoesNotSwallowTheNextOp) {
+  const std::string torn = recordOf(doneOp("w17ab93c2", true));
+  const std::string next = recordOf(doneOp("d0000abc1", false));
+  const std::string content = torn.substr(0, torn.size() / 2) + next;
+
+  const std::vector<TaskOp> ops = splitQueue(content);
+  ASSERT_EQ(ops.size(), 1u);
+  EXPECT_STREQ(ops[0].id, "d0000abc1");
+  EXPECT_FALSE(ops[0].done);
+}
+
+// Toutes les coupures possibles : l'op suivante n'est jamais perdue. L'op
+// coupee n'est rendue que si sa ligne entiere a atteint la carte (la coupure
+// n'a emporte que son '\n' final, que le '\n' de tete suivant remplace).
+TEST(TaskOpQueue, NextOpSurvivesACutAtEveryByte) {
+  const std::string torn = recordOf(addOp("w17ab93c2", "Racheter du cafe", 0));
+  const std::string next = recordOf(doneOp("d0000abc1", true));
+  for (size_t cut = 0; cut <= torn.size(); cut++) {
+    const std::vector<TaskOp> ops = splitQueue(torn.substr(0, cut) + next);
+    const bool lineComplete = cut >= torn.size() - 1;
+    ASSERT_EQ(ops.size(), lineComplete ? 2u : 1u) << "cut at " << cut;
+    EXPECT_STREQ(ops.back().id, "d0000abc1") << "cut at " << cut;
+    if (lineComplete) EXPECT_STREQ(ops.front().id, "w17ab93c2") << "cut at " << cut;
+  }
+}
+
+TEST(TaskOpQueue, TrailingFragmentIsNeverReplayed) {
+  const std::string full = recordOf(doneOp("w17ab93c2", true));
+  EXPECT_TRUE(splitQueue(full.substr(0, full.size() - 1)).empty());
+  EXPECT_EQ(splitQueue(full).size(), 1u);
+}
+
+// Une priorite hors des trois valeurs connues (carte editee a la main, ou
+// format a venir) revient a normale plutot que d'atteindre le serveur telle
+// quelle.
+TEST(TaskOpQueue, OutOfRangePriorityFallsBackToNormal) {
+  const char line[] = "{\"op\":\"prio\",\"id\":\"d0000abc1\",\"priority\":7}";
+  TaskOp back{};
+  ASSERT_TRUE(taskOpFromLine(line, sizeof(line) - 1, back));
+  EXPECT_EQ(back.kind, TaskOpKind::Prio);
+  EXPECT_EQ(back.priority, TASK_PRIORITY_NORMAL);
 }

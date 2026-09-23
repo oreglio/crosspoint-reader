@@ -71,8 +71,10 @@ void TaskPairActivity::onEnter() {
   // AVANT toute lecture du secret : rien ne charge ce store au demarrage, et
   // hasSecret()/readSecret() ne le chargent pas. Sans cet appel, apres un
   // redemarrage, l'ecran voyait un secret vide, en tirait un neuf et ecrasait
-  // l'appairage existant en silence. Hors du verrou : lecture SD.
-  TASK_STORE.ensureLoaded();
+  // l'appairage existant en silence. Le secret seul, pas l'index : cet ecran
+  // n'en lit rien, et ensureLoaded() laisserait ses ~26 Ko en RAM jusqu'au
+  // redemarrage. Hors du verrou : lecture SD.
+  TASK_STORE.ensureSecretLoaded();
   {
     RenderLock lock(*this);
     computeLayout();
@@ -96,8 +98,7 @@ void TaskPairActivity::onExit() {
   qrPayload.shrink_to_fit();
   hintLines.clear();
   hintLines.shrink_to_fit();
-  // Surtout PAS TASK_STORE.unload() : ensureLoaded() a charge l'index, et c'est
-  // TaskListActivity qui possede son dechargement.
+  // Rien a decharger : onEnter() n'a lu que le secret, jamais l'index.
   Activity::onExit();
 }
 

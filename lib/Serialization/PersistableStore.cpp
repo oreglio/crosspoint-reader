@@ -29,7 +29,7 @@ class BufferedFilePrint : public Print {
     return 1;
   }
   // ArduinoJson hands over whole chunks when the destination accepts them.
-  size_t write(const uint8_t* data, size_t len) {
+  size_t write(const uint8_t* data, size_t len) override {
     for (size_t i = 0; i < len; i++) write(data[i]);
     return len;
   }
@@ -90,9 +90,15 @@ bool PersistableStoreBase::replaceWithTmp(const char* tmpPath, const char* path)
   return true;
 }
 
-void PersistableStoreBase::recoverReplacedFile(const char* path, const char* tmpPath) {
+void PersistableStoreBase::recoverReplacedFile(const char* path, const char* tmpPath,
+                                               bool (*parses)(const char* path)) {
   if (!Storage.exists(tmpPath)) return;
   if (Storage.exists(path)) {
+    Storage.remove(tmpPath);
+    return;
+  }
+  if (parses != nullptr && !parses(tmpPath)) {
+    LOG_ERR("PERSIST", "Dropping %s: it does not parse", tmpPath);
     Storage.remove(tmpPath);
     return;
   }

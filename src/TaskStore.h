@@ -31,7 +31,7 @@ inline constexpr size_t TASK_CURSOR_BUF = 40;
  *
  * Tous les fichiers que la sync reecrit (index, curseur, compteur d'ops
  * acquittees, secret) passent par un fichier .tmp puis un remplacement, et
- * loadFromFile() promeut un .tmp orphelin. Un index illisible au chargement
+ * loadFromFile() promeut un .tmp orphelin s'il se lit. Un index illisible au chargement
  * efface le curseur : la sync suivante repart d'un instantane complet au lieu
  * d'un delta qui laisserait manquer toutes les taches plus anciennes.
  */
@@ -62,6 +62,11 @@ class TaskStore : public PersistableStore<TaskStore> {
   // les .tmp orphelins, lit le secret, puis delegue au chargement standard.
   // Un index absent ou illisible efface le curseur (voir l'en-tete).
   bool loadFromFile();
+  // Relit SEULEMENT le fichier du secret, sans l'index : l'ecran d'appairage
+  // n'a besoin de rien d'autre, et charger l'index lui laisserait ses ~26 Ko
+  // en RAM pour le reste de la session, lecture comprise. Ne marque pas le
+  // store charge : un lecteur de l'index fait toujours ensureLoaded().
+  void ensureSecretLoaded();
   // Ecriture sure de l'index (voir PersistableStoreBase::writeDocToFileAtomic).
   bool saveIndex() const;
 
@@ -76,10 +81,11 @@ class TaskStore : public PersistableStore<TaskStore> {
   //
   // RIEN ne charge ce store a un demarrage NORMAL (pour ne pas payer ces 26 Ko
   // pendant la lecture) ; seul le demarrage reseau TASK_SYNC le charge, dans
-  // main.cpp. Tout autre LECTEUR doit appeler ensureLoaded() lui-meme :
-  // hasSecret() et readSecret() ne le font pas, et sur un store jamais charge
-  // ils repondent « pas de secret » alors que la carte en contient un. C'est ainsi que l'ecran d'appairage desappairait
-  // l'appareil apres un redemarrage.
+  // main.cpp. Tout autre LECTEUR doit appeler ensureLoaded() lui-meme, ou
+  // ensureSecretLoaded() s'il ne lit que le secret : hasSecret() et
+  // readSecret() ne chargent rien, et sur un store jamais charge ils repondent
+  // « pas de secret » alors que la carte en contient un. C'est ainsi que
+  // l'ecran d'appairage desappairait l'appareil apres un redemarrage.
   //
   // ATTENTION aux ecrivains : toute methode qui appelle saveIndex()
   // reserialise `records`, donc ecrire dans un store decharge ecraserait
@@ -89,7 +95,10 @@ class TaskStore : public PersistableStore<TaskStore> {
   // serait relu par le prochain ensureLoaded(), qui ecraserait leur resultat.
   void unload();
   void replaceAll(std::vector<TaskRecord> next);
-  void upsert(const TaskRecord& rec);
+  // False si l'enregistrement est refuse (id malforme, plafond) ou si l'index
+  // n'a pas pu etre ecrit — la RAM porte alors deja le changement, pas la
+  // carte : l'appelant le dit a l'ecran.
+  bool upsert(const TaskRecord& rec);
   void remove(const char* id);
   const TaskRecord* find(const char* id) const;
 
@@ -98,9 +107,13 @@ class TaskStore : public PersistableStore<TaskStore> {
   // TASK_MAX_OPS_PER_SYNC ops par requete et lit les suivantes par tranches,
   // sans toucher au fichier avant d'avoir tout envoye.
   size_t readOps(TaskOp* out, size_t max, size_t skip = 0) const;
-  // Efface le compteur d'ops acquittees AVANT la file : dans l'autre ordre,
-  // une coupure entre les deux laisserait un compteur perime qui ferait sauter
-  // les prochaines ops ajoutees — des coches perdues sans un mot.
+  // Vrai s'il reste en file une op que le serveur n'a pas encore acceptee.
+  // Lit la carte : jamais depuis le rendu.
+  bool hasPendingOps() const;
+  // Efface la file AVANT le compteur d'ops acquittees. Une coupure entre les
+  // deux laisse un compteur sans file, que loadFromFile() et appendOp() jettent
+  // avant tout ajout : il ne fait donc jamais sauter d'op. Dans l'autre ordre,
+  // la meme coupure laissait une file sans compteur, rejouee en entier.
   void clearOps();
   // Nombre d'ops en tete de file que le serveur a deja acceptees : une sync en
   // plusieurs tranches l'ecrit a chaque tour valide, et la suivante s'en sert
@@ -138,14 +151,15 @@ class TaskStore : public PersistableStore<TaskStore> {
   // echec, discardStaged() relit la carte et jette les notes en attente.
   static const char* stagedNotesDir() { return "/.crosspoint/tasks/ns"; }
   static bool stagedNotePath(const char* id, char* out, size_t size);
-  // Porte la capacite de `records` a MAX_TASKS en une fois. Les stage*()
-  // tournent dans le rappel de reception TLS, ou un push_back qui realloue
-  // ferait un `new` nu de jusqu'a 43 Ko — et aborterait. stageUpsert() refuse
-  // au-dela de MAX_TASKS, donc apres cet appel aucune reallocation n'est
-  // possible. reserve() aborte lui-meme en cas d'echec : l'APPELANT verifie
-  // d'abord ESP.getMaxAllocHeap().
-  void reserveForSync();
-  bool hasSyncCapacity() const { return records.capacity() >= MAX_TASKS; }
+  // Porte la capacite de `records` a MAX_TASKS en une fois, ou rend false sans
+  // rien allouer si le tas n'a pas de bloc contigu assez grand. fromJson()
+  // reserve le nombre exact de taches chargees, donc le premier ajout
+  // reallouerait au double par un `new` qui aborte (jusqu'a 43 Ko pendant que
+  // l'ancien bloc vit encore). stageUpsert() refuse au-dela de MAX_TASKS, donc
+  // apres cet appel aucune reallocation n'est possible. Deux appelants : la
+  // sync, avant la connexion (les stage*() tournent dans le rappel TLS), et la
+  // creation d'une tache, avant d'ouvrir le clavier.
+  bool reserveFullCapacity();
   void stageReset();
   bool stageUpsert(const TaskRecord& rec);
   bool stageRemove(const char* id);

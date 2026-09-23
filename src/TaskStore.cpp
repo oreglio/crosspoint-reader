@@ -1,5 +1,6 @@
 #include "TaskStore.h"
 
+#include <Arduino.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <ObfuscationUtils.h>
@@ -16,12 +17,6 @@
 namespace {
 
 constexpr char TAG[] = "TASKS";
-
-// Pire cas mesure sur taskOpToLine() pour un op "add" (le seul qui cumule
-// titre echappe et priorite) : entete+id (~30) + titre echappe 2*200 o (411)
-// + priorite (15) + accolade finale (2) = 458 o. La marge couvre une legere
-// derive du format sans reserver une pile de taille disproportionnee.
-constexpr size_t TASK_OP_LINE_BUF = 512;
 
 // Meme plafond que le protocole de sync (TaskSyncReader::TASK_SYNC_CURSOR_MAX) :
 // duplique ici plutot qu'inclus pour ne pas coupler le stockage local au
@@ -108,35 +103,48 @@ void removeIfExists(const char* path) {
   if (Storage.exists(path)) Storage.remove(path);
 }
 
-// Parcourt la file avec les regles de lecture de readOps() : ligne sans '\n'
-// final ou trop longue ignoree, seules les ops valides sont remises. `visit`
-// rend false pour arreter.
+// Controles de promotion d'un .tmp orphelin (recoverReplacedFile) : chacun
+// applique la regle de lecture de son fichier. Un .tmp qui ne se lit pas est
+// jete plutot que promu ; pour son lecteur, c'est la meme absence.
+bool indexParses(const char* path) {
+  JsonDocument doc;
+  return PersistableStoreBase::readDocFromFile(path, doc);
+}
+
+bool cursorParses(const char* path) {
+  char buf[TASK_CURSOR_BUF];
+  return readSmallFile(path, buf, sizeof(buf)) && TaskStore::isSafeCursor(buf);
+}
+
+bool ackedOpsParse(const char* path) {
+  char buf[16];
+  if (!readSmallFile(path, buf, sizeof(buf))) return false;
+  char* end = nullptr;
+  std::strtoul(buf, &end, 10);
+  return end != buf && *end == '\0';
+}
+
+bool secretParses(const char* path) {
+  char buf[128];
+  if (!readSmallFile(path, buf, sizeof(buf))) return false;
+  obfuscation::DecodeStatus status = obfuscation::DecodeStatus::INVALID;
+  std::string plaintext = obfuscation::deobfuscateFromBase64(buf, &status);
+  std::fill(plaintext.begin(), plaintext.end(), '\0');
+  return status == obfuscation::DecodeStatus::VALIDATED || status == obfuscation::DecodeStatus::LEGACY;
+}
+
+// Parcourt la file avec les regles de TaskOpLineSplitter : seules les ops
+// valides sont remises. `visit` rend false pour arreter.
 void forEachQueuedOp(const char* path, bool (*visit)(void* ctx, TaskOp& op), void* ctx) {
   HalFile file;
   if (!Storage.openFileForRead(TAG, path, file)) return;
-  char line[TASK_OP_LINE_BUF];
-  size_t lineLen = 0;
-  bool overflow = false;
+  TaskOpLineSplitter splitter;
   TaskOp op;
   while (file.available()) {
     const int byte = file.read();
     if (byte < 0) break;
-    if (byte == '\r') continue;  // jamais ecrit par appendOp, tolere en lecture
-    if (byte != '\n') {
-      if (lineLen < sizeof(line)) {
-        line[lineLen++] = static_cast<char>(byte);
-      } else {
-        overflow = true;
-      }
-      continue;
-    }
-    // Une ligne sans '\n' final (coupure en plein write) n'atteint jamais ce
-    // point : elle reste dans le tampon et n'est donc jamais rejouee comme un
-    // op valide aux champs par defaut.
-    const bool usable = !overflow && lineLen > 0 && taskOpFromLine(line, lineLen, op);
-    if (overflow) LOG_ERR(TAG, "Skipping an ops line too long to parse");
-    lineLen = 0;
-    overflow = false;
+    const bool usable = splitter.feed(static_cast<char>(byte), op);
+    if (splitter.lastLineTooLong()) LOG_ERR(TAG, "Skipping an ops line too long to parse");
     if (usable && !visit(ctx, op)) break;
   }
   file.close();
@@ -152,22 +160,14 @@ bool TaskStore::loadFromFile() {
   // PersistableStoreBase::writeDocToFile).
   Storage.mkdir(notesDir());
 
-  recoverReplacedFile(getFilePath(), indexTmpPath());
-  recoverReplacedFile(cursorPath(), cursorTmpPath());
-  recoverReplacedFile(ackedOpsPath(), ackedOpsTmpPath());
-  recoverReplacedFile(secretPath(), secretTmpPath());
+  recoverReplacedFile(getFilePath(), indexTmpPath(), indexParses);
+  recoverReplacedFile(cursorPath(), cursorTmpPath(), cursorParses);
+  recoverReplacedFile(ackedOpsPath(), ackedOpsTmpPath(), ackedOpsParse);
   // Un compteur sans file est un clearOps() interrompu : il ferait sauter les
   // prochaines ops ajoutees.
   if (!Storage.exists(opsPath())) removeIfExists(ackedOpsPath());
 
-  // Le secret a son propre fichier : il ne depend jamais de la lecture de
-  // l'index. Un secret illisible reste vide, ce qui se lit « non appaire ».
-  char secretBuf[128];
-  if (readSmallFile(secretPath(), secretBuf, sizeof(secretBuf))) {
-    secretObfuscated = secretBuf;
-  } else {
-    secretObfuscated.clear();
-  }
+  ensureSecretLoaded();
 
   const bool ok = PersistableStore<TaskStore>::loadFromFile();
   if (!ok) {
@@ -177,6 +177,18 @@ bool TaskStore::loadFromFile() {
     clearCursor();
   }
   return ok;
+}
+
+void TaskStore::ensureSecretLoaded() {
+  recoverReplacedFile(secretPath(), secretTmpPath(), secretParses);
+  // Le secret a son propre fichier : il ne depend jamais de la lecture de
+  // l'index. Un secret illisible reste vide, ce qui se lit « non appaire ».
+  char secretBuf[128];
+  if (readSmallFile(secretPath(), secretBuf, sizeof(secretBuf))) {
+    secretObfuscated = secretBuf;
+  } else {
+    secretObfuscated.clear();
+  }
 }
 
 bool TaskStore::saveIndex() const {
@@ -263,10 +275,10 @@ void TaskStore::replaceAll(std::vector<TaskRecord> next) {
   // relu par le prochain ensureLoaded(), qui ecraserait ce remplacement.
   ensureLoaded();
   // upsert() et fromJson() refusent deja un id malforme ; replaceAll() n'a
-  // aujourd'hui qu'un seul appelant (TaskSyncReader, deja valide en amont),
-  // mais la defense en profondeur cesse d'etre theorique des qu'un deuxieme
-  // appelant existe (la remise a zero complete a venir). Rejeter en silence
-  // serait pire que la faille : un seul log resume ce qui a saute.
+  // aujourd'hui qu'un seul appelant, la visite simulateur (la sync passe par
+  // les stage*()), mais la defense en profondeur ne coute rien et vaut pour
+  // tout appelant a venir. Rejeter en silence serait pire que la faille : un
+  // seul log resume ce qui a saute.
   const size_t before = next.size();
   next.erase(std::remove_if(next.begin(), next.end(), [](const TaskRecord& r) { return !isValidTaskId(r.id); }),
              next.end());
@@ -282,15 +294,33 @@ void TaskStore::replaceAll(std::vector<TaskRecord> next) {
   saveIndex();
 }
 
-void TaskStore::upsert(const TaskRecord& rec) {
-  if (stageUpsert(rec)) saveIndex();
+bool TaskStore::upsert(const TaskRecord& rec) {
+  if (!stageUpsert(rec)) return false;
+  if (!saveIndex()) {
+    LOG_ERR(TAG, "Could not save the task index after an edit of %s", rec.id);
+    return false;
+  }
+  return true;
 }
 
 void TaskStore::remove(const char* id) {
   if (stageRemove(id)) saveIndex();
 }
 
-void TaskStore::reserveForSync() { records.reserve(MAX_TASKS); }
+bool TaskStore::reserveFullCapacity() {
+  if (records.capacity() >= MAX_TASKS) return true;
+  // La marge couvre l'en-tete et l'alignement de l'allocateur.
+  constexpr uint32_t RECORDS_BYTES = MAX_TASKS * sizeof(TaskRecord);
+  constexpr uint32_t ALLOCATOR_MARGIN = 1024;
+  const uint32_t largest = ESP.getMaxAllocHeap();
+  if (largest < RECORDS_BYTES + ALLOCATOR_MARGIN) {
+    LOG_ERR(TAG, "No contiguous block for the task index: need %u, largest %u",
+            static_cast<unsigned>(RECORDS_BYTES + ALLOCATOR_MARGIN), static_cast<unsigned>(largest));
+    return false;
+  }
+  records.reserve(MAX_TASKS);
+  return true;
+}
 
 bool TaskStore::stageUpsert(const TaskRecord& rec) {
   // saveIndex() reserialise tout `records` : ecrire dans un store decharge
@@ -347,8 +377,8 @@ const TaskRecord* TaskStore::find(const char* id) const {
 }
 
 bool TaskStore::appendOp(const TaskOp& op) {
-  char line[TASK_OP_LINE_BUF];
-  const size_t len = taskOpToLine(op, line, sizeof(line));
+  char record[TASK_OP_RECORD_MAX];
+  const size_t len = taskOpToRecord(op, record, sizeof(record));
   if (len == 0) {
     LOG_ERR(TAG, "Op too large to serialize; dropped rather than written truncated");
     return false;
@@ -358,16 +388,18 @@ bool TaskStore::appendOp(const TaskOp& op) {
   // sauter cette op a la prochaine sync : on le jette avant d'ajouter.
   if (!Storage.exists(opsPath())) removeIfExists(ackedOpsPath());
 
-  // Ouverture en ajout : un seul petit write, jamais une reecriture de toute
-  // la file. Un tick doit couter une ecriture, pas un rechargement complet —
-  // une coupure ne doit alors perdre que cette ligne.
+  // Ouverture en ajout, et UN seul write pour tout l'enregistrement : un tick
+  // coute une ecriture, pas une reecriture de la file. Une coupure (ou un
+  // write refuse) peut laisser un fragment de cette ligne sans '\n' final ;
+  // le '\n' de tete de l'enregistrement suivant le laisse seul sur sa ligne,
+  // que la lecture rejette. Seule l'op interrompue est perdue, jamais la
+  // suivante (voir taskOpToRecord).
   HalFile file = Storage.open(opsPath(), O_WRONLY | O_CREAT | O_APPEND);
   if (!file) {
     LOG_ERR(TAG, "Could not open the ops queue for append");
     return false;
   }
-  bool ok = file.write(line, len) == len;
-  if (ok) ok = file.write("\n", 1) == 1;
+  const bool ok = file.write(record, len) == len;
   file.close();
   if (!ok) LOG_ERR(TAG, "Failed to append op to the queue");
   return ok;
@@ -398,6 +430,11 @@ size_t TaskStore::readOps(TaskOp* out, size_t max, size_t skip) const {
   return ctx.count;
 }
 
+bool TaskStore::hasPendingOps() const {
+  TaskOp first;
+  return readOps(&first, 1, readAckedOps()) > 0;
+}
+
 bool TaskStore::findQueuedTitle(const char* id, char* out, size_t size) const {
   if (id == nullptr || out == nullptr || size == 0) return false;
   out[0] = '\0';
@@ -424,14 +461,14 @@ bool TaskStore::findQueuedTitle(const char* id, char* out, size_t size) const {
 }
 
 void TaskStore::clearOps() {
-  // Le compteur d'abord : voir la declaration.
-  removeIfExists(ackedOpsTmpPath());
-  if (Storage.exists(ackedOpsPath()) && !Storage.remove(ackedOpsPath())) {
-    LOG_ERR(TAG, "Failed to clear the acknowledged-ops count; keeping the queue");
+  // La file d'abord : voir la declaration.
+  if (Storage.exists(opsPath()) && !Storage.remove(opsPath())) {
+    LOG_ERR(TAG, "Failed to clear the ops queue file; keeping the acknowledged-ops count");
     return;
   }
-  if (Storage.exists(opsPath()) && !Storage.remove(opsPath())) {
-    LOG_ERR(TAG, "Failed to clear the ops queue file");
+  removeIfExists(ackedOpsTmpPath());
+  if (Storage.exists(ackedOpsPath()) && !Storage.remove(ackedOpsPath())) {
+    LOG_ERR(TAG, "Failed to clear the acknowledged-ops count");
   }
 }
 

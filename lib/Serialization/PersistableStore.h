@@ -76,8 +76,10 @@ class PersistableStoreBase {
   // Load-time half of the replace above. A tmpPath without its target is a
   // replace interrupted between remove and rename: promote it. A tmpPath
   // beside its target is a write interrupted before the remove: the target is
-  // still the last good copy, so drop the tmp.
-  static void recoverReplacedFile(const char* path, const char* tmpPath);
+  // still the last good copy, so drop the tmp. When `parses` is given, an
+  // orphaned tmpPath it rejects is dropped instead of promoted: a first-ever
+  // write cut mid-way leaves a partial tmp with no target beside it.
+  static void recoverReplacedFile(const char* path, const char* tmpPath, bool (*parses)(const char* path) = nullptr);
 };
 
 /**
