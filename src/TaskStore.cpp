@@ -208,6 +208,9 @@ void TaskStore::toJson(JsonDocument& doc) const {
     obj["p"] = rec.priority;
     obj["d"] = rec.done;
     obj["n"] = rec.noteBytes;
+    // Absent tant que le serveur n'a pas classe la tache : un index sans "o"
+    // (y compris d'avant l'ordre manuel) se relit en TASK_ORDER_UNSET.
+    if (rec.order != TASK_ORDER_UNSET) obj["o"] = rec.order;
   }
 }
 
@@ -255,6 +258,8 @@ bool TaskStore::fromJson(JsonVariantConst doc) {
     rec.done = obj["d"] | false;
     const long noteBytes = obj["n"] | 0L;
     rec.noteBytes = (noteBytes < 0 || noteBytes > UINT16_MAX) ? 0 : static_cast<uint16_t>(noteBytes);
+    const long order = obj["o"] | static_cast<long>(TASK_ORDER_UNSET);
+    rec.order = (order < 0 || order >= TASK_ORDER_UNSET) ? TASK_ORDER_UNSET : static_cast<uint16_t>(order);
     records.push_back(rec);
   }
 

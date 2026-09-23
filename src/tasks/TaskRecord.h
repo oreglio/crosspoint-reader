@@ -22,22 +22,22 @@ struct TaskRecord {
   uint8_t priority;
   bool done;
   uint16_t noteBytes;
+  // Rang manuel DANS la priorite, pose par le serveur (glisser-deposer du web).
+  // TASK_ORDER_UNSET : pas encore classee — tache creee ou changee de priorite
+  // sur l'appareil, ou index d'avant l'ordre manuel. Elle se range alors au
+  // bout de son groupe jusqu'a ce qu'une sync lui rende son rang.
+  uint16_t order;
 };
 
-// Ordre d'affichage : les ouvertes d'abord, par priorité croissante (0 = haute),
-// puis l'id pour que le tri soit total — deux tâches de même priorité ne doivent
-// jamais changer de place d'un rendu à l'autre.
-//
-// doneA/doneB séparés de a.done/b.done : l'écran de liste doit pouvoir trier
-// une tâche cochée pendant la visite en cours comme si elle était encore
-// ouverte (elle reste en place, atténuée, jusqu'à la sortie de l'écran) sans
-// construire une copie de TaskRecord par comparaison rien que pour forcer ce
-// bit — sizeof(TaskRecord) est 216 octets, et un comparateur de tri en copie
-// deux par appel.
-inline bool taskOrderBefore(const TaskRecord& a, const TaskRecord& b, bool doneA, bool doneB) {
-  if (doneA != doneB) return !doneA;
+inline constexpr uint16_t TASK_ORDER_UNSET = 0xFFFF;
+
+// Ordre d'affichage : les ouvertes d'abord, par priorite croissante (0 = haute),
+// puis le rang manuel du web, puis l'id pour que le tri soit total — deux
+// taches de meme rang ne doivent jamais changer de place d'un rendu a l'autre.
+// Le serveur trie pareil (TaskDb.listAll : priorite, position, id).
+inline bool taskOrderBefore(const TaskRecord& a, const TaskRecord& b) {
+  if (a.done != b.done) return !a.done;
   if (a.priority != b.priority) return a.priority < b.priority;
+  if (a.order != b.order) return a.order < b.order;
   return std::strcmp(a.id, b.id) < 0;
 }
-
-inline bool taskOrderBefore(const TaskRecord& a, const TaskRecord& b) { return taskOrderBefore(a, b, a.done, b.done); }

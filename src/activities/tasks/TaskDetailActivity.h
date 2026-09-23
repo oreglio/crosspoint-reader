@@ -70,7 +70,7 @@ class TaskDetailActivity final : public Activity {
   std::string taskId;
   // Copie, pas un pointeur dans le vecteur du store : upsert() remplace en
   // place pour un id existant, mais s'appuyer sur ca a distance est une
-  // reference pendante qui attend son jour. 216 octets dans une activite qui
+  // reference pendante qui attend son jour. 218 octets dans une activite qui
   // vit sur le tas.
   TaskRecord record{};
   bool hasRecord = false;

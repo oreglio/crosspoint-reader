@@ -71,6 +71,7 @@ struct FieldSink {
   long schema = -1;
   long priority = TASK_PRIORITY_NORMAL;
   long noteBytes = 0;
+  long order = TASK_ORDER_UNSET;
   bool done = false;
   bool deleted = false;
   bool more = false;
@@ -156,13 +157,15 @@ void sinkNumber(void* ctx, const char* v, size_t len) {
       slot = &f->priority;
     else if (keyIs(f, "noteBytes"))
       slot = &f->noteBytes;
+    else if (keyIs(f, "order"))
+      slot = &f->order;
     else if (keyIs(f, "schema"))
       slot = &f->schema;
   }
   f->key[0] = '\0';
   // Les autres nombres ne nous servent pas : `count` est informatif, et refuser
   // la réponse parce qu'il serait écrit autrement casserait la synchro pour
-  // rien. Seuls les trois champs dont on se sert doivent être des entiers.
+  // rien. Seuls les quatre champs dont on se sert doivent être des entiers.
   if (slot == nullptr) return;
   char buf[16];
   if (!copyBounded(buf, sizeof(buf), v, len)) {
@@ -384,6 +387,8 @@ void TaskSyncReader::parseTaskLine(size_t len) {
                      : TASK_PRIORITY_NORMAL;
   rec.done = sink.done;
   rec.noteBytes = static_cast<uint16_t>(noteBytes);
+  // Hors de 0..65534 (ou absent : serveur d'avant l'ordre manuel) : pas classee.
+  rec.order = (sink.order >= 0 && sink.order < TASK_ORDER_UNSET) ? static_cast<uint16_t>(sink.order) : TASK_ORDER_UNSET;
   if (cb_.onTask != nullptr) cb_.onTask(cb_.ctx, rec);
 
   beginNoteBlock(rec.id, noteBytes);

@@ -74,7 +74,7 @@ class TaskStore : public PersistableStore<TaskStore> {
   bool fromJson(JsonVariantConst doc);
 
   const std::vector<TaskRecord>& all() const { return records; }
-  // Rend vraiment la memoire de l'index (jusqu'a 120 x 216 octets = ~26 Ko,
+  // Rend vraiment la memoire de l'index (jusqu'a 120 x 218 octets = ~26 Ko,
   // 7 % de la RAM d'un C3) et arme le prochain ensureLoaded() pour qu'il
   // relise la carte. Seul TaskListActivity::onExit() l'appelle : c'est le seul
   // detenteur d'indices dans ce vecteur.

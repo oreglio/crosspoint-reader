@@ -82,6 +82,23 @@ TEST(TaskSyncReader, ReadsHeaderAndOneTaskWithoutNote) {
   EXPECT_TRUE(r.isComplete());
 }
 
+TEST(TaskSyncReader, ReadsTheManualOrderAndTreatsAMissingOneAsUnset) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body =
+      kHeader +
+      "{\"id\":\"w00000001\",\"title\":\"A\",\"priority\":1,\"done\":false,\"noteBytes\":0,\"order\":3}\n"
+      "{\"id\":\"w00000002\",\"title\":\"B\",\"priority\":1,\"done\":false,\"noteBytes\":0}\n"
+      "{\"id\":\"w00000003\",\"title\":\"C\",\"priority\":1,\"done\":false,\"noteBytes\":0,\"order\":70000}\n";
+  r.feed(body.data(), body.size());
+
+  ASSERT_EQ(cap.tasks.size(), 3u);
+  EXPECT_EQ(cap.tasks[0].order, 3);
+  EXPECT_EQ(cap.tasks[1].order, TASK_ORDER_UNSET);  // serveur d'avant l'ordre manuel
+  EXPECT_EQ(cap.tasks[2].order, TASK_ORDER_UNSET);  // hors de 16 bits : pas classee
+  EXPECT_FALSE(r.hasError());
+}
+
 TEST(TaskSyncReader, ReadsARawNoteBlockAfterItsMetadataLine) {
   Capture cap;
   TaskSyncReader r(callbacks(cap));

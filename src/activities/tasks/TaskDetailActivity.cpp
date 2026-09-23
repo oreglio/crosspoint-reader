@@ -511,6 +511,8 @@ void TaskDetailActivity::editPriority() {
 
                            TaskRecord next = record;
                            next.priority = priority;
+                           // Au bout du nouveau groupe, comme sur le serveur.
+                           next.order = TASK_ORDER_UNSET;
                            TaskOp op{};
                            op.kind = TaskOpKind::Prio;
                            std::snprintf(op.id, sizeof(op.id), "%s", next.id);

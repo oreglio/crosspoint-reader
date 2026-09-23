@@ -20,7 +20,7 @@
 //
 // Ne detient AUCUNE copie de l'index : `order` et TaskListRow::recordIndex
 // indexent directement TASK_STORE.all(). Une copie membre doublait le pic a
-// ~52 Ko (2 x 120 x 216 octets) pendant la visite. onEnter() charge le store
+// ~52 Ko (2 x 120 x 218 octets) pendant la visite. onEnter() charge le store
 // (rien ne le charge a un demarrage normal) et onExit() appelle
 // TaskStore::unload(), donc apres la sortie de l'ecran l'index ne reste pas
 // resident, pendant la lecture d'un livre comprise.

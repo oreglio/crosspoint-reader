@@ -430,6 +430,9 @@ void TaskListActivity::editTaskPriority(const std::string& id) {
 
         TaskRecord next = *current;
         next.priority = priority;
+        // Le serveur la range au bout de son nouveau groupe ; d'ici la sync,
+        // elle s'y range aussi.
+        next.order = TASK_ORDER_UNSET;
         TaskOp op{};
         op.kind = TaskOpKind::Prio;
         std::snprintf(op.id, sizeof(op.id), "%s", next.id);
@@ -691,6 +694,8 @@ void TaskListActivity::askPriorityForNewTask(std::string title) {
         rec.priority = TASK_PRIORITY_CHOICES[choice->index];
         rec.done = false;
         rec.noteBytes = 0;
+        // Pas encore classee : au bout de sa priorite jusqu'a la sync.
+        rec.order = TASK_ORDER_UNSET;
 
         TaskOp op{};
         op.kind = TaskOpKind::Add;
