@@ -49,9 +49,15 @@ void silentRestartToReader(bool cleanImageBaseOnEntry = false);  // currently-op
 // the fast restart but apply the user's frontlight wake preference.
 void silentRestartAfterNetwork();
 void silentRestartToReaderAfterNetwork(bool cleanImageBaseOnEntry = false);
+// Home-target restart that lands on the task list instead of Home, so a sync
+// started from the list returns where the user asked for it.
+void silentRestartToTaskListAfterNetwork();
 // Reboots immediately after an activity releases exclusive raw storage.
 void restartToHomeAfterStorageHandoff();
 void silentRestartToNetwork(NetworkBootTarget target, uint32_t payload = 0);
+// Payload for NetworkBootTarget::TASK_SYNC: return to the task list when the
+// sync screen closes (default is Home, the Settings entry point's behaviour).
+inline constexpr uint32_t TASK_SYNC_RETURN_TO_LIST = 1;
 void silentRestartToManageFonts();
 
 void armSilentRestartReaderPageBuild(const std::string& bookPath, uint16_t spineIndex, uint16_t targetPage,

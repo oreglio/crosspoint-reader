@@ -370,6 +370,7 @@ constexpr uint32_t SILENT_REBOOT_TARGET_HOME = 0;
 constexpr uint32_t SILENT_REBOOT_TARGET_READER = 1;
 constexpr uint32_t SILENT_REBOOT_READER_CLEAN_IMAGE_BASE = 1U << 0;
 constexpr uint32_t SILENT_REBOOT_FOLLOW_LIGHT_WAKE_POLICY = 1U << 1;
+constexpr uint32_t SILENT_REBOOT_OPEN_TASK_LIST = 1U << 2;
 constexpr uint32_t SILENT_READER_PAGE_BUILD_MAGIC = 0xC1EAB017;
 constexpr uint32_t SILENT_READER_PAGE_BUILD_AUTO_TURN = 1U << 0;
 constexpr uint32_t NETWORK_RENDER_TASK_STACK_BYTES = 8192;
@@ -426,6 +427,11 @@ void silentRestart() { silentRestartToHome(0, "target=home"); }
 
 void silentRestartAfterNetwork() {
   silentRestartToHome(SILENT_REBOOT_FOLLOW_LIGHT_WAKE_POLICY, "target=home after network");
+}
+
+void silentRestartToTaskListAfterNetwork() {
+  silentRestartToHome(SILENT_REBOOT_FOLLOW_LIGHT_WAKE_POLICY | SILENT_REBOOT_OPEN_TASK_LIST,
+                      "target=task list after network");
 }
 
 void restartToHomeAfterStorageHandoff() {
@@ -1600,7 +1606,8 @@ void setup() {
         break;
       }
       case NetworkBootTarget::TASK_SYNC: {
-        auto taskSyncActivity = makeUniqueNoThrow<TaskSyncActivity>(renderer, mappedInputManager);
+        auto taskSyncActivity = makeUniqueNoThrow<TaskSyncActivity>(
+            renderer, mappedInputManager, (snapshotPayload & TASK_SYNC_RETURN_TO_LIST) != 0);
         if (taskSyncActivity) {
           activityManager.replaceActivity(std::move(taskSyncActivity));
           launched = true;
@@ -1625,7 +1632,14 @@ void setup() {
     // X4's HALF refresh is the same single-pass clean transition already used
     // by network screens. Keep X3's existing full refresh behavior unchanged.
     const auto homeRefreshMode = gpio.deviceIsX3() ? HalDisplay::FULL_REFRESH : HalDisplay::HALF_REFRESH;
-    activityManager.goHome(HomeMenuItem::NONE, homeRefreshMode);
+    if ((snapshotPayload & SILENT_REBOOT_OPEN_TASK_LIST) != 0) {
+      // A sync started from the task list comes back to it. The list is a
+      // root activity there too (HomeActivity::onTasksOpen replaces), so Back
+      // still reaches Home the usual way.
+      activityManager.goToTaskList();
+    } else {
+      activityManager.goHome(HomeMenuItem::NONE, homeRefreshMode);
+    }
   } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
     // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity

@@ -90,8 +90,8 @@ const char* rejectionReasonText(const char* reason) {
 
 }  // namespace
 
-TaskSyncActivity::TaskSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-    : Activity("TaskSync", renderer, mappedInput) {}
+TaskSyncActivity::TaskSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const bool returnToTaskList)
+    : Activity("TaskSync", renderer, mappedInput), returnToTaskList_(returnToTaskList) {}
 
 void TaskSyncActivity::onEnter() {
   Activity::onEnter();
@@ -114,7 +114,11 @@ void TaskSyncActivity::onExit() {
   }
   // Lance depuis un demarrage reseau minimal : redemarrer restaure l'appli
   // complete et efface la fragmentation du tas laissee par la session Wi-Fi.
-  silentRestart();
+  if (returnToTaskList_) {
+    silentRestartToTaskListAfterNetwork();
+  } else {
+    silentRestart();
+  }
 #endif
 }
 

@@ -29,7 +29,9 @@ class SecureHttpClient;
 // dernier tour reussi.
 class TaskSyncActivity final : public Activity {
  public:
-  explicit TaskSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
+  // returnToTaskList : lancee depuis le menu de la liste, la sync y ramene a la
+  // fermeture ; depuis les Parametres, elle ramene a l'accueil comme avant.
+  TaskSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool returnToTaskList = false);
 
   void onEnter() override;
   void onExit() override;
@@ -40,6 +42,7 @@ class TaskSyncActivity final : public Activity {
   bool preventAutoSleep() override { return state_ == State::SYNCING || state_ == State::DONE; }
 
  private:
+  const bool returnToTaskList_;
   enum class State : uint8_t { WIFI_SELECTION, SYNCING, DONE, FAILED };
 
   enum class Failure : uint8_t {
