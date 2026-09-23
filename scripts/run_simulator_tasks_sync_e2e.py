@@ -22,7 +22,7 @@ La propriete verifiee sur chaque echec : RIEN de persiste ne change (index,
 notes, curseur, file d'ops, compteur d'acquittement, secret), a la seule
 exception documentee d'un 400, qui efface le curseur.
 
-  scripts/run_simulator_tasks_sync_e2e.py --crossdrop ../crossdrop [--no-build] [--keep DIR]
+  scripts/run_simulator_tasks_sync_e2e.py --crossdrop ../../crossdrop [--no-build] [--keep DIR]
 
 Sortie : PASS/FAIL par scenario ; code de sortie non nul si un seul echoue.
 """

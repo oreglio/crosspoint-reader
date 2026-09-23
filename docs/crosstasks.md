@@ -19,8 +19,8 @@ when you ask.
 ## The List
 
 The header shows how many tasks are still open. Open tasks are sorted high
-priority first, then normal, then low. High-priority titles are in bold; that
-is the only priority marker. Long titles wrap over two lines.
+priority first, then normal, then low. High-priority titles are in bold until
+the task is done; that is the only priority marker. Long titles wrap over two lines.
 
 | Button | Action |
 | --- | --- |
@@ -43,9 +43,11 @@ Normal or Low). Cancelling either step creates nothing. The list holds up to
 opening the keyboard.
 
 The line under the header reads *Pairing required* until the device is paired
-with a server, *All done* when every task is finished, and *Up to date*
-otherwise. If a change cannot be written to the card, it reads *Could not save*
-and nothing is changed.
+with a server, *All done* when every task is finished, *Not synced yet* while
+changes made on the device wait for the next sync, and *Up to date* otherwise.
+If a change cannot be written to the card, it reads *Could not save*. If the
+device is too short of memory to add a task, **Left** shows *Not enough memory*
+instead of opening the keyboard; restart the device and try again.
 
 ## A Task's Page
 
@@ -94,10 +96,11 @@ the server's. It ends on a summary: tasks received, sent and in total, plus
 any change the server refused and why (for example, a task that was deleted on
 the server).
 
-If a sync fails for any reason, nothing on the card changes and your pending
-changes are kept. The next sync resumes where the last one stopped, without
-sending the already accepted changes twice. A very large backlog may end on
-*Sync incomplete*; run the sync again to finish it.
+If a sync fails for any reason, your pending changes are never lost: they stay
+queued, and the next sync resumes where the last one stopped, without sending
+the already accepted changes twice. An interrupted sync may already have
+applied part of the server's changes; the next sync completes them. A very
+large backlog may end on *Sync incomplete*; run the sync again to finish it.
 
 The failure screen says what went wrong: Wi-Fi not connected, no server URL
 set, device not paired (*Pair again from Settings*), server unreachable, a
