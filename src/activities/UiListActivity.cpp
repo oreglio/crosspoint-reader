@@ -104,14 +104,14 @@ void UiListActivity::navigateButtons() {
 }
 
 void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, const bool hasSubtitle,
-                                      const int16_t extraRowGap) {
+                                      const int16_t extraRowGap, const int16_t rowHeightDelta) {
   // uiListRowHeight returns the theme token on touch hardware and the denser,
   // UI-scale-aware per-theme metric on button devices (X3/X4), so lists fit as
   // many rows per screen as they did before the FreeInkUI migration.
   // props.rowHeight is set explicitly either way: screen.list() would
   // otherwise substitute the (touch-friendly) theme token, not this value.
   const auto rowType = hasSubtitle ? UiListRowType::WithSubtitle : UiListRowType::SingleLine;
-  const int16_t rowHeight = uiListRowHeight(screen.theme(), rowType);
+  const int16_t rowHeight = static_cast<int16_t>(uiListRowHeight(screen.theme(), rowType) + rowHeightDelta);
   props.rowHeight = rowHeight;
   const int16_t rowGap = static_cast<int16_t>(screen.theme().listRowGap + extraRowGap);
   if (extraRowGap > 0) props.rowGap = rowGap;

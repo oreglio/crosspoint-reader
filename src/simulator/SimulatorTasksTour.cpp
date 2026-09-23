@@ -111,6 +111,10 @@ void applyRequestedTheme() {
   if (spacing != nullptr && spacing[0] >= '0' && spacing[0] <= '2') {
     SETTINGS.taskRowSpacing = static_cast<uint8_t>(spacing[0] - '0');
   }
+  const char* font = std::getenv("CROSSINK_SIMULATOR_TASKS_FONT");
+  if (font != nullptr && font[0] >= '0' && font[0] <= '2') {
+    SETTINGS.taskFontSize = static_cast<uint8_t>(font[0] - '0');
+  }
 }
 
 // Le francais est la langue ou les libelles debordent : c'est lui qu'il faut

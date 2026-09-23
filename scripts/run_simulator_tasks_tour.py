@@ -85,7 +85,7 @@ def seed(fs: Path) -> None:
     (tasks / "n" / f"{NOTE_ID}.txt").write_text(NOTE)
 
 
-def run_theme(name: str, lang: str, out: Path, spacing: int = 0) -> list[Path]:
+def run_theme(name: str, lang: str, out: Path, spacing: int = 0, font: int = 0) -> list[Path]:
     work = Path(tempfile.mkdtemp(prefix=f"tour-{name}-{lang}-"))
     seed(work / "fs_")
     shots = [(i, s) for i, s in enumerate(STEPS) if s[0].isdigit()]
@@ -94,7 +94,8 @@ def run_theme(name: str, lang: str, out: Path, spacing: int = 0) -> list[Path]:
     )
     env = dict(os.environ, SDL_VIDEODRIVER="dummy", CROSSINK_SIMULATOR_TASKS_TOUR="1",
                CROSSINK_SIMULATOR_TASKS_THEME=str(THEMES[name]), CROSSINK_SIMULATOR_TASKS_LANG=str(LANGS[lang]),
-               CROSSINK_SIMULATOR_TASKS_SPACING=str(spacing), CROSSPOINT_SIM_SCREENSHOTS=schedule)
+               CROSSINK_SIMULATOR_TASKS_SPACING=str(spacing), CROSSINK_SIMULATOR_TASKS_FONT=str(font),
+               CROSSPOINT_SIM_SCREENSHOTS=schedule)
     timeout = (START_MS + len(STEPS) * PERIOD_MS) / 1000 + 15
     log = work / "run.log"
     with log.open("w") as fh:
@@ -108,7 +109,7 @@ def run_theme(name: str, lang: str, out: Path, spacing: int = 0) -> list[Path]:
     if proc.returncode != 0:
         print(f"  !! sortie {proc.returncode}, journal : {log}", file=sys.stderr)
     produced = []
-    dest = out / (f"{lang}-{name}" + (f"-spacing{spacing}" if spacing else ""))
+    dest = out / (f"{lang}-{name}" + (f"-spacing{spacing}" if spacing else "") + (f"-font{font}" if font else ""))
     dest.mkdir(parents=True, exist_ok=True)
     for _, s in shots:
         bmp = work / f"{s}.bmp"
@@ -130,6 +131,7 @@ def main() -> int:
     ap.add_argument("--langs", default="fr,en")
     ap.add_argument("--no-build", dest="build", action="store_false")
     ap.add_argument("--spacing", type=int, choices=(0, 1, 2), default=0, help="reglage Espacement des taches")
+    ap.add_argument("--font", type=int, choices=(0, 1, 2), default=0, help="reglage Taille du texte des taches")
     args = ap.parse_args()
     if args.build and subprocess.run(["pio", "run", "-e", "simulator"], cwd=ROOT).returncode != 0:
         return 1
@@ -141,7 +143,7 @@ def main() -> int:
     for lang in args.langs.split(","):
         for name in args.themes.split(","):
             print(f"{lang} / {name}...", flush=True)
-            total += len(run_theme(name.strip(), lang.strip(), out, args.spacing))
+            total += len(run_theme(name.strip(), lang.strip(), out, args.spacing, args.font))
     print(f"{total} captures dans {out}")
     return 0
 

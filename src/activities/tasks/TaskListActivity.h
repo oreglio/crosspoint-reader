@@ -101,6 +101,9 @@ class TaskListActivity final : public UiListActivity {
   int doneCount = 0;
   bool showDone = false;
   bool keepAwake = false;
+  // Police de la liste, choisie par le reglage « Taille du texte des taches ».
+  int listFontId = 0;
+  static int taskListFontId();
   bool dirty = true;
   // Erreur a montrer en toast par-dessus la liste : une ecriture refusee par
   // la file d'ops, une creation refusee au plafond, ou le tas trop fragmente.

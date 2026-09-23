@@ -81,8 +81,11 @@ class UiListActivity : public Activity, protected UiAppHost {
   // reste juste. Un ecart plutot qu'une hauteur : le SDK n'agrandit une ligne
   // enroulee que si ses lignes de texte debordent rowHeight, donc une hauteur
   // gonflee laissait les titres sur deux lignes plus serres que les autres.
+  // rowHeightDelta : ajustement de la hauteur de ligne quand un ecran lie une
+  // autre police a sa liste (difference de hauteur de ligne avec la police de
+  // base), pour que le texte garde le meme air qu'a la taille normale.
   void syncListViewport(UiScreen& screen, freeink::ui::ListProps& props, bool hasSubtitle = false,
-                        int16_t extraRowGap = 0);
+                        int16_t extraRowGap = 0, int16_t rowHeightDelta = 0);
   // Move the selection to index and pull the viewport to it.
   void moveSelectionTo(int index);
 

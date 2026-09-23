@@ -19,6 +19,7 @@
 #include "activities/util/KeyboardEntryActivity.h"
 #include "activities/util/OptionSelectionActivity.h"
 #include "components/TouchHeaderBackButton.h"
+#include "components/UIScale.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
 #include "tasks/TaskOpQueue.h"
@@ -77,6 +78,20 @@ fui::BitmapRef taskBullet(const bool done) {
 }
 }  // namespace
 
+int TaskListActivity::taskListFontId() {
+  // Au-dessus de l'Inter 12, les polices d'interface s'arretent : les deux
+  // tailles suivantes sont les Lexend Deca integrees, celles des notes de
+  // l'ecran de detail, toutes deux avec leur gras (taches prioritaires).
+  switch (SETTINGS.taskFontSize) {
+    case 1:
+      return LEXENDDECA_14_FONT_ID;
+    case 2:
+      return LEXENDDECA_16_FONT_ID;
+    default:
+      return uiScaleSpec().bodyFontId;
+  }
+}
+
 TaskListActivity::TaskListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     // Appui long tactile : les lignes portent InputLongPress (buildRows), qui
     // ouvre le menu de la tache comme l'appui long sur Confirmer.
@@ -96,6 +111,13 @@ void TaskListActivity::onEnter() {
   // PersistableStore::ensureLoaded().
   TASK_STORE.ensureLoaded();
   pendingOps = TASK_STORE.hasPendingOps();
+
+  // Reglage « Taille du texte des taches » : la liste seule change de police,
+  // en reliant l'emplacement BODY de CET ecran (meme mecanisme que
+  // LibraryListActivity pour SMALL) ; en-tete, pied et popup gardent la leur.
+  // Relu a chaque entree : un reglage change entre deux visites s'applique.
+  listFontId = taskListFontId();
+  uiTarget.setFont(fui::GfxRendererTarget::FONT_BODY, listFontId);
 
   showDone = false;
   keepAwake = false;
@@ -176,7 +198,13 @@ void TaskListActivity::buildRows(UiScreen& screen) {
   // taille d'UI.
   static constexpr int kSpacingPx[] = {0, 10, 20};
   const uint8_t spacing = SETTINGS.taskRowSpacing < 3 ? SETTINGS.taskRowSpacing : 0;
-  syncListViewport(screen, props, /*hasSubtitle=*/false, UiThemeTokensDetail::scaledListMetric(kSpacingPx[spacing]));
+  // Une police plus grande (ou plus petite) decale la hauteur de ligne d'autant
+  // que sa hauteur de ligne differe de la police de base : meme air au-dessus
+  // et au-dessous du texte qu'a la taille normale.
+  const int16_t fontDelta =
+      static_cast<int16_t>(renderer.getLineHeight(listFontId) - renderer.getLineHeight(uiScaleSpec().bodyFontId));
+  syncListViewport(screen, props, /*hasSubtitle=*/false, UiThemeTokensDetail::scaledListMetric(kSpacingPx[spacing]),
+                   fontDelta);
 
   const size_t cap = static_cast<size_t>(nav.visibleRows > 0 ? nav.visibleRows : 1);
   if (winItems.capacity() < cap) winItems.reserve(cap);

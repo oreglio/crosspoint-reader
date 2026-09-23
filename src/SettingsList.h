@@ -890,6 +890,9 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         StrId::STR_TASK_SPACING, &CrossPointSettings::taskRowSpacing,
         {StrId::STR_TASK_SPACING_COMPACT, StrId::STR_TASK_SPACING_COMFORTABLE, StrId::STR_TASK_SPACING_SPACIOUS},
         "taskRowSpacing", StrId::STR_TASK_TITLE));
+    add(SettingInfo::Enum(StrId::STR_TASK_FONT_SIZE, &CrossPointSettings::taskFontSize,
+                          {StrId::STR_TASK_FONT_NORMAL, StrId::STR_TASK_FONT_LARGE, StrId::STR_TASK_FONT_XLARGE},
+                          "taskFontSize", StrId::STR_TASK_TITLE));
 
     // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
     add(SettingInfo::DynamicString(
@@ -1461,11 +1464,12 @@ inline std::vector<SettingInfo> buildSystemLibrarySettingsList(const std::vector
   return settings;
 }
 
-// Espacement, appairage et sync des taches : l'activation et l'URL du serveur
+// Taille du texte, espacement, appairage et sync des taches : l'activation et l'URL du serveur
 // restent sur la carte Tasks du portail web, ou se tape une URL.
 inline std::vector<SettingInfo> buildSystemTasksSettingsList(const std::vector<SettingInfo>& allSettings) {
   std::vector<SettingInfo> settings;
-  settings.reserve(3);
+  settings.reserve(4);
+  addSettingByName(settings, allSettings, StrId::STR_TASK_FONT_SIZE);
   addSettingByName(settings, allSettings, StrId::STR_TASK_SPACING);
   settings.push_back(SettingInfo::Action(StrId::STR_TASK_PAIR, SettingAction::TaskPair));
   settings.push_back(SettingInfo::Action(StrId::STR_TASK_SYNC, SettingAction::TaskSync));
