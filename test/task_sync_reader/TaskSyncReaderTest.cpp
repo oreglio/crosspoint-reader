@@ -567,7 +567,7 @@ TEST(TaskSyncOutcome, OnlyAFullyAcceptedSuccessMayCommit) {
   EXPECT_EQ(classifyTaskSyncResponse(401, true, true), TaskSyncOutcome::PairingRequired);
   EXPECT_EQ(classifyTaskSyncResponse(-1, false, false), TaskSyncOutcome::TransportFailed);
   EXPECT_EQ(classifyTaskSyncResponse(0, false, false), TaskSyncOutcome::ServerError);
-  for (const int code : {199, 301, 400, 403, 413, 500, 502, 503}) {
+  for (const int code : {199, 300, 301, 400, 403, 413, 500, 502, 503}) {
     EXPECT_EQ(classifyTaskSyncResponse(code, true, true), TaskSyncOutcome::ServerError) << code;
   }
 }
@@ -589,5 +589,39 @@ TEST(TaskSyncOutcome, ATruncatedBodyIsNeverCommittable) {
     if (atFrameBoundary) {
       EXPECT_TRUE(cut == kHeader.size() || cut == body.size()) << "cut " << cut;
     }
+  }
+}
+
+// Un 200 au corps vide (proxy, Content-Length: 0) ou arrete avant la fin de
+// l'en-tete ne dit rien du serveur : le classer complet menerait a clearOps()
+// sur une reponse qui n'a rien accepte. C'est sawHeader_ qui l'empeche.
+TEST(TaskSyncOutcome, AnEmptyOrHeaderlessBodyIsNeverComplete) {
+  {
+    Capture cap;
+    TaskSyncReader r(callbacks(cap));
+    EXPECT_FALSE(r.isComplete());
+    EXPECT_NE(classifyTaskSyncResponse(200, true, r.isComplete()), TaskSyncOutcome::Commit);
+  }
+  {
+    Capture cap;
+    TaskSyncReader r(callbacks(cap));
+    r.feed("", 0);
+    EXPECT_FALSE(r.isComplete());
+  }
+  // Des lignes vides seules : cadrage propre, mais aucun en-tete.
+  {
+    Capture cap;
+    TaskSyncReader r(callbacks(cap));
+    r.feed("\n\n", 2);
+    EXPECT_FALSE(r.hasError());
+    EXPECT_FALSE(r.isComplete());
+    EXPECT_NE(classifyTaskSyncResponse(200, true, r.isComplete()), TaskSyncOutcome::Commit);
+  }
+  // En-tete coupe avant son \n.
+  {
+    Capture cap;
+    TaskSyncReader r(callbacks(cap));
+    r.feed(kHeader.data(), kHeader.size() - 1);
+    EXPECT_FALSE(r.isComplete());
   }
 }
