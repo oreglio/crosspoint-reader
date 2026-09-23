@@ -27,7 +27,11 @@ namespace {
 
 using Button = MappedInputManager::Button;
 
-enum class Act : uint8_t { ColdPair, OpenList, Tap, SeedAllDone, SeedEmpty, OpenPair, Finish };
+enum class Act : uint8_t { ColdPair, OpenList, Tap, Hold, SeedAllDone, SeedEmpty, OpenPair, Finish };
+
+// Relache d'un Hold : au-dela du seuil de 800 ms de la liste, avant la capture
+// (kShotOffsetMs) pour que la popup soit deja peinte.
+constexpr unsigned long kHoldReleaseMs = 850;
 
 struct TourStep {
   const char* name;
@@ -46,7 +50,7 @@ constexpr TourStep kSteps[] = {
     {"00-pair-cold-boot", Act::ColdPair, Button::Confirm},
     {"01-list", Act::OpenList, Button::Confirm},
     {"move-down", Act::Tap, Button::Down},
-    {"02-ticked-in-place", Act::Tap, Button::Confirm},
+    {"02-ticked-sinks", Act::Tap, Button::Confirm},
     {"move-up", Act::Tap, Button::Up},
     {"03-done-row-selected", Act::Tap, Button::Up},
     {"04-done-expanded", Act::Tap, Button::Confirm},
@@ -56,6 +60,23 @@ constexpr TourStep kSteps[] = {
     // comme sur la liste, et Confirmer se lit « rouvrir » (« reopen »).
     {"05b-detail-ticked", Act::Tap, Button::Confirm},
     {"back-to-list", Act::Tap, Button::Back},
+    // Menu d'une tache par appui long, puis suppression confirmee : la tache
+    // disparait et le titre garde la marque d'envoi en attente.
+    {"13-task-menu", Act::Hold, Button::Confirm},
+    {"menu-down-1", Act::Tap, Button::Down},
+    {"menu-down-2", Act::Tap, Button::Down},
+    {"menu-down-3", Act::Tap, Button::Down},
+    {"14-menu-delete-selected", Act::Tap, Button::Down},
+    {"15-delete-confirm", Act::Tap, Button::Confirm},
+    // La confirmation s'ouvre sur Annuler, comme pour un livre : Bas d'abord.
+    {"confirm-down", Act::Tap, Button::Down},
+    {"16-deleted", Act::Tap, Button::Confirm},
+    // Modifier depuis le menu : le clavier s'ouvre sur le titre actuel.
+    {"menu-again", Act::Hold, Button::Confirm},
+    {"menu-edit-1", Act::Tap, Button::Down},
+    {"17-menu-edit-selected", Act::Tap, Button::Down},
+    {"18-edit-keyboard", Act::Tap, Button::Confirm},
+    {"leave-keyboard", Act::Tap, Button::Back},
     {"06-all-done", Act::SeedAllDone, Button::Confirm},
     {"07-empty", Act::SeedEmpty, Button::Confirm},
     {"08-add-keyboard", Act::Tap, Button::Left},
@@ -131,7 +152,7 @@ void runSimulatorTasksTourTick() {
   // boucle jusqu'a ce qu'on l'efface. Par le temps, il durait ~20 trames et
   // Confirmer basculait la tache une vingtaine de fois. D'ou un compteur de
   // trames : appui -> (trame suivante) relachement -> (suivante) trame propre.
-  static uint8_t tapStage = 0;  // 0 rien, 1 appui injecte, 2 relachement injecte
+  static uint8_t tapStage = 0;  // 0 rien, 1 appui injecte, 2 relachement injecte, 3-4 maintien
 
   if (!initialized) {
     initialized = true;
@@ -169,6 +190,10 @@ void runSimulatorTasksTourTick() {
         mappedInputManager.simulatorInjectPress(step.button);
         tapStage = 1;
         break;
+      case Act::Hold:
+        mappedInputManager.simulatorInjectPress(step.button);
+        tapStage = 3;
+        break;
       case Act::SeedAllDone:
         seedAllDone();
         openList();
@@ -186,6 +211,17 @@ void runSimulatorTasksTourTick() {
 
   // Chaque appel = une iteration de la boucle principale, apres
   // activityManager.loop() : ce qu'on injecte ici est vu par la boucle suivante.
+  if (tapStage == 3) {
+    // Front d'appui vu une seule fois, comme pour un Tap ; le bouton reste
+    // tenu (simulatorHeld) jusqu'a la relache.
+    tapStage = 4;
+    mappedInputManager.simulatorClearInputFrame();
+    return;
+  }
+  if (tapStage == 4) {
+    if (phase < kHoldReleaseMs) return;
+    tapStage = 1;
+  }
   if (tapStage == 1) {
     tapStage = 2;
     mappedInputManager.simulatorClearInputFrame();
@@ -194,7 +230,6 @@ void runSimulatorTasksTourTick() {
     tapStage = 0;
     mappedInputManager.simulatorClearInputFrame();
   }
-  (void)phase;
 }
 
 #endif

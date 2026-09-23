@@ -951,6 +951,7 @@ unsigned long MappedInputManager::getHeldTime() const {
     if (simulatorHeld[i] && simulatorPressStart[i] > 0) {
       heldTime = std::max(heldTime, now - simulatorPressStart[i]);
     }
+    if (simulatorReleased[i]) heldTime = std::max(heldTime, simulatorReleaseHeldMs[i]);
   }
 #endif
   return heldTime;
@@ -1114,6 +1115,7 @@ void MappedInputManager::simulatorInjectRelease(Button button) {
   const size_t idx = buttonIndex(button);
   simulatorPressed[idx] = false;
   simulatorReleased[idx] = true;
+  simulatorReleaseHeldMs[idx] = simulatorPressStart[idx] > 0 ? millis() - simulatorPressStart[idx] : 0;
   simulatorHeld[idx] = false;
 }
 

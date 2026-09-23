@@ -2,48 +2,15 @@
 
 #include <algorithm>
 
-namespace {
-
-bool isTickedHere(const std::vector<std::string>& tickedHere, const char* id) {
-  for (const auto& t : tickedHere) {
-    if (t == id) return true;
-  }
-  return false;
-}
-
-}  // namespace
-
-void buildTaskOrder(const std::vector<TaskRecord>& records, const std::vector<std::string>& tickedHere,
-                    std::vector<int>& order, int& openCount) {
+void buildTaskOrder(const std::vector<TaskRecord>& records, std::vector<int>& order, int& openCount) {
   order.clear();
   order.reserve(records.size());
   for (int i = 0; i < static_cast<int>(records.size()); ++i) order.push_back(i);
 
-  // "Fait" au sens du tri : vrai `.done`, sauf pour une tache cochee PENDANT
-  // cette visite, qui reste triee comme ouverte (elle reste en place,
-  // attenuee, jusqu'a la sortie de l'ecran). Precalcule une fois en O(n) --
-  // isTickedHere fait un parcours lineaire avec comparaison de string, donc
-  // l'appeler O(n log n) fois depuis le comparateur referait le meme travail
-  // en pire, sans compter qu'un comparateur qui copierait un TaskRecord
-  // (216 octets) par argument couterait ~432 octets de pile transitoires par
-  // comparaison. Le comparateur canonique (Tache 1) prend les deux drapeaux
-  // en parametres justement pour eviter cette copie.
-  std::vector<uint8_t> effectiveDone(records.size());
-  for (size_t i = 0; i < records.size(); ++i) {
-    effectiveDone[i] = (records[i].done && !isTickedHere(tickedHere, records[i].id)) ? 1 : 0;
-  }
-
-  // std::sort et non std::stable_sort : taskOrderBefore est un ordre TOTAL
-  // (le dernier depart est strcmp sur des ids uniques), donc la stabilite
-  // n'ajoute aucune garantie -- et std::stable_sort demande un tampon
-  // temporaire (~480 octets pour 120 int), une allocation evitable sur un C3
-  // sans PSRAM dans un chemin rejoue a chaque coche.
-  std::sort(order.begin(), order.end(), [&](int a, int b) {
-    return taskOrderBefore(records[a], records[b], effectiveDone[a] != 0, effectiveDone[b] != 0);
-  });
+  std::sort(order.begin(), order.end(), [&](int a, int b) { return taskOrderBefore(records[a], records[b]); });
 
   openCount = 0;
-  while (openCount < static_cast<int>(order.size()) && effectiveDone[order[openCount]] == 0) {
+  while (openCount < static_cast<int>(order.size()) && !records[order[openCount]].done) {
     ++openCount;
   }
 }

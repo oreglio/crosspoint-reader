@@ -272,6 +272,10 @@ class MappedInputManager {
   std::array<bool, BUTTON_COUNT> simulatorReleased{};
   std::array<bool, BUTTON_COUNT> simulatorHeld{};
   std::array<unsigned long, BUTTON_COUNT> simulatorPressStart{};
+  // Duree de l'appui qu'une relache injectee termine : sans elle, une action
+  // dispatchee a la relache selon getHeldTime() (menus par appui long) ne
+  // verrait jamais qu'un appui nul, simulatorHeld etant deja retombe.
+  std::array<unsigned long, BUTTON_COUNT> simulatorReleaseHeldMs{};
 #if CROSSINK_APP_CAP_TOUCH
   struct SimulatorTouch {
     bool pressed = false;

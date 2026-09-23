@@ -20,9 +20,8 @@ TaskRecord make(const char* id, const char* title, uint8_t priority, bool done =
 }  // namespace
 
 // --- buildTaskOrder ---------------------------------------------------------
-// Reuses taskOrderBefore (Task 1); these tests pin the ADDITIONAL rule this
-// file adds on top of it (tickedHere), plus a couple of sanity checks that
-// the canonical comparator is genuinely being called and not re-derived.
+// Reuses taskOrderBefore (Task 1); these are sanity checks that the canonical
+// comparator is genuinely being called and not re-derived.
 
 TEST(BuildTaskOrder, OpenFirstByPriorityThenId) {
   std::vector<TaskRecord> records = {
@@ -32,7 +31,7 @@ TEST(BuildTaskOrder, OpenFirstByPriorityThenId) {
   };
   std::vector<int> order;
   int openCount = 0;
-  buildTaskOrder(records, {}, order, openCount);
+  buildTaskOrder(records, order, openCount);
 
   ASSERT_EQ(order.size(), 3u);
   EXPECT_EQ(openCount, 3);
@@ -48,7 +47,7 @@ TEST(BuildTaskOrder, DoneTasksSinkAfterOpenOnesAndOpenCountExcludesThem) {
   };
   std::vector<int> order;
   int openCount = 0;
-  buildTaskOrder(records, {}, order, openCount);
+  buildTaskOrder(records, order, openCount);
 
   ASSERT_EQ(order.size(), 2u);
   EXPECT_EQ(openCount, 1);
@@ -56,54 +55,11 @@ TEST(BuildTaskOrder, DoneTasksSinkAfterOpenOnesAndOpenCountExcludesThem) {
   EXPECT_EQ(order[1], 0);  // w1 faite, en fin de liste
 }
 
-TEST(BuildTaskOrder, TickedHereStaysInPlaceInsteadOfSinking) {
-  // w1 est coche PENDANT cette visite : il doit rester tri comme une tache
-  // ouverte de priorite haute, pas tomber apres w2.
-  std::vector<TaskRecord> records = {
-      make("w1", "cochee a l'instant", 0, true),
-      make("w2", "ouverte normale", 1),
-  };
-  std::vector<int> order;
-  int openCount = 0;
-  buildTaskOrder(records, {"w1"}, order, openCount);
-
-  ASSERT_EQ(order.size(), 2u);
-  EXPECT_EQ(openCount, 2);  // les deux comptent comme ouvertes pour l'affichage
-  EXPECT_EQ(order[0], 0);   // w1 garde sa place de priorite haute
-  EXPECT_EQ(order[1], 1);
-}
-
-TEST(BuildTaskOrder, UntickingSomethingTickedThisVisitLetsItSinkAgain) {
-  // La TRANSITION, pas seulement son etat d'arrivee : les MEMES records sont
-  // tries deux fois, d'abord avec w1 dans tickedHere (il garde sa place de
-  // priorite haute), puis sans (il retombe derriere w2). Un test qui n'aurait
-  // que le second appel passerait meme si tout le mecanisme tickedHere etait
-  // supprime -- c'est exactement le defaut qu'il avait.
-  std::vector<TaskRecord> records = {
-      make("w1", "cochee puis decochee dans la meme visite", 0, true),
-      make("w2", "ouverte normale", 1),
-  };
-  std::vector<int> order;
-  int openCount = 0;
-
-  buildTaskOrder(records, /*tickedHere=*/{"w1"}, order, openCount);
-  ASSERT_EQ(order.size(), 2u);
-  EXPECT_EQ(openCount, 2);  // cochee ici : encore comptee comme ouverte
-  EXPECT_EQ(order[0], 0);   // w1 n'a pas bouge
-  EXPECT_EQ(order[1], 1);
-
-  buildTaskOrder(records, /*tickedHere=*/{}, order, openCount);
-  ASSERT_EQ(order.size(), 2u);
-  EXPECT_EQ(openCount, 1);  // decochee du registre de visite : elle coule
-  EXPECT_EQ(order[0], 1);   // w2 ouverte d'abord
-  EXPECT_EQ(order[1], 0);   // w1 faite, en fin de liste
-}
-
 TEST(BuildTaskOrder, EqualPriorityFallsBackToId) {
   std::vector<TaskRecord> records = {make("w2", "b", 1), make("w1", "a", 1)};
   std::vector<int> order;
   int openCount = 0;
-  buildTaskOrder(records, {}, order, openCount);
+  buildTaskOrder(records, order, openCount);
   EXPECT_EQ(order[0], 1);  // w1 < w2
   EXPECT_EQ(order[1], 0);
 }

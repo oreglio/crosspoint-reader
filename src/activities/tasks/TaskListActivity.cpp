@@ -10,9 +10,12 @@
 #include <utility>
 
 #include "MappedInputManager.h"
+#include "SilentRestart.h"
 #include "TaskStore.h"
+#include "activities/home/BookActions.h"
 #include "activities/tasks/TaskDetailActivity.h"
 #include "activities/tasks/TaskPriorityChoices.h"
+#include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "activities/util/OptionSelectionActivity.h"
 #include "components/TouchHeaderBackButton.h"
@@ -60,6 +63,10 @@ static const uint8_t TASK_BULLET_DONE[] = {
 constexpr char DONE_ROW_COLLAPSED_MARK[] = "\u203A";
 constexpr char DONE_ROW_EXPANDED_MARK[] = "\u00BB";
 
+// Seuil de l'appui long sur Confirmer : celui de la Library, pour que le geste
+// se ressente pareil d'un ecran a l'autre.
+constexpr unsigned long kHoldMs = 800;
+
 fui::BitmapRef taskBullet(const bool done) {
   fui::BitmapRef ref;
   ref.data = done ? TASK_BULLET_DONE : TASK_BULLET_OPEN;
@@ -71,7 +78,9 @@ fui::BitmapRef taskBullet(const bool done) {
 }  // namespace
 
 TaskListActivity::TaskListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-    : UiListActivity("TaskList", renderer, mappedInput, /*wantsTouchLongPress=*/false) {}
+    // Appui long tactile : les lignes portent InputLongPress (buildRows), qui
+    // ouvre le menu de la tache comme l'appui long sur Confirmer.
+    : UiListActivity("TaskList", renderer, mappedInput, /*wantsTouchLongPress=*/true) {}
 
 void TaskListActivity::onEnter() {
   // Un seul verrou sur le cycle de vie de base ET la phase de donnees : le
@@ -88,7 +97,6 @@ void TaskListActivity::onEnter() {
   TASK_STORE.ensureLoaded();
   pendingOps = TASK_STORE.hasPendingOps();
 
-  tickedHere.clear();
   showDone = false;
   notice = StatusNotice::None;
   dirty = true;
@@ -102,8 +110,6 @@ void TaskListActivity::onEnter() {
 void TaskListActivity::onExit() {
   // Rien ne doit rester resident pendant la lecture : clear() seul garde la
   // capacite reservee, shrink_to_fit() la rend vraiment.
-  tickedHere.clear();
-  tickedHere.shrink_to_fit();
   order.clear();
   order.shrink_to_fit();
   rows.clear();
@@ -123,7 +129,7 @@ void TaskListActivity::onExit() {
 void TaskListActivity::rebuildOrder() {
   if (!dirty) return;
   const std::vector<TaskRecord>& records = TASK_STORE.all();
-  buildTaskOrder(records, tickedHere, order, openCount);
+  buildTaskOrder(records, order, openCount);
   buildTaskListRows(order, openCount, showDone, rows);
   doneCount = static_cast<int>(records.size()) - openCount;
   dirty = false;
@@ -133,18 +139,16 @@ int TaskListActivity::listCount() const { return static_cast<int>(rows.size()); 
 
 void TaskListActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  // Contenu sous l'en-tete + la sous-ligne d'etat, au-dessus des indices de
-  // boutons -- ces deux bandes sont peintes hors fui, dans drawChrome() /
+  // Contenu sous l'en-tete, au-dessus des indices de boutons -- ces deux
+  // bandes sont peintes hors fui, dans drawChrome() /
   // drawFooter(), donc reservees ici pour que la liste ne les recouvre pas
   // (meme rituel que LibraryListActivity::buildScreen).
   screen.setContentMargin(
-      fui::Insets{static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput) +
-                                       metrics.tabBarHeight),
-                  0, static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
+      fui::Insets{static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput)), 0,
+                  static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
 
   // Jamais vide : un index vide donne la ligne d'ajout, un index tout fait la
-  // ligne "N faites". Les messages "aucune tache" / "tout est fait" sont dans
-  // la sous-ligne d'etat (drawChrome()).
+  // ligne "N faites".
   buildRows(screen);
 }
 
@@ -156,7 +160,7 @@ void TaskListActivity::buildRows(UiScreen& screen) {
   fui::ListProps props;
   props.count = static_cast<uint16_t>(count);
   props.action = ACTION_ROW;
-  props.inputMask = fui::InputTouch;
+  props.inputMask = fui::InputTouch | fui::InputLongPress;
   props.labelText = screen.theme().bodyText;
   // Les titres peuvent s'enrouler sur deux lignes plutot que d'etre tronques
   // -- une exigence de la maquette, pas une simplification.
@@ -206,8 +210,7 @@ void TaskListActivity::buildRows(UiScreen& screen) {
       // re-derive la pagination que ListNav possede deja). Deux paliers, pas
       // trois : la priorite basse ne se distingue que par sa place en fin de
       // tri (taskOrderBefore), pas par un style — l'exception (haute) se
-      // marque, pas la regle. Une tache faite (ou cochee pendant cette
-      // visite) cesse de crier : le gras ne vaut que pour une tache ouverte.
+      // marque, pas la regle. Une tache faite cesse de crier : le gras ne vaut que pour une tache ouverte.
       item.emphasis = (rec.priority == TASK_PRIORITY_HIGH) && !rec.done;
       // Pas de fui::StateDisabled sur une tache faite : BoxStyle::resolve()
       // (FreeInkUICore.h:606-615) teste Disabled AVANT Selected, donc une ligne
@@ -242,7 +245,40 @@ void TaskListActivity::activateIndex(int index) {
   }
 }
 
+void TaskListActivity::render(RenderLock&& lock) {
+  if (popup.processRender(renderer, mappedInput)) return;
+  UiListActivity::render(std::move(lock));
+  // Le message se pose sur la liste deja affichee, comme les toasts de la
+  // Library ; handleCustomInput() l'efface apres kNoticeMs.
+  if (notice != StatusNotice::None) BookActions::drawToast(renderer, noticeText());
+}
+
+const char* TaskListActivity::noticeText() const {
+  switch (notice) {
+    case StatusNotice::ListFull:
+      return tr(STR_TASK_LIST_FULL);
+    case StatusNotice::WriteFailed:
+      return tr(STR_TASK_TICK_FAILED);
+    case StatusNotice::LowMemory:
+      return tr(STR_TASK_SYNC_LOW_MEMORY);
+    case StatusNotice::None:
+      break;
+  }
+  return "";
+}
+
+void TaskListActivity::showNotice(const StatusNotice next) {
+  notice = next;
+  noticeSince = millis();
+  requestUpdate();
+}
+
 bool TaskListActivity::handleCustomInput() {
+  if (notice != StatusNotice::None && millis() - noticeSince >= kNoticeMs) {
+    notice = StatusNotice::None;
+    requestUpdate();
+  }
+  if (popup.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
   if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
     openDetailAt(activeNav().selected);
     return true;
@@ -268,6 +304,199 @@ bool TaskListActivity::handleCustomInput() {
     return true;
   }
   return false;
+}
+
+bool TaskListActivity::handleButtons() {
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+    onBackButton();
+    return true;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    const int selected = activeNav().selected;
+    if (selected < 0 || selected >= listCount()) return true;
+    // Sur « + Ajouter » et « N faites », un appui long fait l'action normale :
+    // le menu ne concerne qu'une tache.
+    if (mappedInput.getHeldTime() >= kHoldMs && rows[static_cast<size_t>(selected)].kind == TaskRowKind::Task) {
+      openTaskMenu(selected);
+    } else {
+      activateIndex(selected);
+    }
+    return true;
+  }
+  return false;
+}
+
+void TaskListActivity::onRowLongPress(const int index) { openTaskMenu(index); }
+
+void TaskListActivity::openTaskMenu(const int index) {
+  if (index < 0 || index >= static_cast<int>(rows.size()) ||
+      rows[static_cast<size_t>(index)].kind != TaskRowKind::Task) {
+    return;
+  }
+  const TaskRecord& rec = TASK_STORE.all()[static_cast<size_t>(rows[static_cast<size_t>(index)].recordIndex)];
+  const std::string id = rec.id;
+  // Supprimer en dernier, comme le menu d'un livre dans la Library : l'action
+  // destructrice n'est jamais la selection par defaut ni sa voisine immediate.
+  const std::vector<std::string> options{rec.done ? tr(STR_TASK_MENU_REOPEN) : tr(STR_TASK_MENU_TICK),
+                                         tr(STR_TASK_MENU_VIEW), tr(STR_TASK_MENU_EDIT), tr(STR_TASK_SYNC),
+                                         tr(STR_DELETE)};
+  app.clearTapFlash();
+  popup.show(rec.title, options, 0, [this, id](const int choice) {
+    const int row = rowOfTask(id.c_str());
+    switch (choice) {
+      case 0:
+        toggleAt(row);
+        break;
+      case 1:
+        openDetailAt(row);
+        break;
+      case 2:
+        editTaskTitle(id);
+        break;
+      case 3:
+        // Chaque op est deja sur la carte (appendOp ecrit a chaque geste) :
+        // redemarrer maintenant ne perd rien. Retour a cette liste ensuite.
+        silentRestartToNetwork(NetworkBootTarget::TASK_SYNC, TASK_SYNC_RETURN_TO_LIST);
+        break;
+      case 4:
+        promptDeleteTask(id);
+        break;
+      default:
+        break;
+    }
+  });
+  requestUpdate();
+}
+
+void TaskListActivity::editTaskTitle(const std::string& id) {
+  const TaskRecord* rec = TASK_STORE.find(id.c_str());
+  if (rec == nullptr) return;
+  startActivityForResult(
+      std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_TASK_EDIT_TITLE), rec->title,
+                                              TASK_TITLE_MAX, InputType::Text, /*minLength=*/1),
+      [this, id](const ActivityResult& result) {
+        const auto* entered = std::get_if<KeyboardResult>(&result.data);
+        // Annuler le titre annule toute la modification, comme sur l'ecran de
+        // detail : la priorite n'est pas une seconde chance apres un retour.
+        if (result.isCancelled || entered == nullptr) return;
+        const TaskRecord* current = TASK_STORE.find(id.c_str());
+        if (current == nullptr) return;
+
+        if (std::strcmp(entered->text.c_str(), current->title) != 0) {
+          TaskRecord next = *current;
+          std::snprintf(next.title, sizeof(next.title), "%s", entered->text.c_str());
+          TaskOp op{};
+          op.kind = TaskOpKind::Title;
+          std::snprintf(op.id, sizeof(op.id), "%s", next.id);
+          std::snprintf(op.title, sizeof(op.title), "%s", next.title);
+          // La file avant l'index, jamais l'inverse (voir toggleAt()).
+          if (!TASK_STORE.appendOp(op)) {
+            LOG_ERR(TAG, "Could not queue the title edit for %s; nothing applied", next.id);
+            showNotice(StatusNotice::WriteFailed);
+            return;
+          }
+          pendingOps = true;
+          if (!TASK_STORE.upsert(next)) showNotice(StatusNotice::WriteFailed);
+          refreshAfterEdit(id.c_str());
+        }
+        editTaskPriority(id);
+      });
+}
+
+void TaskListActivity::editTaskPriority(const std::string& id) {
+  const TaskRecord* rec = TASK_STORE.find(id.c_str());
+  if (rec == nullptr) return;
+  std::vector<std::string> labels;
+  labels.reserve(TASK_PRIORITY_CHOICE_COUNT);
+  uint8_t selected = TASK_DEFAULT_PRIORITY_CHOICE;
+  for (size_t i = 0; i < TASK_PRIORITY_CHOICE_COUNT; i++) {
+    labels.emplace_back(I18N.get(taskPriorityLabelId(TASK_PRIORITY_CHOICES[i])));
+    if (TASK_PRIORITY_CHOICES[i] == rec->priority) selected = static_cast<uint8_t>(i);
+  }
+
+  startActivityForResult(
+      std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "TaskPriority", StrId::STR_TASK_PRIORITY,
+                                                std::move(labels), selected),
+      [this, id](const ActivityResult& result) {
+        const auto* choice = std::get_if<OptionSelectionResult>(&result.data);
+        if (result.isCancelled || choice == nullptr ||
+            static_cast<size_t>(choice->index) >= TASK_PRIORITY_CHOICE_COUNT) {
+          return;
+        }
+        const TaskRecord* current = TASK_STORE.find(id.c_str());
+        if (current == nullptr) return;
+        const uint8_t priority = TASK_PRIORITY_CHOICES[choice->index];
+        if (priority == current->priority) return;
+
+        TaskRecord next = *current;
+        next.priority = priority;
+        TaskOp op{};
+        op.kind = TaskOpKind::Prio;
+        std::snprintf(op.id, sizeof(op.id), "%s", next.id);
+        op.priority = priority;
+        if (!TASK_STORE.appendOp(op)) {
+          LOG_ERR(TAG, "Could not queue the priority edit for %s; nothing applied", next.id);
+          showNotice(StatusNotice::WriteFailed);
+          return;
+        }
+        pendingOps = true;
+        if (!TASK_STORE.upsert(next)) showNotice(StatusNotice::WriteFailed);
+        refreshAfterEdit(id.c_str());
+      });
+}
+
+void TaskListActivity::refreshAfterEdit(const char* id) {
+  dirty = true;
+  rebuildOrder();
+  const int moved = rowOfTask(id);
+  const int next = moved >= 0 ? moved : taskListClampSelection(rows, activeNav().selected);
+  if (next >= 0) moveSelectionTo(next);
+  requestUpdate();
+}
+
+void TaskListActivity::promptDeleteTask(const std::string& id) {
+  const TaskRecord* rec = TASK_STORE.find(id.c_str());
+  if (rec == nullptr) return;
+  // Meme en-tete que la suppression d'un livre dans la Library.
+  const std::string heading = tr(STR_DELETE) + std::string("? ");
+  startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, rec->title),
+                         [this, id](const ActivityResult& result) {
+                           if (!result.isCancelled) deleteTask(id);
+                           requestUpdate(true);
+                         });
+}
+
+void TaskListActivity::deleteTask(const std::string& id) {
+  TaskOp op{};
+  op.kind = TaskOpKind::Del;
+  std::snprintf(op.id, sizeof(op.id), "%s", id.c_str());
+  // La file avant l'index : une coupure entre les deux laisse une op en file
+  // pour une tache encore affichee, que la sync suivante supprime partout. Dans
+  // l'autre ordre, la tache disparaitrait ici et reviendrait a la sync.
+  if (!TASK_STORE.appendOp(op)) {
+    LOG_ERR(TAG, "Could not queue the delete op for %s; task kept", id.c_str());
+    showNotice(StatusNotice::WriteFailed);
+    return;
+  }
+  pendingOps = true;
+
+  {
+    // erase() decale les enregistrements suivants : `rows` et `order`
+    // indexent ce vecteur, donc un rendu entre l'effacement et la
+    // reconstruction lirait des indices faux, voire hors limites. Les deux
+    // sous le meme verrou ; l'ecriture SD reste dehors (voir
+    // TaskDetailActivity::appendAndApply pour ce choix).
+    RenderLock lock(*this);
+    TASK_STORE.stageRemove(id.c_str());
+    dirty = true;
+    rebuildOrder();
+  }
+  // La note eventuelle reste sur la carte jusqu'a la sync suivante :
+  // commitStagedNotes() y supprime toute note dont la tache n'est plus
+  // indexee. Seules les taches venues du serveur en ont une.
+  if (!TASK_STORE.saveIndex()) showNotice(StatusNotice::WriteFailed);
+  const int next = taskListClampSelection(rows, activeNav().selected);
+  if (next >= 0) moveSelectionTo(next);
 }
 
 void TaskListActivity::toggleDoneSection() {
@@ -308,34 +537,18 @@ void TaskListActivity::toggleAt(int index) {
   if (!TASK_STORE.appendOp(op)) {
     // Echec d'ecriture (carte pleine, fichier verrouille) : ne rien appliquer
     // du tout. `rec` est une copie locale, donc l'index n'a pas bouge ; il
-    // reste a le dire a l'ecran, pas seulement au port serie. Le depot n'a pas
-    // de primitive de toast reutilisable hors du lecteur, donc le message
-    // prend la sous-ligne d'etat que drawChrome() peint deja.
+    // reste a le dire a l'ecran (toast), pas seulement au port serie.
     LOG_ERR(TAG, "Echec de l'enregistrement de la bascule 'fait' pour %s", rec.id);
-    notice = StatusNotice::WriteFailed;
-    requestUpdate();
+    showNotice(StatusNotice::WriteFailed);
     return;
   }
   pendingOps = true;
 
   const std::string id(rec.id);
-  const auto already = std::find(tickedHere.begin(), tickedHere.end(), id);
-  if (rec.done) {
-    // Reste en place, attenuee, jusqu'a onExit() : voir le commentaire sur
-    // tickedHere dans le .h.
-    if (already == tickedHere.end()) tickedHere.push_back(id);
-  } else if (already != tickedHere.end()) {
-    // Decochage d'une erreur commise pendant cette visite : elle redevient
-    // une tache ouverte ordinaire, plus besoin de la retenir a part.
-    tickedHere.erase(already);
-  }
 
-  // Une ecriture qui passe perime tout message d'erreur precedent, y compris un
-  // refus de creation : la carte repond, et le plafond n'est plus la chose que
-  // la sous-ligne doit dire en priorite. Un index non ecrit, lui, se dit : la
-  // RAM porte la coche, la carte non, et une reouverture la montrerait
-  // decochee jusqu'a la prochaine sync.
-  notice = TASK_STORE.upsert(rec) ? StatusNotice::None : StatusNotice::WriteFailed;
+  // Un index non ecrit se dit : la RAM porte la coche, la carte non, et une
+  // reouverture la montrerait decochee jusqu'a la prochaine sync.
+  if (!TASK_STORE.upsert(rec)) showNotice(StatusNotice::WriteFailed);
 
   dirty = true;
   rebuildOrder();
@@ -343,7 +556,11 @@ void TaskListActivity::toggleAt(int index) {
   // depliee la fait remonter parmi les ouvertes, et "N faites" glisse a son
   // ancien indice : garder l'indice ferait replier la section au Confirmer
   // suivant, au lieu d'agir sur la tache qu'on vient de toucher.
-  const int moved = rowOfTask(id.c_str());
+  //
+  // Sauf pour une coche : la tache coule dans la section terminees, et la
+  // selection reste a son indice, donc sur la tache qui a pris sa place. On
+  // coche ainsi une liste de haut en bas sans jamais deplacer le curseur.
+  const int moved = rec.done ? -1 : rowOfTask(id.c_str());
   const int next = moved >= 0 ? moved : taskListClampSelection(rows, activeNav().selected);
   if (next >= 0) moveSelectionTo(next);
 }
@@ -359,17 +576,13 @@ void TaskListActivity::openDetailAt(int index) {
   // soit ne bouge.
   const TaskRecord& opened = TASK_STORE.all()[static_cast<size_t>(rows[static_cast<size_t>(index)].recordIndex)];
   const std::string id = opened.id;
-  // Etat AVANT la visite. tickedHere veut dire "cochee pendant cette visite",
-  // c'est-a-dire une TRANSITION de non-faite a faite : l'etat final seul ne
-  // peut pas l'exprimer. Voir le gestionnaire ci-dessous.
-  const bool wasDone = opened.done;
 
   startActivityForResult(std::make_unique<TaskDetailActivity>(renderer, mappedInput, id.c_str()),
-                         [this, id, wasDone](const ActivityResult& result) {
+                         [this, id](const ActivityResult& result) {
                            // Rien ne rappelle onEnter() sur une activite depilee : ActivityManager
                            // la restaure par std::move et ne fait tourner que ce gestionnaire
-                           // (chemin Pop). `order`, `rows`, `openCount`, `showDone` et
-                           // `tickedHere` sont donc exactement ceux d'avant la visite — ce qu'on
+                           // (chemin Pop). `order`, `rows`, `openCount` et `showDone`
+                           // sont donc exactement ceux d'avant la visite — ce qu'on
                            // veut pour l'etat d'affichage, mais ce qui afficherait un titre ou une
                            // priorite perimes si le detail a modifie la tache. C'est ici ou nulle
                            // part que la liste l'apprend.
@@ -387,37 +600,11 @@ void TaskListActivity::openDetailAt(int index) {
                            // Le detail n'annonce un changement qu'apres une op ajoutee.
                            pendingOps = true;
 
-                           // Une coche faite dans le detail reste en place, attenuee, exactement
-                           // comme une coche faite ici : tickedHere existe pour qu'un geste
-                           // regrette se defasse sans ouvrir la section repliee, et cette raison
-                           // ne depend pas de l'ecran ou le geste a eu lieu.
-                           //
-                           // La condition est une TRANSITION, pas un etat final. buildTaskOrder
-                           // traite tickedHere comme un contournement de `done`
-                           // (TaskListModel.cpp:32-35), donc y pousser une tache DEJA faite avant
-                           // la visite la ferait ressortir de la section "terminees" vers la liste
-                           // des ouvertes et ferait baisser le compte "N faites" — rien que pour
-                           // l'avoir renommee. D'ou `!wasDone && isDone`.
-                           //
-                           // Le retrait, lui, n'a lieu que si la tache n'est plus faite : une
-                           // tache cochee ICI puis seulement renommee dans le detail doit garder
-                           // son entree, sinon elle plongerait dans la section repliee. Meme
-                           // symetrie que toggleAt(). AVANT rebuildOrder(), qui lit tickedHere.
-                           const TaskRecord* rec = TASK_STORE.find(id.c_str());
-                           const bool isDone = rec != nullptr && rec->done;
-                           const auto already = std::find(tickedHere.begin(), tickedHere.end(), id);
-                           if (isDone && !wasDone) {
-                             if (already == tickedHere.end()) tickedHere.push_back(id);
-                           } else if (!isDone && already != tickedHere.end()) {
-                             tickedHere.erase(already);
-                           }
-
                            dirty = true;
                            rebuildOrder();
-                           // La tache a pu changer de place (priorite, decochage) : la selection
-                           // la suit, comme dans toggleAt(). Si elle a quitte l'ecran (cochee
-                           // alors que deja faite, section repliee), le clamp garde un indice
-                           // valide.
+                           // La tache a pu changer de place (priorite, coche) : la selection la
+                           // suit. Si elle a quitte l'ecran (cochee, section repliee), le clamp
+                           // garde un indice valide.
                            const int moved = rowOfTask(id.c_str());
                            const int next = moved >= 0 ? moved : taskListClampSelection(rows, activeNav().selected);
                            if (next >= 0) moveSelectionTo(next);
@@ -433,8 +620,7 @@ void TaskListActivity::createTask() {
   // ce qu'une sync la ramene. Refuser d'entree est moins mauvais que cela.
   if (TASK_STORE.all().size() >= MAX_TASKS) {
     LOG_ERR(TAG, "Index already at the %zu-task cap; not opening the keyboard", MAX_TASKS);
-    notice = StatusNotice::ListFull;
-    requestUpdate();
+    showNotice(StatusNotice::ListFull);
     return;
   }
   // La capacite aussi, AVANT le clavier : fromJson() a reserve le nombre exact
@@ -453,8 +639,7 @@ void TaskListActivity::createTask() {
     reserved = TASK_STORE.reserveFullCapacity();
   }
   if (!reserved) {
-    notice = StatusNotice::LowMemory;
-    requestUpdate();
+    showNotice(StatusNotice::LowMemory);
     return;
   }
 
@@ -522,14 +707,13 @@ void TaskListActivity::askPriorityForNewTask(std::string title) {
         // jamais la tache, et le premier replaceAll() l'effacerait.
         if (!TASK_STORE.appendOp(op)) {
           LOG_ERR(TAG, "Could not queue the add op for %s; task not created", rec.id);
-          notice = StatusNotice::WriteFailed;
-          requestUpdate();
+          showNotice(StatusNotice::WriteFailed);
           return;
         }
         pendingOps = true;
         // Pas de saveIndex() explicite : upsert() l'appelle deja, et un second
         // appel reecrirait tout l'index une deuxieme fois par tache creee.
-        notice = TASK_STORE.upsert(rec) ? StatusNotice::None : StatusNotice::WriteFailed;
+        if (!TASK_STORE.upsert(rec)) showNotice(StatusNotice::WriteFailed);
 
         // Rien ne rappelle onEnter() sur une activite depilee : sans cette
         // reconstruction la tache existe sur la carte mais n'apparait dans
@@ -556,40 +740,20 @@ int TaskListActivity::rowOfTask(const char* id) const {
 }
 
 void TaskListActivity::drawChrome() {
-  const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
+  // Une op attend le serveur : une fleche circulaire suit le compteur, dans le
+  // texte meme du titre. Le titre est toujours en UI_12 gras (UIScale.cpp), qui
+  // porte U+21BB (scripts/measure_label.py inter_12_bold) ; un glyphe colle au
+  // texte suit l'alignement du titre sur chaque theme (centre, a gauche, a cote
+  // de l'horloge), ce qu'une icone posee a une abscisse calculee ne ferait pas.
+  // Rien quand tout est envoye : l'etat normal ne se signale pas.
   char title[48];
-  std::snprintf(title, sizeof(title), "%s (%d)", tr(STR_TASK_TITLE), openCount);
+  std::snprintf(title, sizeof(title), pendingOps ? "%s (%d) \u21BB" : "%s (%d)", tr(STR_TASK_TITLE), openCount);
   if (mappedInput.hasTouchHardware()) {
     TouchHeaderBackButton::draw(renderer, uiTarget, header, title, false);
   } else {
     GUI.drawHeader(renderer, header, title);
   }
-
-  // Sous-ligne d'etat. Normalement la fraicheur de sync : seule l'information
-  // qu'on a vraiment (appairee ou non) y est affichee, un horodatage relatif
-  // ("il y a 2h") demanderait un champ que rien n'ecrit encore -- voir le
-  // rapport. Elle sert aussi de surface d'erreur pour une coche refusee : ce
-  // depot n'a pas de toast reutilisable hors du lecteur, et cette ligne est
-  // deja peinte a chaque rendu.
-  //
-  // Priorite : erreur > appairage requis > "tout est fait" > changements non
-  // synchronises > "a jour". Une erreur demande une action immediate ;
-  // l'appairage aussi, et rien d'autre a l'ecran ne le dit. "Tout est fait" se
-  // DEDUIT des compteurs a chaque rendu — ce n'est pas un evenement, donc pas
-  // une valeur de StatusNotice, qu'une coche remettrait a None. "A jour" n'est
-  // vrai que file vide. Un index vide n'a pas de message propre : la ligne
-  // "+ Ajouter une tache" le dit deja.
-  const bool allDone = openCount == 0 && doneCount > 0;
-  const char* status = notice == StatusNotice::ListFull      ? tr(STR_TASK_LIST_FULL)
-                       : notice == StatusNotice::WriteFailed ? tr(STR_TASK_TICK_FAILED)
-                       : notice == StatusNotice::LowMemory   ? tr(STR_TASK_SYNC_LOW_MEMORY)
-                       : !TASK_STORE.hasSecret()             ? tr(STR_TASK_PAIRING_REQUIRED)
-                       : allDone                             ? tr(STR_TASK_ALL_DONE)
-                       : pendingOps                          ? tr(STR_TASK_NOT_SYNCED)
-                                                             : tr(STR_TASK_UP_TO_DATE);
-  const Rect subHeader{0, header.y + header.height, renderer.getScreenWidth(), metrics.tabBarHeight};
-  GUI.drawSubHeader(renderer, subHeader, "", status);
 }
 
 void TaskListActivity::drawFooter() {

@@ -8,7 +8,7 @@
 
 // Logique pure de CONTENU pour l'ecran de liste des taches : quelles lignes
 // l'ecran montre, dans quel ordre, etant donne l'etat de la bascule
-// "terminees" et ce qui a ete coche pendant cette visite.
+// "terminees".
 //
 // Ce fichier ne fait PAS de geometrie : ni hauteur de ligne, ni defilement, ni
 // pagination. UiListActivity (via fui::ListNav / syncListViewport / list())
@@ -32,14 +32,11 @@ struct TaskListRow {
 };
 
 // Trie les indices de `records` avec le comparateur canonique taskOrderBefore
-// (Tache 1) — jamais re-derive ici — sauf que les taches dont l'id figure
-// dans `tickedHere` sont comparees comme si `.done` valait encore faux : les
-// cocher pendant cette visite ne doit pas les faire sauter au bas de l'ecran,
-// elles restent a leur place et se contentent d'un rendu attenue (voir le
-// .cpp de l'activite). `openCount` recoit le nombre de taches en tete de
-// `order` qui sont ouvertes au sens ci-dessus.
-void buildTaskOrder(const std::vector<TaskRecord>& records, const std::vector<std::string>& tickedHere,
-                    std::vector<int>& order, int& openCount);
+// (Tache 1) — jamais re-derive ici. Une tache cochee coule aussitot dans la
+// section terminees : l'utilisateur voit sa coche prendre effet, et la rouvrir
+// passe par cette section ou par le menu de la tache. `openCount` recoit le
+// nombre de taches ouvertes en tete de `order`.
+void buildTaskOrder(const std::vector<TaskRecord>& records, std::vector<int>& order, int& openCount);
 
 // Aplati `order` en lignes d'ecran :
 //  - index vide : une seule ligne AddTask, rien d'autre ;

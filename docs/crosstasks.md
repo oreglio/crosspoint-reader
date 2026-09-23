@@ -18,7 +18,8 @@ when you ask.
 
 ## The List
 
-The header shows how many tasks are still open. Open tasks are sorted high
+The header shows how many tasks are still open, followed by **↻** while changes
+made on the device are waiting for the next sync. Open tasks are sorted high
 priority first, then normal, then low. High-priority titles are in bold until
 the task is done; that is the only priority marker. Long titles wrap over two lines.
 
@@ -26,28 +27,34 @@ the task is done; that is the only priority marker. Long titles wrap over two li
 | --- | --- |
 | Up / Down | Move the selection |
 | Confirm | Tick the selected task, or reopen a finished one |
+| Hold Confirm | Open the task's menu |
 | Left | Add a task |
 | Right | Open the selected task |
 | Back | Leave Tasks |
 
-- A task you tick stays where it is, with a filled bullet, until you leave the
-  screen. Press **Confirm** again to undo a mistaken tick.
+- A task you tick moves straight into the finished ones, and the selection
+  stays put, on the task that took its place.
 - Finished tasks gather in an **N done** row below the open ones. Select it and
   press **Confirm** to expand or collapse it; the button hint says which.
 - An empty list shows a **+ Add a task** row; **Confirm** on it adds a task.
-- On touch devices, tapping a row does what **Confirm** does.
+- On touch devices, tapping a row does what **Confirm** does, and a long press
+  opens the task's menu.
+
+Holding **Confirm** on a task (about a second) opens its menu: **Tick** (or
+**Reopen**), **View**, **Edit** (title, then priority), **Sync tasks** and
+**Delete**. Deleting asks for confirmation first; the task disappears at once
+and the next sync deletes it on the server too. **Sync tasks** from this menu
+comes back to the list when the sync screen closes.
 
 Adding a task opens the keyboard for the title, then asks for a priority (High,
 Normal or Low). Cancelling either step creates nothing. The list holds up to
 120 tasks; once it is full, **Left** shows *Task list is full* instead of
 opening the keyboard.
 
-The line under the header reads *Pairing required* until the device is paired
-with a server, *All done* when every task is finished, *Not synced yet* while
-changes made on the device wait for the next sync, and *Up to date* otherwise.
-If a change cannot be written to the card, it reads *Could not save*. If the
-device is too short of memory to add a task, **Left** shows *Not enough memory*
-instead of opening the keyboard; restart the device and try again.
+If a change cannot be written to the card, a message *Could not save* appears
+for a moment over the list. If the device is too short of memory to add a
+task, **Left** shows *Not enough memory* instead of opening the keyboard;
+restart the device and try again.
 
 ## A Task's Page
 
@@ -78,7 +85,7 @@ cannot be typed on the device.
 
 ## Pairing
 
-1. On the device, open **Settings > System > Pair with server**. It shows a QR
+1. On the device, open **Settings > System > Tasks > Pair with server**. It shows a QR
    code and the same 26-character code, split into groups of four.
 2. On the server, open the pairing page from the task list and scan the QR code
    or type the code.
@@ -90,7 +97,7 @@ stops until you pair the new code on the server.
 
 ## Syncing
 
-Open **Settings > System > Sync tasks**. The device restarts into a small
+Open **Settings > System > Tasks > Sync tasks**, or **Sync tasks** from a task's menu. The device restarts into a small
 network mode, joins Wi-Fi, sends the changes made on the device, then applies
 the server's. It ends on a summary: tasks received, sent and in total, plus
 any change the server refused and why (for example, a task that was deleted on
