@@ -29,31 +29,33 @@ namespace fui = freeink::ui;
 namespace {
 constexpr char TAG[] = "TASKLIST";
 
-// Pastilles circulaires de la maquette. 16x16, 1 bit par pixel, row-major
-// MSB-first, bit a 1 = encre : c'est le contrat de fui::BitmapRef/BW1, que
-// FreeInkUIGfxRenderer::bitmap() echantillonne via forEachBitmapPixel() puis
-// pose avec drawPixel(). Ce n'est PAS le contrat pre-tourne de
-// GfxRenderer::drawIcon (cf. la note de rotation de .claude/CONTEXT.md) : rien
-// ici ne doit etre stocke tourne — et un disque est de toute facon invariant
-// par rotation.
+// Pastilles circulaires de la maquette. 20x20, 1 bit par pixel, row-major
+// MSB-first (lignes arrondies a l'octet : 3 octets, 4 bits de bourrage), bit a 1 = encre : c'est le contrat de
+// fui::BitmapRef/BW1, que FreeInkUIGfxRenderer::bitmap() echantillonne via forEachBitmapPixel() puis pose avec
+// drawPixel(). Ce n'est PAS le contrat pre-tourne de GfxRenderer::drawIcon (cf. la note de rotation de
+// .claude/CONTEXT.md) : rien ici ne doit etre stocke tourne — et un disque est de toute facon invariant par rotation.
 //
 // `static const` donc en flash (.rodata), pas en DRAM : regle de ressources 3
 // du CLAUDE.md. Le champ BitmapRef::progmem n'est lu nulle part dans le SDK
 // (verifie : il n'apparait qu'a sa declaration) et sur ESP32 la flash est
 // mappee en lecture directe, donc le dereferencement de `data` est sans
 // danger — aucun pgm_read_byte necessaire, contrairement a l'AVR.
-constexpr int16_t TASK_BULLET_PX = 16;
+constexpr int16_t TASK_BULLET_PX = 20;
 
 // Anneau ouvert : tache pas encore faite.
 static const uint8_t TASK_BULLET_OPEN[] = {
-    0x00, 0x00, 0x07, 0xe0, 0x1f, 0xf8, 0x38, 0x1c, 0x30, 0x0c, 0x60, 0x06, 0x60, 0x06, 0x60, 0x06,
-    0x60, 0x06, 0x60, 0x06, 0x60, 0x06, 0x30, 0x0c, 0x38, 0x1c, 0x1f, 0xf8, 0x07, 0xe0, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x03, 0xfc, 0x00, 0x0f, 0xff, 0x00, 0x1e, 0x07, 0x80, 0x38, 0x01, 0xc0,
+    0x30, 0x00, 0xc0, 0x70, 0x00, 0xe0, 0x60, 0x00, 0x60, 0x60, 0x00, 0x60, 0x60, 0x00, 0x60,
+    0x60, 0x00, 0x60, 0x60, 0x00, 0x60, 0x60, 0x00, 0x60, 0x70, 0x00, 0xe0, 0x30, 0x00, 0xc0,
+    0x38, 0x01, 0xc0, 0x1e, 0x07, 0x80, 0x0f, 0xff, 0x00, 0x03, 0xfc, 0x00, 0x00, 0x00, 0x00,
 };
 
-// Disque plein : tache faite (ou cochee pendant cette visite).
+// Disque plein : tache faite.
 static const uint8_t TASK_BULLET_DONE[] = {
-    0x00, 0x00, 0x07, 0xe0, 0x1f, 0xf8, 0x3f, 0xfc, 0x3f, 0xfc, 0x7f, 0xfe, 0x7f, 0xfe, 0x7f, 0xfe,
-    0x7f, 0xfe, 0x7f, 0xfe, 0x7f, 0xfe, 0x3f, 0xfc, 0x3f, 0xfc, 0x1f, 0xf8, 0x07, 0xe0, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x03, 0xfc, 0x00, 0x0f, 0xff, 0x00, 0x1f, 0xff, 0x80, 0x3f, 0xff, 0xc0,
+    0x3f, 0xff, 0xc0, 0x7f, 0xff, 0xe0, 0x7f, 0xff, 0xe0, 0x7f, 0xff, 0xe0, 0x7f, 0xff, 0xe0,
+    0x7f, 0xff, 0xe0, 0x7f, 0xff, 0xe0, 0x7f, 0xff, 0xe0, 0x7f, 0xff, 0xe0, 0x3f, 0xff, 0xc0,
+    0x3f, 0xff, 0xc0, 0x1f, 0xff, 0x80, 0x0f, 0xff, 0x00, 0x03, 0xfc, 0x00, 0x00, 0x00, 0x00,
 };
 
 // Marque d'etat de la ligne "N faites" : U+203A replie, U+00BB deplie. Toutes
@@ -166,9 +168,13 @@ void TaskListActivity::buildScreen(UiScreen& screen) {
   // bandes sont peintes hors fui, dans drawChrome() /
   // drawFooter(), donc reservees ici pour que la liste ne les recouvre pas
   // (meme rituel que LibraryListActivity::buildScreen).
-  screen.setContentMargin(
-      fui::Insets{static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput)), 0,
-                  static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
+  // En espacement « aere », un peu d'air aussi entre le filet de l'en-tete et
+  // la premiere tache, pour qu'elle ne paraisse pas plus serree que les autres.
+  const int16_t airTop =
+      SETTINGS.taskRowSpacing == 2 ? static_cast<int16_t>(UiThemeTokensDetail::scaledListMetric(8)) : 0;
+  screen.setContentMargin(fui::Insets{
+      static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput) + airTop), 0,
+      static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
 
   // Jamais vide : un index vide donne la ligne d'ajout, un index tout fait la
   // ligne "N faites".
@@ -192,6 +198,17 @@ void TaskListActivity::buildRows(UiScreen& screen) {
   // une iconSize differente les ferait redimensionner au plus proche voisin et
   // l'anneau prendrait une epaisseur irreguliere sur un panneau 1 bit.
   props.iconSize = TASK_BULLET_PX;
+  // Les taches se rapprochent du bord gauche de kLeftShiftPx sans s'y coller.
+  // Pris d'abord sur le retrait des lignes (Lyra : 20 px), pour que le texte
+  // garde son air a l'interieur du surlignage de selection ; a defaut (themes
+  // sans retrait), sur la marge interne, dont on garde au moins 6 px.
+  constexpr int16_t kLeftShiftPx = 8;
+  const fui::ThemeTokens& tokens = screen.theme();
+  if (tokens.listInset >= kLeftShiftPx) {
+    props.rowInset = static_cast<int16_t>(tokens.listInset - kLeftShiftPx);
+  } else {
+    props.sidePadding = std::max<int16_t>(6, static_cast<int16_t>(tokens.listSidePadding - kLeftShiftPx));
+  }
   // Reglage « Espacement des taches » : un ecart uniforme entre les lignes,
   // quelle que soit leur hauteur (voir syncListViewport). Echelonne comme la
   // hauteur de base (scaledListMetric) pour garder la proportion en grande
@@ -374,9 +391,10 @@ void TaskListActivity::openTaskMenu(const int index) {
   // l'action, jamais sur un indice de ligne, donc deplacer une entree ne
   // decale pas les autres. Supprimer n'est jamais la selection par defaut ;
   // Synchroniser ferme la liste, qui redemarre l'appareil : en bas, a part.
-  enum class MenuAction : uint8_t { Tick, View, Edit, KeepAwake, Delete, Sync };
-  static constexpr MenuAction kMenu[] = {MenuAction::Tick,      MenuAction::View,   MenuAction::Edit,
-                                         MenuAction::KeepAwake, MenuAction::Delete, MenuAction::Sync};
+  enum class MenuAction : uint8_t { Tick, View, Edit, KeepAwake, TextSize, Delete, Sync };
+  static constexpr MenuAction kMenu[] = {MenuAction::Tick,      MenuAction::View,     MenuAction::Edit,
+                                         MenuAction::KeepAwake, MenuAction::TextSize, MenuAction::Delete,
+                                         MenuAction::Sync};
   std::vector<std::string> options;
   options.reserve(sizeof(kMenu) / sizeof(kMenu[0]));
   for (const MenuAction action : kMenu) {
@@ -392,6 +410,9 @@ void TaskListActivity::openTaskMenu(const int index) {
         break;
       case MenuAction::KeepAwake:
         options.emplace_back(keepAwake ? tr(STR_TASK_MENU_ALLOW_SLEEP) : tr(STR_TASK_MENU_KEEP_AWAKE));
+        break;
+      case MenuAction::TextSize:
+        options.emplace_back(tr(STR_TASK_FONT_SIZE));
         break;
       case MenuAction::Delete:
         options.emplace_back(tr(STR_DELETE));
@@ -420,6 +441,9 @@ void TaskListActivity::openTaskMenu(const int index) {
         // liste rend la veille, et la batterie ne paie jamais un oubli.
         keepAwake = !keepAwake;
         break;
+      case MenuAction::TextSize:
+        chooseTextSize();
+        break;
       case MenuAction::Delete:
         promptDeleteTask(id);
         break;
@@ -431,6 +455,33 @@ void TaskListActivity::openTaskMenu(const int index) {
     }
   });
   requestUpdate();
+}
+
+void TaskListActivity::chooseTextSize() {
+  // Le meme reglage que Parametres > Systeme > Taches, choisi sans quitter la
+  // liste : il s'applique au retour et s'enregistre comme depuis les Parametres.
+  std::vector<std::string> labels{tr(STR_TASK_FONT_10), tr(STR_TASK_FONT_12), tr(STR_TASK_FONT_14)};
+  const int current = SETTINGS.taskFontSize < labels.size() ? SETTINGS.taskFontSize : 0;
+  startActivityForResult(
+      std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "TaskFontSize", StrId::STR_TASK_FONT_SIZE,
+                                                std::move(labels), current),
+      [this](const ActivityResult& result) {
+        const auto* choice = std::get_if<OptionSelectionResult>(&result.data);
+        if (!result.isCancelled && choice != nullptr && choice->index >= 0 && choice->index < 3 &&
+            choice->index != SETTINGS.taskFontSize) {
+          SETTINGS.taskFontSize = static_cast<uint8_t>(choice->index);
+          if (!SETTINGS.saveGlobalDefaults()) {
+            LOG_ERR(TAG, "Could not save the task text size");
+            showNotice(StatusNotice::WriteFailed);
+          }
+          // La tache de rendu lit les polices de uiTarget : la
+          // rebrancher sous le verrou, jamais pendant un rendu.
+          RenderLock lock(*this);
+          listFontId = taskListFontId();
+          uiTarget.setFont(fui::GfxRendererTarget::FONT_BODY, listFontId);
+        }
+        requestUpdate(true);
+      });
 }
 
 void TaskListActivity::editTaskTitle(const std::string& id) {

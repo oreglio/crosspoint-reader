@@ -50,6 +50,7 @@ the task is done; that is the only priority marker. Long titles wrap over two li
 
 Holding **Confirm** on a task (about a second) opens its menu: **Tick** (or
 **Reopen**), **View**, **Edit** (title, then priority), **Keep screen on**,
+**Task text size** (the same setting as in Settings, applied on the spot),
 **Delete** and, last, **Sync tasks**. **Keep screen on** stops the device from
 going to sleep while the list is on screen; leaving the list turns it off
 again. Deleting asks for confirmation first; the task disappears at once

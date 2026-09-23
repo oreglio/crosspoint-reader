@@ -66,6 +66,7 @@ constexpr TourStep kSteps[] = {
     {"menu-down-1", Act::Tap, Button::Down},
     {"menu-down-2", Act::Tap, Button::Down},
     {"menu-down-3", Act::Tap, Button::Down},
+    {"menu-down-4", Act::Tap, Button::Down},
     {"14-menu-delete-selected", Act::Tap, Button::Down},
     {"15-delete-confirm", Act::Tap, Button::Confirm},
     // La confirmation s'ouvre sur Annuler, comme pour un livre : Bas d'abord.

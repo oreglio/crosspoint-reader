@@ -70,12 +70,14 @@ class TaskListActivity final : public UiListActivity {
   // Confirmer (ou un toucher) sur la ligne "N faites" : accordeon.
   void toggleDoneSection();
   void openDetailAt(int index);
-  // Menu d'une tache : cocher/rouvrir, voir, modifier, synchroniser, garder
-  // l'ecran allume, supprimer. Les choix retrouvent la ligne par l'id de la
+  // Menu d'une tache : cocher/rouvrir, voir, modifier, garder l'ecran allume,
+  // taille du texte, supprimer, synchroniser. Les choix retrouvent la ligne par l'id de la
   // tache, jamais par un indice retenu : l'ordre peut avoir change entre
   // l'ouverture et le choix.
   void openTaskMenu(int index);
   void editTaskTitle(const std::string& id);
+  // « Taille du texte des taches » depuis le menu : ouvre le choix 10/12/14.
+  void chooseTextSize();
   void editTaskPriority(const std::string& id);
   void promptDeleteTask(const std::string& id);
   void deleteTask(const std::string& id);
