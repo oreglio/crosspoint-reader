@@ -28,7 +28,7 @@ PROGRAM = ROOT / ".pio" / "build" / "simulator" / "program"
 START_MS, PERIOD_MS, SHOT_OFFSET_MS = 3500, 1300, 1000
 STEPS = [
     "00-pair-cold-boot", "01-list", "move-down", "02-ticked-in-place", "move-up", "03-done-row-selected",
-    "04-done-expanded", "reopen", "05-detail-with-note", "back-to-list",
+    "04-done-expanded", "reopen", "05-detail-with-note", "05b-detail-ticked", "back-to-list",
     "06-all-done", "07-empty", "08-add-keyboard", "09-pair", "10-pair-confirm",
     "11-pair-cancelled", "ask-again", "pick-confirm", "12-pair-renewed", "end",
 ]

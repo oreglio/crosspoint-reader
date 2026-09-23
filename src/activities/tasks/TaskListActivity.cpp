@@ -86,6 +86,7 @@ void TaskListActivity::onEnter() {
   // reouverture de l'ecran. Jamais depuis le rendu — voir
   // PersistableStore::ensureLoaded().
   TASK_STORE.ensureLoaded();
+  pendingOps = TASK_STORE.hasPendingOps();
 
   tickedHere.clear();
   showDone = false;
@@ -112,9 +113,9 @@ void TaskListActivity::onExit() {
   doneRowLabel.clear();
   doneRowLabel.shrink_to_fit();
   // L'index lui-meme appartient au store, pas a l'activite : sans cet appel
-  // ses ~26 Ko survivraient a l'ecran pour toute la session (main.cpp charge
-  // le store a chaque demarrage). Cet ecran est le seul detenteur d'indices
-  // dedans, et ils viennent d'etre liberes ci-dessus.
+  // ses ~26 Ko, charges par onEnter(), survivraient a l'ecran pour toute la
+  // session. Cet ecran est le seul detenteur d'indices dedans, et ils viennent
+  // d'etre liberes ci-dessus.
   TASK_STORE.unload();
   Activity::onExit();
 }
@@ -315,10 +316,7 @@ void TaskListActivity::toggleAt(int index) {
     requestUpdate();
     return;
   }
-  // Une ecriture qui passe perime tout message d'erreur precedent, y compris un
-  // refus de creation : la carte repond, et le plafond n'est plus la chose que
-  // la sous-ligne doit dire en priorite.
-  notice = StatusNotice::None;
+  pendingOps = true;
 
   const std::string id(rec.id);
   const auto already = std::find(tickedHere.begin(), tickedHere.end(), id);
@@ -332,7 +330,12 @@ void TaskListActivity::toggleAt(int index) {
     tickedHere.erase(already);
   }
 
-  TASK_STORE.upsert(rec);
+  // Une ecriture qui passe perime tout message d'erreur precedent, y compris un
+  // refus de creation : la carte repond, et le plafond n'est plus la chose que
+  // la sous-ligne doit dire en priorite. Un index non ecrit, lui, se dit : la
+  // RAM porte la coche, la carte non, et une reouverture la montrerait
+  // decochee jusqu'a la prochaine sync.
+  notice = TASK_STORE.upsert(rec) ? StatusNotice::None : StatusNotice::WriteFailed;
 
   dirty = true;
   rebuildOrder();
@@ -381,6 +384,8 @@ void TaskListActivity::openDetailAt(int index) {
                              return;
                            }
                            if (!edit->changed) return;  // simple coup d'oeil : rien a refaire
+                           // Le detail n'annonce un changement qu'apres une op ajoutee.
+                           pendingOps = true;
 
                            // Une coche faite dans le detail reste en place, attenuee, exactement
                            // comme une coche faite ici : tickedHere existe pour qu'un geste
@@ -422,15 +427,24 @@ void TaskListActivity::openDetailAt(int index) {
 
 void TaskListActivity::createTask() {
   // Le plafond se verifie AVANT d'ouvrir le clavier, et non apres la saisie.
-  // TaskStore::upsert() rend void et jette l'enregistrement en silence des que
-  // l'index est a MAX_TASKS (TaskStore.cpp:172-175) : l'appelant ne peut pas
-  // s'en apercevoir apres coup. Le decouvrir seulement une fois le titre tape
-  // laisserait une op Add en file pour une tache que l'appareil n'affichera
-  // jamais — le serveur l'accepterait, et l'ecran resterait vide jusqu'a ce
-  // qu'une sync la ramene. Refuser d'entree est moins mauvais que cela.
+  // TaskStore::upsert() refuse l'enregistrement des que l'index est a
+  // MAX_TASKS (stageUpsert()), alors que l'op Add serait deja en file : le
+  // serveur accepterait une tache que l'appareil n'afficherait jamais jusqu'a
+  // ce qu'une sync la ramene. Refuser d'entree est moins mauvais que cela.
   if (TASK_STORE.all().size() >= MAX_TASKS) {
     LOG_ERR(TAG, "Index already at the %zu-task cap; not opening the keyboard", MAX_TASKS);
     notice = StatusNotice::ListFull;
+    requestUpdate();
+    return;
+  }
+  // La capacite aussi, AVANT le clavier : fromJson() a reserve le nombre exact
+  // de taches chargees, donc l'ajout reallouerait le vecteur au double par un
+  // `new` qui aborte, pendant que l'ancien bloc vit encore (voir
+  // TaskStore::reserveFullCapacity, la meme garde que la sync). Apres une
+  // lecture, le tas peut ne plus avoir ce bloc : on le dit plutot que de
+  // redemarrer.
+  if (!TASK_STORE.reserveFullCapacity()) {
+    notice = StatusNotice::LowMemory;
     requestUpdate();
     return;
   }
@@ -503,11 +517,10 @@ void TaskListActivity::askPriorityForNewTask(std::string title) {
           requestUpdate();
           return;
         }
-        // Pas de saveToFile() explicite : upsert() l'appelle deja sur ses deux
-        // branches (TaskStore.cpp:168, 177), et un second appel reecrirait tout
-        // l'index une deuxieme fois par tache creee, pour rien.
-        TASK_STORE.upsert(rec);
-        notice = StatusNotice::None;
+        pendingOps = true;
+        // Pas de saveIndex() explicite : upsert() l'appelle deja, et un second
+        // appel reecrirait tout l'index une deuxieme fois par tache creee.
+        notice = TASK_STORE.upsert(rec) ? StatusNotice::None : StatusNotice::WriteFailed;
 
         // Rien ne rappelle onEnter() sur une activite depilee : sans cette
         // reconstruction la tache existe sur la carte mais n'apparait dans
@@ -533,13 +546,6 @@ int TaskListActivity::rowOfTask(const char* id) const {
   return -1;
 }
 
-void TaskListActivity::startSync() {
-  // TaskSyncActivity arrive avec la Tache 9, qui devra aussi choisir quel
-  // bouton la declenche : les boutons avant sont deja pris par
-  // Retour / cocher / ajouter / detail (voir le rapport).
-  LOG_INF(TAG, "Sync demandee (TaskSyncActivity : Tache 9)");
-}
-
 void TaskListActivity::drawChrome() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
@@ -558,17 +564,20 @@ void TaskListActivity::drawChrome() {
   // depot n'a pas de toast reutilisable hors du lecteur, et cette ligne est
   // deja peinte a chaque rendu.
   //
-  // Priorite : erreur > appairage requis > "tout est fait" > "a jour". Une
-  // erreur demande une action immediate ; l'appairage aussi, et rien d'autre
-  // a l'ecran ne le dit. "Tout est fait" se DEDUIT des compteurs a chaque
-  // rendu — ce n'est pas un evenement, donc pas une valeur de StatusNotice,
-  // qu'une coche remettrait a None. Un index vide n'a pas de message propre :
-  // la ligne "+ Ajouter une tache" le dit deja.
+  // Priorite : erreur > appairage requis > "tout est fait" > changements non
+  // synchronises > "a jour". Une erreur demande une action immediate ;
+  // l'appairage aussi, et rien d'autre a l'ecran ne le dit. "Tout est fait" se
+  // DEDUIT des compteurs a chaque rendu — ce n'est pas un evenement, donc pas
+  // une valeur de StatusNotice, qu'une coche remettrait a None. "A jour" n'est
+  // vrai que file vide. Un index vide n'a pas de message propre : la ligne
+  // "+ Ajouter une tache" le dit deja.
   const bool allDone = openCount == 0 && doneCount > 0;
   const char* status = notice == StatusNotice::ListFull      ? tr(STR_TASK_LIST_FULL)
                        : notice == StatusNotice::WriteFailed ? tr(STR_TASK_TICK_FAILED)
+                       : notice == StatusNotice::LowMemory   ? tr(STR_TASK_SYNC_LOW_MEMORY)
                        : !TASK_STORE.hasSecret()             ? tr(STR_TASK_PAIRING_REQUIRED)
                        : allDone                             ? tr(STR_TASK_ALL_DONE)
+                       : pendingOps                          ? tr(STR_TASK_NOT_SYNCED)
                                                              : tr(STR_TASK_UP_TO_DATE);
   const Rect subHeader{0, header.y + header.height, renderer.getScreenWidth(), metrics.tabBarHeight};
   GUI.drawSubHeader(renderer, subHeader, "", status);
@@ -580,13 +589,17 @@ void TaskListActivity::drawFooter() {
   // par drawButtonHints plutot que laissee a un libelle qui ne ferait rien).
   // Gauche dit "ajouter", sauf sur la ligne d'ajout elle-meme, ou Confirmer le
   // dit deja : deux fois le meme libelle se lisait comme un bogue (Gauche
-  // ajoute quand meme si on l'appuie). Tous mesures a moins de 80 px en
-  // inter_8_regular, la case du pire theme (.claude/CONTEXT.md).
+  // ajoute quand meme si on l'appuie). Tous mesures a moins de ~70 px en
+  // inter_8_regular, la case de 80 px du pire theme moins sa bordure
+  // (.claude/CONTEXT.md).
   const int selected = activeNav().selected;
   const TaskRowKind kind = selected >= 0 && selected < static_cast<int>(rows.size())
                                ? rows[static_cast<size_t>(selected)].kind
                                : TaskRowKind::Task;
-  const char* confirmLabel = tr(STR_TASK_TICK);
+  // Sur une tache deja faite, Confirmer la decoche : le libelle le dit.
+  const bool selectedDone = kind == TaskRowKind::Task && selected >= 0 && selected < static_cast<int>(rows.size()) &&
+                            TASK_STORE.all()[static_cast<size_t>(rows[static_cast<size_t>(selected)].recordIndex)].done;
+  const char* confirmLabel = selectedDone ? tr(STR_TASK_UNTICK) : tr(STR_TASK_TICK);
   const char* rightLabel = tr(STR_TASK_DETAIL);
   const char* leftLabel = tr(STR_TASK_NEW_SHORT);
   if (kind == TaskRowKind::DoneSection) {

@@ -52,6 +52,9 @@ constexpr TourStep kSteps[] = {
     {"04-done-expanded", Act::Tap, Button::Confirm},
     {"reopen", Act::OpenList, Button::Confirm},
     {"05-detail-with-note", Act::Tap, Button::Right},
+    // Tache haute priorite cochee depuis son detail : le titre perd le gras,
+    // comme sur la liste, et Confirmer se lit « rouvrir ».
+    {"05b-detail-ticked", Act::Tap, Button::Confirm},
     {"back-to-list", Act::Tap, Button::Back},
     {"06-all-done", Act::SeedAllDone, Button::Confirm},
     {"07-empty", Act::SeedEmpty, Button::Confirm},

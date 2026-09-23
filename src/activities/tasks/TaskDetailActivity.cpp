@@ -32,9 +32,11 @@ constexpr char TAG[] = "TASKDETAIL";
 // le palier bas — sur un panneau 1 bit l'italique attire l'oeil au lieu de
 // l'apaiser, ce qui inverse l'intention. Seule l'exception se marque ; le tri
 // de la liste (taskOrderBefore) place deja la priorite basse en fin de liste.
-// C'est exactement ce que fait ListItem::emphasis sur l'ecran de liste.
+// C'est exactement ce que fait ListItem::emphasis sur l'ecran de liste, y
+// compris pour une tache faite, qui cesse de crier : le gras ne vaut que pour
+// une tache ouverte.
 EpdFontFamily::Style titleStyleFor(const TaskRecord& record) {
-  return record.priority == TASK_PRIORITY_HIGH ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+  return record.priority == TASK_PRIORITY_HIGH && !record.done ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
 }
 
 constexpr int kFramePadding = 10;
@@ -422,13 +424,15 @@ bool TaskDetailActivity::appendAndApply(const TaskOp& op, const TaskRecord& next
   // la liste (tache 7). Le risque n'est pas une reference pendante — la liste
   // tient de simples indices `int`, qu'un push_back ne deplace pas — mais une
   // vue perimee : une tache ajoutee ici n'apparaitrait dans aucune ligne.
-  TASK_STORE.upsert(next);
+  // Un index non ecrit se dit a l'ecran : l'op est en file et la RAM a jour,
+  // mais une reouverture montrerait l'ancien etat jusqu'a la prochaine sync.
+  const bool saved = TASK_STORE.upsert(next);
 
   // Un seul verrou pour TOUT ce que render() lit, enroulement du titre compris :
   // le decouper en deux laisserait une image montrer le nouveau titre avec
   // l'ancien enroulement, ou la nouvelle graisse sur l'ancien texte.
   RenderLock lock(*this);
-  writeFailed = false;
+  writeFailed = !saved;
   record = next;
   changedAnything = true;
   if (rewrapTitle) rebuildTitleLines();
@@ -450,8 +454,9 @@ void TaskDetailActivity::toggleDone() {
   op.done = next.done;
 
   // Pas de verrou ici : appendAndApply() le prend lui-meme, apres les ecritures
-  // SD. La graisse du titre ne depend pas de `done`, donc rien a re-enrouler.
-  if (appendAndApply(op, next, /*rewrapTitle=*/false)) requestUpdate();
+  // SD. La graisse d'une tache haute priorite suit `done` (titleStyleFor), et
+  // le gras est plus large : son titre se re-enroule.
+  if (appendAndApply(op, next, /*rewrapTitle=*/next.priority == TASK_PRIORITY_HIGH)) requestUpdate();
 }
 
 void TaskDetailActivity::editTitle() {
@@ -617,8 +622,11 @@ void TaskDetailActivity::render(RenderLock&&) {
   // libelle ne se verrait donc pas manquer — il laisserait juste une espace.
   // Voir .claude/CONTEXT.md. La fleche de Retour, elle, passe par
   // withBackArrow(), dont le « est bien du Latin-1.
-  const auto labels = mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), tr(STR_TASK_TICK),
-                                            tr(STR_TASK_EDIT), tr(STR_TASK_POMODORO));
+  // Sur une tache faite, Confirmer la decoche : le libelle le dit, comme sur
+  // la liste.
+  const auto labels = mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)),
+                                            record.done ? tr(STR_TASK_UNTICK) : tr(STR_TASK_TICK), tr(STR_TASK_EDIT),
+                                            tr(STR_TASK_POMODORO));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   if (++repaintsSinceFullRefresh >= kRepaintsPerFullRefresh) {

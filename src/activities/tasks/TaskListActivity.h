@@ -19,10 +19,10 @@
 //
 // Ne detient AUCUNE copie de l'index : `order` et TaskListRow::recordIndex
 // indexent directement TASK_STORE.all(). Une copie membre doublait le pic a
-// ~52 Ko (2 x 120 x 216 octets) pendant la visite. onExit() appelle
+// ~52 Ko (2 x 120 x 216 octets) pendant la visite. onEnter() charge le store
+// (rien ne le charge a un demarrage normal) et onExit() appelle
 // TaskStore::unload(), donc apres la sortie de l'ecran l'index ne reste pas
-// resident non plus — ce que le chargement de main.cpp laissait sinon en place
-// pour toute la session, pendant la lecture d'un livre comprise.
+// resident, pendant la lecture d'un livre comprise.
 //
 // Priorite haute portee par ListItem::emphasis (gras, freeink-sdk) ; voir
 // buildRows() dans le .cpp pour pourquoi c'est un booleen par ligne plutot
@@ -67,7 +67,6 @@ class TaskListActivity final : public UiListActivity {
   // ajoute en fin d'index mais le tri le place selon sa priorite, donc sa
   // position a l'ecran n'est connue qu'apres rebuildOrder().
   int rowOfTask(const char* id) const;
-  void startSync();
 
   // Ids coches pendant cette visite : ils restent en place, attenues, pour
   // qu'un decochage apres erreur ne demande pas d'ouvrir la bascule.
@@ -85,8 +84,13 @@ class TaskListActivity final : public UiListActivity {
   // peut en afficher qu'un, et deux drapeaux poseraient la question de savoir
   // lequel gagne et lequel efface l'autre. Voir toggleAt(), createTask() et
   // drawChrome().
-  enum class StatusNotice : uint8_t { None, WriteFailed, ListFull };
+  enum class StatusNotice : uint8_t { None, WriteFailed, ListFull, LowMemory };
   StatusNotice notice = StatusNotice::None;
+  // Une op attend encore le serveur : la sous-ligne ne dit alors pas « a
+  // jour ». Lu sur la carte en onEnter() (jamais depuis le rendu), puis leve
+  // par chaque op ajoutee pendant la visite — rien ne vide la file tant que
+  // l'ecran est ouvert, la sync vivant dans les Parametres.
+  bool pendingOps = false;
 
   // Fenetre de ListItem materialisee pour la page visible seulement (comme
   // LibraryListActivity::winItems), pas un tableau de la taille totale.
