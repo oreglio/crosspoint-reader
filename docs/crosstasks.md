@@ -18,6 +18,11 @@ when you ask.
 
 ## The List
 
+Within a priority, tasks follow the order set on the server's web page, where
+each open task can be dragged by its handle (never into another priority). A
+task added or moved to another priority on the device goes to the end of its
+group until the next sync.
+
 The header shows how many tasks are still open, with **↻** at its right end while changes
 made on the device are waiting for the next sync. Open tasks are sorted high
 priority first, then normal, then low. High-priority titles are in bold until
@@ -41,8 +46,10 @@ the task is done; that is the only priority marker. Long titles wrap over two li
   opens the task's menu.
 
 Holding **Confirm** on a task (about a second) opens its menu: **Tick** (or
-**Reopen**), **View**, **Edit** (title, then priority), **Sync tasks** and
-**Delete**. Deleting asks for confirmation first; the task disappears at once
+**Reopen**), **View**, **Edit** (title, then priority), **Sync tasks**,
+**Keep screen on** and **Delete**. **Keep screen on** stops the device from
+going to sleep while the list is on screen; leaving the list turns it off
+again. Deleting asks for confirmation first; the task disappears at once
 and the next sync deletes it on the server too. **Sync tasks** from this menu
 comes back to the list when the sync screen closes.
 

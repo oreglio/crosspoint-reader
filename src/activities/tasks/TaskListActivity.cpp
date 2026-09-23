@@ -98,6 +98,7 @@ void TaskListActivity::onEnter() {
   pendingOps = TASK_STORE.hasPendingOps();
 
   showDone = false;
+  keepAwake = false;
   notice = StatusNotice::None;
   dirty = true;
   rebuildOrder();
@@ -338,7 +339,10 @@ void TaskListActivity::openTaskMenu(const int index) {
   // Supprimer en dernier, comme le menu d'un livre dans la Library : l'action
   // destructrice n'est jamais la selection par defaut ni sa voisine immediate.
   const std::vector<std::string> options{rec.done ? tr(STR_TASK_MENU_REOPEN) : tr(STR_TASK_MENU_TICK),
-                                         tr(STR_TASK_MENU_VIEW), tr(STR_TASK_MENU_EDIT), tr(STR_TASK_SYNC),
+                                         tr(STR_TASK_MENU_VIEW),
+                                         tr(STR_TASK_MENU_EDIT),
+                                         tr(STR_TASK_SYNC),
+                                         keepAwake ? tr(STR_TASK_MENU_ALLOW_SLEEP) : tr(STR_TASK_MENU_KEEP_AWAKE),
                                          tr(STR_DELETE)};
   app.clearTapFlash();
   popup.show(rec.title, options, 0, [this, id](const int choice) {
@@ -359,6 +363,11 @@ void TaskListActivity::openTaskMenu(const int index) {
         silentRestartToNetwork(NetworkBootTarget::TASK_SYNC, TASK_SYNC_RETURN_TO_LIST);
         break;
       case 4:
+        // Pour la visite seulement : onEnter() le remet a faux, donc quitter la
+        // liste rend la veille, et la batterie ne paie jamais un oubli.
+        keepAwake = !keepAwake;
+        break;
+      case 5:
         promptDeleteTask(id);
         break;
       default:

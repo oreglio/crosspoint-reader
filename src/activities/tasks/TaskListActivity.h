@@ -37,6 +37,12 @@ class TaskListActivity final : public UiListActivity {
   // La popup se peint par-dessus l'image retenue, sans effacer la liste :
   // meme idiome que LibraryListActivity::render().
   void render(RenderLock&& lock) override;
+  // « Garder l'ecran allume » du menu : bloque la mise en veille tant que la
+  // liste est au premier plan. Rien ne tourne pendant ce temps, donc le
+  // processeur peut descendre a son horloge basse entre deux gestes, comme
+  // pour le compte a rebours (CountdownActivity).
+  bool preventAutoSleep() override { return keepAwake; }
+  bool allowPowerSavingWhileAwake() const override { return true; }
 
  protected:
   int listCount() const override;
@@ -64,9 +70,10 @@ class TaskListActivity final : public UiListActivity {
   // Confirmer (ou un toucher) sur la ligne "N faites" : accordeon.
   void toggleDoneSection();
   void openDetailAt(int index);
-  // Menu d'une tache : cocher/rouvrir, voir, modifier, synchroniser,
-  // supprimer. Les choix retrouvent la ligne par l'id de la tache, jamais par
-  // un indice retenu : l'ordre peut avoir change entre l'ouverture et le choix.
+  // Menu d'une tache : cocher/rouvrir, voir, modifier, synchroniser, garder
+  // l'ecran allume, supprimer. Les choix retrouvent la ligne par l'id de la
+  // tache, jamais par un indice retenu : l'ordre peut avoir change entre
+  // l'ouverture et le choix.
   void openTaskMenu(int index);
   void editTaskTitle(const std::string& id);
   void editTaskPriority(const std::string& id);
@@ -93,6 +100,7 @@ class TaskListActivity final : public UiListActivity {
   int openCount = 0;
   int doneCount = 0;
   bool showDone = false;
+  bool keepAwake = false;
   bool dirty = true;
   // Erreur a montrer en toast par-dessus la liste : une ecriture refusee par
   // la file d'ops, une creation refusee au plafond, ou le tas trop fragmente.
