@@ -79,16 +79,16 @@ fui::BitmapRef taskBullet(const bool done) {
 }  // namespace
 
 int TaskListActivity::taskListFontId() {
-  // Au-dessus de l'Inter 12, les polices d'interface s'arretent : les deux
-  // tailles suivantes sont les Lexend Deca integrees, celles des notes de
-  // l'ecran de detail, toutes deux avec leur gras (taches prioritaires).
+  // Tailles fixes 10 / 12 / 14. Les polices d'interface s'arretent a l'Inter
+  // 12 : la 14 est la Lexend Deca integree, celle des notes de l'ecran de
+  // detail, avec son gras (taches prioritaires).
   switch (SETTINGS.taskFontSize) {
     case 1:
-      return LEXENDDECA_14_FONT_ID;
+      return UI_12_FONT_ID;
     case 2:
-      return LEXENDDECA_16_FONT_ID;
+      return LEXENDDECA_14_FONT_ID;
     default:
-      return uiScaleSpec().bodyFontId;
+      return UI_10_FONT_ID;
   }
 }
 

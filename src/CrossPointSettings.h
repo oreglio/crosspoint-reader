@@ -607,11 +607,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Espacement des lignes de la liste des taches : 0 compacte (la densite
   // des autres listes), 1 confortable, 2 aeree. Voir TaskListActivity::buildRows.
   uint8_t taskRowSpacing = 0;
-  // Taille du texte de la liste des taches : 0 normal (la police des autres
-  // listes), 1 grand (Lexend Deca 14), 2 tres grand (Lexend Deca 16). Pas de
-  // « petit » : sous l'Inter 10 il ne reste que SMALL_FONT (Inter 8), sans
-  // gras, qui effacerait la seule marque des taches prioritaires.
-  // Voir TaskListActivity::taskListFontId.
+  // Taille du texte de la liste des taches, en tailles fixes : 0 = 10 (Inter
+  // 10), 1 = 12 (Inter 12), 2 = 14 (Lexend Deca 14). Rien sous 10 : il ne
+  // reste que SMALL_FONT (Inter 8), sans gras, qui effacerait la seule marque
+  // des taches prioritaires. Voir TaskListActivity::taskListFontId.
   uint8_t taskFontSize = 0;
   // Hide battery percentage
   uint8_t hideBatteryPercentage = HIDE_NEVER;

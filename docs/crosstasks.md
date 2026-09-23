@@ -42,8 +42,7 @@ the task is done; that is the only priority marker. Long titles wrap over two li
 - Finished tasks gather in an **N done** row below the open ones. Select it and
   press **Confirm** to expand or collapse it; the button hint says which.
 - **Settings > System > Tasks > Task text size** sets the list's text:
-  **Normal** (the default, like other lists), **Large** or **Extra large**
-  (Lexend Deca 14 and 16, the notes' typeface). **Task spacing** puts more room
+  **10** (the default), **12** or **14** (Lexend Deca, the notes' typeface). **Task spacing** puts more room
   between the rows: **Compact** (the default), **Comfortable** or **Spacious**.
 - An empty list shows a **+ Add a task** row; **Confirm** on it adds a task.
 - On touch devices, tapping a row does what **Confirm** does, and a long press

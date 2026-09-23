@@ -891,8 +891,8 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         {StrId::STR_TASK_SPACING_COMPACT, StrId::STR_TASK_SPACING_COMFORTABLE, StrId::STR_TASK_SPACING_SPACIOUS},
         "taskRowSpacing", StrId::STR_TASK_TITLE));
     add(SettingInfo::Enum(StrId::STR_TASK_FONT_SIZE, &CrossPointSettings::taskFontSize,
-                          {StrId::STR_TASK_FONT_NORMAL, StrId::STR_TASK_FONT_LARGE, StrId::STR_TASK_FONT_XLARGE},
-                          "taskFontSize", StrId::STR_TASK_TITLE));
+                          {StrId::STR_TASK_FONT_10, StrId::STR_TASK_FONT_12, StrId::STR_TASK_FONT_14}, "taskFontSize",
+                          StrId::STR_TASK_TITLE));
 
     // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
     add(SettingInfo::DynamicString(
