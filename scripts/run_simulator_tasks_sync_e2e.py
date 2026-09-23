@@ -360,7 +360,27 @@ def real_server_scenarios(r: Runner, srv: Crossdrop) -> None:
             and all(web[x["id"]]["title"] == x["t"] for x in tasks) and c["ops"] is None
             and sum("POST" in line for line in lines) >= 3, lines)
 
-    # 9. Serveur reappaire ailleurs : 401, carte identique.
+    # 9. Ordre manuel du web et suppression depuis la liseuse. Le web range
+    #    trois taches basses Z, X, Y ; une carte vierge doit recevoir ce rang.
+    #    Puis la liseuse supprime X : l'op `del` l'efface du serveur et de la carte.
+    work = r.fresh("real-order-del")
+    fs = work / "fs_"
+    x, y, z = (srv.req("POST", "/web/api/tasks", {"title": f"Basse {n}", "priority": 2})["id"] for n in "XYZ")
+    low = [t["id"] for t in srv.req("GET", "/web/api/tasks")["tasks"] if t["priority"] == 2 and not t["done"]]
+    srv.req("POST", "/web/api/tasks/reorder", {"priority": 2, "ids": [z, x, y] + [i for i in low if i not in (x, y, z)]})
+    seed_card(fs, srv.base, secret, [])
+    lines = run_sim(work, "order")
+    c = card(fs)
+    rank = {i: c["tasks"].get(i, {}).get("o") for i in (x, y, z)}
+    r.check("real: the web's manual order reaches the card", None not in rank.values()
+            and rank[z] < rank[x] < rank[y], lines, f"ranks={rank}")
+    (tasks_dir(fs) / "ops.ndjson").write_text(f'{{"op":"del","id":"{x}"}}\n')
+    lines = run_sim(work, "del")
+    c, web = card(fs), srv.tasks()
+    r.check("real: a del op removes the task on both sides", x not in web and x not in c["tasks"]
+            and y in c["tasks"] and c["ops"] is None, lines)
+
+    # 10. Serveur reappaire ailleurs : 401, carte identique.
     srv.pair(new_secret())
     (tasks_dir(fs) / "ops.ndjson").write_text('{"op":"done","id":"d00000000","done":true}\n')
     before = card_hashes(fs)
