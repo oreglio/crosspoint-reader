@@ -39,6 +39,7 @@ enum class SettingAction {
   SystemDevice,
   SystemFilesCache,
   SystemLibrary,
+  SystemTasks,
   RebuildLibraryIndex,
   SystemReadingStats,
   SystemGlobalStats,
@@ -255,6 +256,7 @@ class SettingsActivity final : public Activity {
   std::vector<SettingInfo> systemDeviceSettings;
   std::vector<SettingInfo> systemFilesCacheSettings;
   std::vector<SettingInfo> systemLibrarySettings;
+  std::vector<SettingInfo> systemTasksSettings;
   std::vector<SettingInfo> fileBrowserSettings;
   std::vector<SettingInfo> systemReadingStatsSettings;
   std::vector<SettingInfo> systemGlobalStatsSettings;

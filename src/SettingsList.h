@@ -760,14 +760,12 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                           {StrId::STR_NO, StrId::STR_YES}, "sideButtonOrientationAware", StrId::STR_CAT_CONTROLS));
     add(SettingInfo::Enum(StrId::STR_LONG_PRESS_ACTION, &CrossPointSettings::sideButtonLongPress,
                           {StrId::STR_IGNORE, StrId::STR_CHAPTER_SKIP_OPT, StrId::STR_CHANGE_FONT_SIZE,
-                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION, StrId::STR_QUICK_TOGGLES,
-                           StrId::STR_LIBRARY},
+                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION, StrId::STR_QUICK_TOGGLES, StrId::STR_LIBRARY},
                           "sideButtonLongPress", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues({CrossPointSettings::SIDE_LONG_OFF, CrossPointSettings::SIDE_LONG_CHAPTER_SKIP,
                                 CrossPointSettings::SIDE_LONG_FONT_SIZE,
                                 CrossPointSettings::SIDE_LONG_ORIENTATION_CHANGE,
-                                CrossPointSettings::SIDE_LONG_QUICK_TOGGLES,
-                                CrossPointSettings::SIDE_LONG_LIBRARY}));
+                                CrossPointSettings::SIDE_LONG_QUICK_TOGGLES, CrossPointSettings::SIDE_LONG_LIBRARY}));
     // Labels and raw values above are two hand-written lists; this catches the
     // one drifting from the other, which is how a picker ends up offering an
     // action the firmware cannot perform.
@@ -776,11 +774,11 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     add(SettingInfo::Enum(StrId::STR_ORIENTATION_AWARE, &CrossPointSettings::frontButtonOrientationAware,
                           {StrId::STR_NO, StrId::STR_NAV_BUTTONS, StrId::STR_ALL_BUTTONS},
                           "frontButtonOrientationAware", StrId::STR_CAT_CONTROLS));
-    add(SettingInfo::Enum(StrId::STR_LONG_PRESS_ACTION, &CrossPointSettings::longPressButtonBehavior,
-                          {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
-                           StrId::STR_CHANGE_FONT_SIZE, StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION,
-                           StrId::STR_QUICK_TOGGLES, StrId::STR_LIBRARY},
-                          "longPressButtonBehavior", StrId::STR_CAT_CONTROLS)
+    add(SettingInfo::Enum(
+            StrId::STR_LONG_PRESS_ACTION, &CrossPointSettings::longPressButtonBehavior,
+            {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP, StrId::STR_CHANGE_FONT_SIZE,
+             StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION, StrId::STR_QUICK_TOGGLES, StrId::STR_LIBRARY},
+            "longPressButtonBehavior", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues({CrossPointSettings::OFF, CrossPointSettings::CHAPTER_SKIP,
                                 CrossPointSettings::FONT_SIZE_CHANGE, CrossPointSettings::ORIENTATION_CHANGE,
                                 CrossPointSettings::QUICK_TOGGLES, CrossPointSettings::LIBRARY}));
@@ -1407,12 +1405,11 @@ inline std::vector<SettingInfo> buildSystemSettingsParentList(const std::vector<
   systemSettings.push_back(SettingInfo::Submenu(StrId::STR_SYSTEM_DEVICE, SettingAction::SystemDevice));
   systemSettings.push_back(SettingInfo::Submenu(StrId::STR_SYSTEM_FILES_CACHE, SettingAction::SystemFilesCache));
   systemSettings.push_back(SettingInfo::Submenu(StrId::STR_LIBRARY, SettingAction::SystemLibrary));
+  systemSettings.push_back(SettingInfo::Submenu(StrId::STR_TASK_TITLE, SettingAction::SystemTasks));
   systemSettings.push_back(SettingInfo::Submenu(StrId::STR_READING_STATS, SettingAction::SystemReadingStats));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_RAINDROP_SYNC, SettingAction::RaindropSync));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_TASK_PAIR, SettingAction::TaskPair));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_TASK_SYNC, SettingAction::TaskSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
@@ -1457,6 +1454,16 @@ inline std::vector<SettingInfo> buildSystemLibrarySettingsList(const std::vector
   // makes the toggle worth turning on, so hiding it behind the toggle would hide
   // the only way to reach a useful state.
   settings.push_back(SettingInfo::Action(StrId::STR_LIBRARY_REBUILD, SettingAction::RebuildLibraryIndex));
+  return settings;
+}
+
+// Appairage et sync des taches : l'activation et l'URL du serveur restent sur
+// la carte Tasks du portail web, ou se tape une URL.
+inline std::vector<SettingInfo> buildSystemTasksSettingsList() {
+  std::vector<SettingInfo> settings;
+  settings.reserve(2);
+  settings.push_back(SettingInfo::Action(StrId::STR_TASK_PAIR, SettingAction::TaskPair));
+  settings.push_back(SettingInfo::Action(StrId::STR_TASK_SYNC, SettingAction::TaskSync));
   return settings;
 }
 

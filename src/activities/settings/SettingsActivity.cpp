@@ -3,9 +3,9 @@
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
+#include <I18n.h>
 #include <LibraryBuilder.h>
 #include <LibraryIndexFile.h>
-#include <I18n.h>
 #include <Logging.h>
 #include <WiFi.h>
 
@@ -289,6 +289,7 @@ void SettingsActivity::rebuildSettingsLists() {
   systemDeviceSettings.clear();
   systemFilesCacheSettings.clear();
   systemLibrarySettings.clear();
+  systemTasksSettings.clear();
   fileBrowserSettings.clear();
   systemReadingStatsSettings.clear();
   systemGlobalStatsSettings.clear();
@@ -325,6 +326,7 @@ void SettingsActivity::rebuildSettingsLists() {
   systemDeviceSettings = buildSystemDeviceSettingsList(allSettings);
   systemFilesCacheSettings = buildSystemFilesCacheSettingsList(allSettings);
   systemLibrarySettings = buildSystemLibrarySettingsList(allSettings);
+  systemTasksSettings = buildSystemTasksSettingsList();
   systemReadingStatsSettings = buildSystemReadingStatsSettingsList(allSettings);
   systemGlobalStatsSettings = buildSystemGlobalStatsSettingsList(allSettings);
   controlsSettings = buildControlsSettingsParentList(allSettings);
@@ -442,6 +444,9 @@ void SettingsActivity::setCurrentSettingsForCategory() {
         case SettingAction::SystemLibrary:
           currentSettings = &systemLibrarySettings;
           break;
+        case SettingAction::SystemTasks:
+          currentSettings = &systemTasksSettings;
+          break;
         case SettingAction::SystemReadingStats:
           currentSettings = &systemReadingStatsSettings;
           break;
@@ -493,6 +498,8 @@ StrId SettingsActivity::activeSubmenuTitleId() const {
       return StrId::STR_SYSTEM_DEVICE;
     case SettingAction::SystemFilesCache:
       return StrId::STR_SYSTEM_FILES_CACHE;
+    case SettingAction::SystemTasks:
+      return StrId::STR_TASK_TITLE;
     case SettingAction::SystemReadingStats:
       return StrId::STR_READING_STATS;
     case SettingAction::SystemGlobalStats:
@@ -1199,6 +1206,7 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::SystemDevice:
       case SettingAction::SystemFilesCache:
       case SettingAction::SystemLibrary:
+      case SettingAction::SystemTasks:
       case SettingAction::SystemReadingStats:
       case SettingAction::SystemGlobalStats:
       case SettingAction::DisplaySleepScreen:
