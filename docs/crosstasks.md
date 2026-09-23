@@ -25,7 +25,7 @@ the task is done; that is the only priority marker. Long titles wrap over two li
 | Button | Action |
 | --- | --- |
 | Up / Down | Move the selection |
-| Confirm | Tick or untick the selected task |
+| Confirm | Tick the selected task, or reopen a finished one |
 | Left | Add a task |
 | Right | Open the selected task |
 | Back | Leave Tasks |
@@ -56,7 +56,7 @@ The page shows the task's title, its note, and a pomodoro box.
 | Button | Action |
 | --- | --- |
 | Up / Down | Turn the pages of a long note |
-| Confirm | Tick or untick the task |
+| Confirm | Tick the task, or reopen it once finished |
 | Left | Edit the title, then the priority |
 | Right | Open the pomodoro timer for this task |
 | Back | Return to the list |
