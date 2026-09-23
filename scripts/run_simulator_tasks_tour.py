@@ -76,7 +76,9 @@ def obfuscate(plaintext: str) -> str:
 def seed(fs: Path) -> None:
     tasks = fs / ".crosspoint" / "tasks"
     (tasks / "n").mkdir(parents=True, exist_ok=True)
-    (tasks / "index.json").write_text(json.dumps({"schema": 1, "secret": obfuscate(SEEDED_SECRET), "tasks": TASKS}))
+    (tasks / "index.json").write_text(json.dumps({"schema": 1, "tasks": TASKS}))
+    # Le secret a son propre fichier (TaskStore::secretPath), jamais l'index.
+    (tasks / "secret").write_text(obfuscate(SEEDED_SECRET))
     (tasks / "n" / f"{NOTE_ID}.txt").write_text(NOTE)
 
 

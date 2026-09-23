@@ -60,8 +60,10 @@ class TaskSyncActivity final : public Activity {
   // compteur. Dans l'objet (tas) plutot que sur la pile : ~1,1 Ko.
   static constexpr size_t kMaxShownRejections = 5;
   struct Rejection {
+    char id[TASK_ID_LEN + 1];
     char title[TASK_TITLE_MAX + 1];
     char reason[16];
+    bool titled;
   };
 
   void onWifiSelectionComplete(bool connected);
@@ -69,6 +71,8 @@ class TaskSyncActivity final : public Activity {
   Failure runRound(freeink::SecureHttpClient& http, const std::string& url, const std::string& auth, size_t opsOffset,
                    size_t& opsSent, bool& opsExhausted);
   bool heapAllowsTls(const char* stage);
+  void rollBackRoundRejections();
+  void resolveRejectionTitles();
   void fail(Failure failure);
   void closeNoteFile();
 
@@ -92,6 +96,9 @@ class TaskSyncActivity final : public Activity {
   int received_ = 0;
   int sent_ = 0;
   int total_ = 0;
+  // Vrai si MAX_ROUNDS a ete atteint avec du travail restant : le resume ne
+  // doit pas dire « terminee ».
+  bool incomplete_ = false;
   Rejection rejections_[kMaxShownRejections] = {};
   size_t shownRejections_ = 0;
   int rejectedCount_ = 0;
@@ -100,6 +107,7 @@ class TaskSyncActivity final : public Activity {
   char roundCursor_[TASK_SYNC_CURSOR_MAX + 1] = {};
   bool roundMore_ = false;
   bool roundReset_ = false;
+  bool roundFullSnapshot_ = false;
   int roundReceived_ = 0;
   size_t roundShownStart_ = 0;
   int roundRejectedStart_ = 0;

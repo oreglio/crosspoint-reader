@@ -65,7 +65,7 @@ void drawSecretBytes(uint8_t (&bytes)[TASK_SECRET_BYTES]) {
 
 void TaskPairActivity::onEnter() {
   // Pas de verrou de rendu autour de loadOrCreateSecret() : writeSecret()
-  // reecrit tout index.json, et la tache de rendu n'a rien a peindre avant le
+  // ecrit sur la carte, et la tache de rendu n'a rien a peindre avant le
   // requestUpdate() final de toute facon.
   Activity::onEnter();
   // AVANT toute lecture du secret : rien ne charge ce store au demarrage, et
@@ -96,7 +96,7 @@ void TaskPairActivity::onExit() {
   qrPayload.shrink_to_fit();
   hintLines.clear();
   hintLines.shrink_to_fit();
-  // Surtout PAS TASK_STORE.unload() : writeSecret() a charge l'index, et c'est
+  // Surtout PAS TASK_STORE.unload() : ensureLoaded() a charge l'index, et c'est
   // TaskListActivity qui possede son dechargement.
   Activity::onExit();
 }

@@ -180,23 +180,42 @@ void TaskSyncActivity::runSync() {
     return;
   }
 
+  // Les lignes recues grossissent `records` depuis le rappel TLS : sa capacite
+  // est portee a MAX_TASKS maintenant, avant toute connexion, quand le tas est
+  // au mieux (voir TaskStore::reserveForSync). reserve() aborte en cas
+  // d'echec, d'ou la verification prealable. La marge couvre l'en-tete et
+  // l'alignement de l'allocateur ; la marge TLS, elle, est reverifiee par la
+  // garde "before request" une fois ce bloc pris.
+  if (!TASK_STORE.hasSyncCapacity()) {
+    constexpr uint32_t RECORDS_BYTES = MAX_TASKS * sizeof(TaskRecord);
+    constexpr uint32_t ALLOCATOR_MARGIN = 1024;
+    if (ESP.getMaxAllocHeap() < RECORDS_BYTES + ALLOCATOR_MARGIN) {
+      LOG_ERR(TAG, "No contiguous block for the task index: need %u, largest %u", RECORDS_BYTES + ALLOCATOR_MARGIN,
+              ESP.getMaxAllocHeap());
+      fail(Failure::LowMemory);
+      return;
+    }
+    TASK_STORE.reserveForSync();
+  }
+
   Storage.mkdir(TaskStore::stagedNotesDir());
   const std::string url = base + "/api/v1/tasks/sync";
-  // Un seul client pour tous les tours : il garde la connexion ouverte, donc
-  // une seule poignee de main TLS par sync.
   freeink::SecureHttpClient http;
   http.setCACert(ISRG_ROOT_X1_PEM);
 
-  size_t opsOffset = 0;
+  // Les ops deja acceptees par une sync precedente interrompue ne repartent
+  // pas : leur rejeu n'est pas sans effet (voir TaskStore::readAckedOps).
+  const size_t alreadyAcked = TASK_STORE.readAckedOps();
+  size_t opsOffset = alreadyAcked;
   bool allOpsSent = false;
   for (int round = 0; round < MAX_ROUNDS; round++) {
     size_t opsSent = 0;
     bool opsExhausted = false;
     const Failure failure = runRound(http, url, auth, opsOffset, opsSent, opsExhausted);
     if (failure != Failure::None) {
-      // Les tours precedents, eux, ont ete valides un par un (index, notes,
-      // curseur) ; la file d'ops est intacte, donc tout ce qu'ils ont envoye
-      // repartira a la prochaine sync — sans effet, les ops sont idempotentes.
+      // Les tours precedents ont ete valides un par un, compteur d'ops
+      // acquittees compris : la file reste entiere, mais la prochaine sync
+      // reprend apres les ops deja acceptees au lieu de les rejouer.
       http.end();
       fail(failure);
       return;
@@ -214,10 +233,12 @@ void TaskSyncActivity::runSync() {
   if (allOpsSent) {
     TASK_STORE.clearOps();
   } else {
-    LOG_ERR(TAG, "Stopped after %d rounds with ops still queued; they stay for the next sync", MAX_ROUNDS);
+    // Le compteur d'ops acquittees est a jour : la prochaine sync reprendra la.
+    LOG_ERR(TAG, "Stopped after %d rounds with work left; it stays for the next sync", MAX_ROUNDS);
+    incomplete_ = true;
   }
 
-  sent_ = static_cast<int>(opsOffset);
+  sent_ = static_cast<int>(opsOffset - alreadyAcked);
   total_ = static_cast<int>(TASK_STORE.all().size());
 #ifndef SIMULATOR
   LOG_INF(TAG, "Stack high-water mark: %u bytes", static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
@@ -289,11 +310,20 @@ TaskSyncActivity::Failure TaskSyncActivity::runRound(freeink::SecureHttpClient& 
   roundCursor_[0] = '\0';
   roundMore_ = false;
   roundReset_ = false;
+  // Sans curseur, le serveur rend un instantane complet mais sans tombstones
+  // (reset:false) : c'est l'index entier qu'il decrit, donc on le remplace
+  // comme sur un reset. Sinon une tache supprimee sur le web pendant que le
+  // curseur manquait resterait sur la liseuse pour toujours.
+  roundFullSnapshot_ = cursor[0] == '\0';
   roundReceived_ = 0;
   roundShownStart_ = shownRejections_;
   roundRejectedStart_ = rejectedCount_;
   noteFailed_ = false;
-  TASK_STORE.clearStagedNotes();
+  if (!TASK_STORE.clearStagedNotes()) {
+    // Un fichier perime laisse dans ns/ pourrait etre promu par-dessus une
+    // note a jour : on ne lance pas le tour.
+    return Failure::StorageFailed;
+  }
 
   if (!http.begin(url)) {
     LOG_ERR(TAG, "Bad server URL");
@@ -328,13 +358,22 @@ TaskSyncActivity::Failure TaskSyncActivity::runRound(freeink::SecureHttpClient& 
   // attrape toutes les autres). Sur l'appareil, responseComplete() la voit.
   const bool bodyComplete = code > 0;
 #endif
+  // La connexion est fermee avant toute ecriture : la session TLS rend son tas
+  // (tampons wolfSSL) au moment ou le commit en a le plus besoin — le
+  // JsonDocument de l'index et le rechargement d'un echec. Le prix est une
+  // poignee de main par tour, et la plupart des syncs n'ont qu'un tour.
+  http.end();
   body.reset();
   closeNoteFile();
   httpCode_ = code;
+  const bool readerComplete = reader->isComplete();
+  const bool readerError = reader->hasError();
+  reader.reset();
 
-  const TaskSyncOutcome outcome = classifyTaskSyncResponse(code, bodyComplete, reader->isComplete());
+  const TaskSyncOutcome outcome = classifyTaskSyncResponse(code, bodyComplete, readerComplete);
   LOG_INF(TAG, "Response %d, body %s, reader %s", code, bodyComplete ? "complete" : "incomplete",
-          reader->isComplete() ? "complete" : (reader->hasError() ? "error" : "unfinished"));
+          readerComplete ? "complete" : (readerError ? "error" : "unfinished"));
+  resolveRejectionTitles();
 
   // ------------------------------------------------------------ echec
   // Rien de persiste ne bouge : pas de curseur, pas d'index, pas de note, pas
@@ -342,8 +381,7 @@ TaskSyncActivity::Failure TaskSyncActivity::runRound(freeink::SecureHttpClient& 
   // sont jetees, comme si ce tour n'avait jamais eu lieu.
   if (outcome != TaskSyncOutcome::Commit || noteFailed_) {
     TASK_STORE.discardStaged();
-    shownRejections_ = roundShownStart_;
-    rejectedCount_ = roundRejectedStart_;
+    rollBackRoundRejections();
     switch (outcome) {
       case TaskSyncOutcome::Commit:
         LOG_ERR(TAG, "A synced note could not be written; nothing applied");
@@ -353,6 +391,14 @@ TaskSyncActivity::Failure TaskSyncActivity::runRound(freeink::SecureHttpClient& 
       case TaskSyncOutcome::TransportFailed:
         return Failure::Unreachable;
       case TaskSyncOutcome::ServerError:
+        // Seule exception a « rien ne bouge » : un 400 dit que la requete est
+        // invalide, et la seule partie qui persiste d'une sync a l'autre est le
+        // curseur. Le garder, c'est echouer ainsi pour toujours ; l'effacer
+        // coute un instantane complet. La file, elle, reste intacte.
+        if (code == 400) {
+          LOG_ERR(TAG, "Server refused the request (400); dropping the cursor for a full snapshot");
+          TASK_STORE.clearCursor();
+        }
         return Failure::ServerError;
       case TaskSyncOutcome::BadResponse:
         return Failure::BadResponse;
@@ -363,26 +409,62 @@ TaskSyncActivity::Failure TaskSyncActivity::runRound(freeink::SecureHttpClient& 
   // ------------------------------------------------------------ succes
   // Ordre choisi pour qu'une coupure a n'importe quel point laisse un etat
   // que la sync suivante repare d'elle-meme :
-  //  1. l'index d'abord — s'il ne s'ecrit pas, on s'arrete ici sans rien
-  //     d'autre de change ;
-  //  2. les notes ensuite (sur reset, les anciennes sont effacees avant que
-  //     les nouvelles n'arrivent) — une coupure ici laisse au pire une note
-  //     manquante, que l'ecran de detail signale ;
-  //  3. le curseur en dernier — tant qu'il n'a pas avance, le serveur renverra
+  //  1. l'index (tmp puis remplacement, promu au chargement s'il le faut) —
+  //     s'il ne s'ecrit pas, rien d'autre ne change et le curseur est efface ;
+  //  2. les notes (sur reset, les anciennes d'abord) — un echec arrete le tour
+  //     sans avancer le curseur, et le serveur renverra les lignes et leurs
+  //     notes ;
+  //  3. le compteur d'ops acquittees — ces ops ne repartiront plus ;
+  //  4. le curseur en dernier — tant qu'il n'a pas avance, le serveur renvoie
   //     les memes lignes.
   // La file d'ops, elle, n'est videe qu'apres le dernier tour (runSync).
-  if (!TASK_STORE.saveToFile()) {
-    LOG_ERR(TAG, "Could not save the task index; nothing applied");
+  LOG_INF(TAG, "Heap before commit: %u free, %u max alloc", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  if (!TASK_STORE.saveIndex()) {
+    LOG_ERR(TAG, "Could not save the task index; nothing applied, cursor dropped");
     TASK_STORE.discardStaged();
-    shownRejections_ = roundShownStart_;
-    rejectedCount_ = roundRejectedStart_;
+    // Etat de l'index inconnu : sans curseur, la prochaine sync repart d'un
+    // instantane complet, qui le reconstruit quel qu'il soit.
+    TASK_STORE.clearCursor();
+    rollBackRoundRejections();
     return Failure::StorageFailed;
   }
-  if (roundReset_) TASK_STORE.clearAllNotes();
-  TASK_STORE.commitStagedNotes();
-  TASK_STORE.writeCursor(roundCursor_);
+  bool notesOk = roundReset_ ? TASK_STORE.clearAllNotes() : true;
+  notesOk = TASK_STORE.commitStagedNotes() && notesOk;
+  if (!notesOk) {
+    LOG_ERR(TAG, "Synced notes not all in place; the cursor stays so the server resends them");
+    rollBackRoundRejections();
+    return Failure::StorageFailed;
+  }
+  if (!TASK_STORE.writeAckedOps(opsOffset + opsSent)) {
+    rollBackRoundRejections();
+    return Failure::StorageFailed;
+  }
+  // A partir d'ici les ops du tour sont acquittees et ne repartiront plus :
+  // leurs rejets doivent rester affiches, meme si la suite echoue.
   received_ += roundReceived_;
+  if (!TASK_STORE.writeCursor(roundCursor_)) {
+    LOG_ERR(TAG, "Could not save the cursor; dropping it for a full snapshot next time");
+    TASK_STORE.clearCursor();
+    return Failure::StorageFailed;
+  }
   return Failure::None;
+}
+
+void TaskSyncActivity::rollBackRoundRejections() {
+  shownRejections_ = roundShownStart_;
+  rejectedCount_ = roundRejectedStart_;
+}
+
+// Hors du rappel TLS : une tache absente de l'index (retiree par un reset d'un
+// tour precedent, par exemple) se nomme par le titre de son op en file — la
+// lecture SD n'a rien a faire dans le rappel de reception.
+void TaskSyncActivity::resolveRejectionTitles() {
+  for (size_t i = roundShownStart_; i < shownRejections_; i++) {
+    Rejection& slot = rejections_[i];
+    if (slot.titled) continue;
+    slot.titled = TASK_STORE.findQueuedTitle(slot.id, slot.title, sizeof(slot.title));
+    if (!slot.titled) snprintf(slot.title, sizeof(slot.title), "%s", slot.id);
+  }
 }
 
 // ------------------------------------------------------------ rappels du lecteur
@@ -391,10 +473,11 @@ void TaskSyncActivity::onHeader(void* ctx, const char* cursor, const bool more, 
   auto* self = static_cast<TaskSyncActivity*>(ctx);
   snprintf(self->roundCursor_, sizeof(self->roundCursor_), "%s", cursor);
   self->roundMore_ = more;
-  self->roundReset_ = reset;
-  // Sur reset, l'index repart de zero AVANT la premiere ligne. En RAM
-  // seulement : la carte ne change qu'au commit du tour.
-  if (reset) TASK_STORE.stageReset();
+  // Sur reset, ou sur l'instantane complet d'une sync sans curseur, l'index
+  // repart de zero AVANT la premiere ligne. En RAM seulement : la carte ne
+  // change qu'au commit du tour.
+  self->roundReset_ = reset || self->roundFullSnapshot_;
+  if (self->roundReset_) TASK_STORE.stageReset();
 }
 
 void TaskSyncActivity::onTask(void* ctx, const TaskRecord& rec) {
@@ -433,12 +516,16 @@ void TaskSyncActivity::onRejected(void* ctx, const char* id, const char* reason)
   self->rejectedCount_++;
   LOG_INF(TAG, "Server refused op on %s: %s", id, reason);
   if (self->shownRejections_ >= kMaxShownRejections) return;
-  // Emis avant la premiere ligne de la reponse, donc avant tout reset : la
-  // tache est encore dans l'index et on peut la nommer par son titre.
+  // Emis avant la premiere ligne de la reponse, donc avant le reset de CE
+  // tour : si la tache est dans l'index, on la nomme tout de suite. Sinon
+  // (retiree par un tour precedent), resolveRejectionTitles() cherchera son
+  // titre dans la file, apres la reponse.
   Rejection& slot = self->rejections_[self->shownRejections_++];
-  const TaskRecord* rec = TASK_STORE.find(id);
-  snprintf(slot.title, sizeof(slot.title), "%s", rec != nullptr ? rec->title : id);
+  snprintf(slot.id, sizeof(slot.id), "%s", id);
   snprintf(slot.reason, sizeof(slot.reason), "%s", reason);
+  const TaskRecord* rec = TASK_STORE.find(id);
+  slot.titled = rec != nullptr;
+  if (slot.titled) snprintf(slot.title, sizeof(slot.title), "%s", rec->title);
 }
 
 // ------------------------------------------------------------ entrees
@@ -481,6 +568,25 @@ void TaskSyncActivity::render(RenderLock&&) {
   };
 
   char line[96];
+  auto drawRejections = [&]() {
+    if (rejectedCount_ <= 0) return;
+    drawSmall(tr(STR_TASK_SYNC_REJECTED));
+    for (size_t i = 0; i < shownRejections_; i++) {
+      // Le motif ne doit jamais etre rogne : seul le titre cede la place.
+      char reason[40];
+      snprintf(reason, sizeof(reason), " (%s)", rejectionReasonText(rejections_[i].reason));
+      const int titleWidth = contentWidth - renderer.getTextWidth(SMALL_FONT_ID, reason);
+      const auto title = renderer.truncatedText(SMALL_FONT_ID, rejections_[i].title, titleWidth);
+      snprintf(line, sizeof(line), "%s%s", title.c_str(), reason);
+      drawSmall(line);
+    }
+    const int hidden = rejectedCount_ - static_cast<int>(shownRejections_);
+    if (hidden > 0) {
+      snprintf(line, sizeof(line), tr(STR_TASK_SYNC_MORE_REJECTED), hidden);
+      drawSmall(line);
+    }
+  };
+
   if (state_ != State::WIFI_SELECTION && heapFree_ > 0) {
     snprintf(line, sizeof(line), tr(STR_TASK_SYNC_HEAP), static_cast<unsigned>(heapFree_ / 1024),
              static_cast<unsigned>(heapMaxAlloc_ / 1024));
@@ -494,29 +600,17 @@ void TaskSyncActivity::render(RenderLock&&) {
       renderer.drawCenteredText(UI_10_FONT_ID, y, tr(STR_TASK_SYNCING));
       break;
     case State::DONE: {
-      renderer.drawCenteredText(UI_10_FONT_ID, y, tr(STR_TASK_SYNC_DONE));
+      renderer.drawCenteredText(UI_10_FONT_ID, y, incomplete_ ? tr(STR_TASK_SYNC_INCOMPLETE) : tr(STR_TASK_SYNC_DONE));
       y += 2 * lineHeight;
       snprintf(line, sizeof(line), tr(STR_TASK_SYNC_COUNTS), received_, sent_, total_);
       const auto counts = renderer.truncatedText(UI_10_FONT_ID, line, contentWidth);
       renderer.drawCenteredText(UI_10_FONT_ID, y, counts.c_str());
       y += 2 * lineHeight;
-      if (rejectedCount_ > 0) {
-        drawSmall(tr(STR_TASK_SYNC_REJECTED));
-        for (size_t i = 0; i < shownRejections_; i++) {
-          // Le motif ne doit jamais etre rogne : seul le titre cede la place.
-          char reason[40];
-          snprintf(reason, sizeof(reason), " (%s)", rejectionReasonText(rejections_[i].reason));
-          const int titleWidth = contentWidth - renderer.getTextWidth(SMALL_FONT_ID, reason);
-          const auto title = renderer.truncatedText(SMALL_FONT_ID, rejections_[i].title, titleWidth);
-          snprintf(line, sizeof(line), "%s%s", title.c_str(), reason);
-          drawSmall(line);
-        }
-        const int hidden = rejectedCount_ - static_cast<int>(shownRejections_);
-        if (hidden > 0) {
-          snprintf(line, sizeof(line), tr(STR_TASK_SYNC_MORE_REJECTED), hidden);
-          drawSmall(line);
-        }
+      if (incomplete_) {
+        drawSmall(tr(STR_TASK_SYNC_WORK_LEFT));
+        y += smallLineHeight;
       }
+      drawRejections();
       break;
     }
     case State::FAILED: {
@@ -560,6 +654,10 @@ void TaskSyncActivity::render(RenderLock&&) {
         y += smallLineHeight;
         drawSmall(tr(STR_TASK_SYNC_KEPT));
       }
+      // Les rejets des tours deja valides restent a dire : ces ops sont
+      // acquittees et ne repartiront pas.
+      y += smallLineHeight;
+      drawRejections();
       break;
     }
   }

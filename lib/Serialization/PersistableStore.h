@@ -58,6 +58,26 @@ class PersistableStoreBase {
   // Reads path and parses it into doc. Returns false silently when the file
   // does not exist (expected on first boot); logs on read/parse failure.
   static bool readDocFromFile(const char* path, JsonDocument& doc);
+
+  // Crash- and OOM-safe variant of writeDocToFile for stores whose loss is
+  // not recoverable. writeDocToFile removes the file and then writes a String
+  // that ArduinoJson truncates silently when the heap runs out, and reports
+  // success on the truncated copy. This one refuses an overflowed document,
+  // streams the JSON straight to tmpPath (no whole-file String), checks the
+  // byte count against measureJson(), and only then replaces path. FAT's rename
+  // refuses an existing target, so the replace is remove-then-rename: the
+  // caller must promote an orphaned tmpPath at load time (see
+  // recoverReplacedFile). Returns false on any failed step.
+  static bool writeDocToFileAtomic(const char* path, const char* tmpPath, const JsonDocument& doc);
+
+  // Replaces path with a fully written and closed tmpPath: remove, then rename.
+  static bool replaceWithTmp(const char* tmpPath, const char* path);
+
+  // Load-time half of the replace above. A tmpPath without its target is a
+  // replace interrupted between remove and rename: promote it. A tmpPath
+  // beside its target is a write interrupted before the remove: the target is
+  // still the last good copy, so drop the tmp.
+  static void recoverReplacedFile(const char* path, const char* tmpPath);
 };
 
 /**
