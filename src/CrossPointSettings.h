@@ -604,6 +604,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // (creer, cocher, detail, pomodoro), le serveur n'est qu'un complement.
   uint8_t taskEnabled = 1;
   char taskServerUrl[96] = "";
+  // Espacement des lignes de la liste des taches : 0 compacte (la densite
+  // des autres listes), 1 confortable, 2 aeree. Voir TaskListActivity::buildRows.
+  uint8_t taskRowSpacing = 0;
   // Hide battery percentage
   uint8_t hideBatteryPercentage = HIDE_NEVER;
   // Long-press page turn button behavior

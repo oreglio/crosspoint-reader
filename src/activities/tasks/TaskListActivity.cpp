@@ -170,7 +170,13 @@ void TaskListActivity::buildRows(UiScreen& screen) {
   // une iconSize differente les ferait redimensionner au plus proche voisin et
   // l'anneau prendrait une epaisseur irreguliere sur un panneau 1 bit.
   props.iconSize = TASK_BULLET_PX;
-  syncListViewport(screen, props, /*hasSubtitle=*/false);
+  // Reglage « Espacement des taches » : un ecart uniforme entre les lignes,
+  // quelle que soit leur hauteur (voir syncListViewport). Echelonne comme la
+  // hauteur de base (scaledListMetric) pour garder la proportion en grande
+  // taille d'UI.
+  static constexpr int kSpacingPx[] = {0, 10, 20};
+  const uint8_t spacing = SETTINGS.taskRowSpacing < 3 ? SETTINGS.taskRowSpacing : 0;
+  syncListViewport(screen, props, /*hasSubtitle=*/false, UiThemeTokensDetail::scaledListMetric(kSpacingPx[spacing]));
 
   const size_t cap = static_cast<size_t>(nav.visibleRows > 0 ? nav.visibleRows : 1);
   if (winItems.capacity() < cap) winItems.reserve(cap);
@@ -336,41 +342,63 @@ void TaskListActivity::openTaskMenu(const int index) {
   }
   const TaskRecord& rec = TASK_STORE.all()[static_cast<size_t>(rows[static_cast<size_t>(index)].recordIndex)];
   const std::string id = rec.id;
-  // Supprimer en dernier, comme le menu d'un livre dans la Library : l'action
-  // destructrice n'est jamais la selection par defaut ni sa voisine immediate.
-  const std::vector<std::string> options{rec.done ? tr(STR_TASK_MENU_REOPEN) : tr(STR_TASK_MENU_TICK),
-                                         tr(STR_TASK_MENU_VIEW),
-                                         tr(STR_TASK_MENU_EDIT),
-                                         tr(STR_TASK_SYNC),
-                                         keepAwake ? tr(STR_TASK_MENU_ALLOW_SLEEP) : tr(STR_TASK_MENU_KEEP_AWAKE),
-                                         tr(STR_DELETE)};
+  // L'ordre du menu tient dans ce seul tableau : le rappel dispatche sur
+  // l'action, jamais sur un indice de ligne, donc deplacer une entree ne
+  // decale pas les autres. Supprimer n'est jamais la selection par defaut ;
+  // Synchroniser ferme la liste, qui redemarre l'appareil : en bas, a part.
+  enum class MenuAction : uint8_t { Tick, View, Edit, KeepAwake, Delete, Sync };
+  static constexpr MenuAction kMenu[] = {MenuAction::Tick,      MenuAction::View,   MenuAction::Edit,
+                                         MenuAction::KeepAwake, MenuAction::Delete, MenuAction::Sync};
+  std::vector<std::string> options;
+  options.reserve(sizeof(kMenu) / sizeof(kMenu[0]));
+  for (const MenuAction action : kMenu) {
+    switch (action) {
+      case MenuAction::Tick:
+        options.emplace_back(rec.done ? tr(STR_TASK_MENU_REOPEN) : tr(STR_TASK_MENU_TICK));
+        break;
+      case MenuAction::View:
+        options.emplace_back(tr(STR_TASK_MENU_VIEW));
+        break;
+      case MenuAction::Edit:
+        options.emplace_back(tr(STR_TASK_MENU_EDIT));
+        break;
+      case MenuAction::KeepAwake:
+        options.emplace_back(keepAwake ? tr(STR_TASK_MENU_ALLOW_SLEEP) : tr(STR_TASK_MENU_KEEP_AWAKE));
+        break;
+      case MenuAction::Delete:
+        options.emplace_back(tr(STR_DELETE));
+        break;
+      case MenuAction::Sync:
+        options.emplace_back(tr(STR_TASK_SYNC));
+        break;
+    }
+  }
   app.clearTapFlash();
   popup.show(rec.title, options, 0, [this, id](const int choice) {
+    if (choice < 0 || static_cast<size_t>(choice) >= sizeof(kMenu) / sizeof(kMenu[0])) return;
     const int row = rowOfTask(id.c_str());
-    switch (choice) {
-      case 0:
+    switch (kMenu[choice]) {
+      case MenuAction::Tick:
         toggleAt(row);
         break;
-      case 1:
+      case MenuAction::View:
         openDetailAt(row);
         break;
-      case 2:
+      case MenuAction::Edit:
         editTaskTitle(id);
         break;
-      case 3:
-        // Chaque op est deja sur la carte (appendOp ecrit a chaque geste) :
-        // redemarrer maintenant ne perd rien. Retour a cette liste ensuite.
-        silentRestartToNetwork(NetworkBootTarget::TASK_SYNC, TASK_SYNC_RETURN_TO_LIST);
-        break;
-      case 4:
+      case MenuAction::KeepAwake:
         // Pour la visite seulement : onEnter() le remet a faux, donc quitter la
         // liste rend la veille, et la batterie ne paie jamais un oubli.
         keepAwake = !keepAwake;
         break;
-      case 5:
+      case MenuAction::Delete:
         promptDeleteTask(id);
         break;
-      default:
+      case MenuAction::Sync:
+        // Chaque op est deja sur la carte (appendOp ecrit a chaque geste) :
+        // redemarrer maintenant ne perd rien. Retour a cette liste ensuite.
+        silentRestartToNetwork(NetworkBootTarget::TASK_SYNC, TASK_SYNC_RETURN_TO_LIST);
         break;
     }
   });

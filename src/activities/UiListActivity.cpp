@@ -103,7 +103,8 @@ void UiListActivity::navigateButtons() {
       [this, count, &n] { moveSelectionTo(ButtonNavigator::previousPageIndex(n.selected, count, n.pageRows())); });
 }
 
-void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, const bool hasSubtitle) {
+void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, const bool hasSubtitle,
+                                      const int16_t extraRowGap) {
   // uiListRowHeight returns the theme token on touch hardware and the denser,
   // UI-scale-aware per-theme metric on button devices (X3/X4), so lists fit as
   // many rows per screen as they did before the FreeInkUI migration.
@@ -112,7 +113,9 @@ void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, c
   const auto rowType = hasSubtitle ? UiListRowType::WithSubtitle : UiListRowType::SingleLine;
   const int16_t rowHeight = uiListRowHeight(screen.theme(), rowType);
   props.rowHeight = rowHeight;
-  activeNav().syncToProps(screen.body(), rowHeight, screen.theme().listRowGap, listCount(), props);
+  const int16_t rowGap = static_cast<int16_t>(screen.theme().listRowGap + extraRowGap);
+  if (extraRowGap > 0) props.rowGap = rowGap;
+  activeNav().syncToProps(screen.body(), rowHeight, rowGap, listCount(), props);
 }
 
 void UiListActivity::drawChrome() {

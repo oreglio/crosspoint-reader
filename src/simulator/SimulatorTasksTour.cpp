@@ -66,7 +66,6 @@ constexpr TourStep kSteps[] = {
     {"menu-down-1", Act::Tap, Button::Down},
     {"menu-down-2", Act::Tap, Button::Down},
     {"menu-down-3", Act::Tap, Button::Down},
-    {"menu-down-4", Act::Tap, Button::Down},
     {"14-menu-delete-selected", Act::Tap, Button::Down},
     {"15-delete-confirm", Act::Tap, Button::Confirm},
     // La confirmation s'ouvre sur Annuler, comme pour un livre : Bas d'abord.
@@ -107,6 +106,11 @@ void applyRequestedTheme() {
   SETTINGS.uiTheme = static_cast<uint8_t>(theme);
   UITheme::getInstance().reload();
   LOG_INF("TOUR", "theme %d", theme);
+  // Reglage « Espacement des taches » a capturer (0 par defaut).
+  const char* spacing = std::getenv("CROSSINK_SIMULATOR_TASKS_SPACING");
+  if (spacing != nullptr && spacing[0] >= '0' && spacing[0] <= '2') {
+    SETTINGS.taskRowSpacing = static_cast<uint8_t>(spacing[0] - '0');
+  }
 }
 
 // Le francais est la langue ou les libelles debordent : c'est lui qu'il faut

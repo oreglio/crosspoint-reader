@@ -41,13 +41,16 @@ the task is done; that is the only priority marker. Long titles wrap over two li
   stays put, on the task that took its place.
 - Finished tasks gather in an **N done** row below the open ones. Select it and
   press **Confirm** to expand or collapse it; the button hint says which.
+- **Settings > System > Tasks > Task spacing** puts more room between the
+  rows: **Compact** (the default, like other lists), **Comfortable** or
+  **Spacious**.
 - An empty list shows a **+ Add a task** row; **Confirm** on it adds a task.
 - On touch devices, tapping a row does what **Confirm** does, and a long press
   opens the task's menu.
 
 Holding **Confirm** on a task (about a second) opens its menu: **Tick** (or
-**Reopen**), **View**, **Edit** (title, then priority), **Sync tasks**,
-**Keep screen on** and **Delete**. **Keep screen on** stops the device from
+**Reopen**), **View**, **Edit** (title, then priority), **Keep screen on**,
+**Delete** and, last, **Sync tasks**. **Keep screen on** stops the device from
 going to sleep while the list is on screen; leaving the list turns it off
 again. Deleting asks for confirmation first; the task disappears at once
 and the next sync deletes it on the server too. **Sync tasks** from this menu

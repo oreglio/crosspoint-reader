@@ -325,7 +325,7 @@ void SettingsActivity::rebuildSettingsLists() {
   systemDeviceSettings = buildSystemDeviceSettingsList(allSettings);
   systemFilesCacheSettings = buildSystemFilesCacheSettingsList(allSettings);
   systemLibrarySettings = buildSystemLibrarySettingsList(allSettings);
-  systemTasksSettings = buildSystemTasksSettingsList();
+  systemTasksSettings = buildSystemTasksSettingsList(allSettings);
   systemReadingStatsSettings = buildSystemReadingStatsSettingsList(allSettings);
   systemGlobalStatsSettings = buildSystemGlobalStatsSettingsList(allSettings);
   controlsSettings = buildControlsSettingsParentList(allSettings);

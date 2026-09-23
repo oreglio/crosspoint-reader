@@ -76,7 +76,13 @@ class UiListActivity : public Activity, protected UiAppHost {
   // hasSubtitle: rows carry a second (subtitle) text line, so on non-touch
   // hardware the denser uiListRowHeight() metric uses the theme's
   // *-with-subtitle row height instead of its single-line one.
-  void syncListViewport(UiScreen& screen, freeink::ui::ListProps& props, bool hasSubtitle = false);
+  // extraRowGap : ecart ajoute ENTRE les lignes (reglage de densite d'un
+  // ecran), compte avant la mesure des lignes visibles pour que la pagination
+  // reste juste. Un ecart plutot qu'une hauteur : le SDK n'agrandit une ligne
+  // enroulee que si ses lignes de texte debordent rowHeight, donc une hauteur
+  // gonflee laissait les titres sur deux lignes plus serres que les autres.
+  void syncListViewport(UiScreen& screen, freeink::ui::ListProps& props, bool hasSubtitle = false,
+                        int16_t extraRowGap = 0);
   // Move the selection to index and pull the viewport to it.
   void moveSelectionTo(int index);
 
