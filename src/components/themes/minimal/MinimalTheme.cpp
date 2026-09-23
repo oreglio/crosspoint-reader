@@ -411,8 +411,6 @@ void drawBookCover(const GfxRenderer& renderer, const Rect& coverRect, const Rec
 
 void MinimalTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle,
                               const bool readerContext) const {
-  (void)subtitle;
-
   renderer.fillRect(rect.x, rect.y, rect.width, rect.height, false);
   const bool showBatteryPercentage =
       SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS;
@@ -424,10 +422,19 @@ void MinimalTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char
 
   if (title) {
     constexpr int titleInsetX = 12;
-    const int maxTitleWidth = batteryX - rect.x - titleInsetX - MinimalMetrics::values.contentSidePadding;
+    const int titleY = rect.y + MinimalMetrics::values.batteryBarHeight + 3;
+    int maxTitleWidth = batteryX - rect.x - titleInsetX - MinimalMetrics::values.contentSidePadding;
+    // Le sous-titre se range au bord droit de la ligne du titre, sous la
+    // batterie, cale sur le bas du titre comme dans BaseTheme::drawHeader.
+    if (subtitle != nullptr && subtitle[0] != '\0') {
+      const int subtitleWidth = renderer.getTextWidth(SMALL_FONT_ID, subtitle);
+      const int subtitleX = rect.x + rect.width - titleInsetX - subtitleWidth;
+      const int subtitleY = titleY + renderer.getLineHeight(UI_12_FONT_ID) - renderer.getLineHeight(SMALL_FONT_ID);
+      renderer.drawText(SMALL_FONT_ID, subtitleX, subtitleY, subtitle, true);
+      maxTitleWidth = std::min(maxTitleWidth, subtitleX - rect.x - titleInsetX - 6);
+    }
     auto truncatedTitle = renderer.truncatedText(UI_12_FONT_ID, title, maxTitleWidth, EpdFontFamily::BOLD);
-    renderer.drawText(UI_12_FONT_ID, rect.x + titleInsetX, rect.y + MinimalMetrics::values.batteryBarHeight + 3,
-                      truncatedTitle.c_str(), true, EpdFontFamily::BOLD);
+    renderer.drawText(UI_12_FONT_ID, rect.x + titleInsetX, titleY, truncatedTitle.c_str(), true, EpdFontFamily::BOLD);
     renderer.drawLine(rect.x, rect.y + rect.height - 3, rect.x + rect.width - 1, rect.y + rect.height - 3, 3, true);
   }
 

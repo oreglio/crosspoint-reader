@@ -18,7 +18,7 @@ when you ask.
 
 ## The List
 
-The header shows how many tasks are still open, followed by **↻** while changes
+The header shows how many tasks are still open, with **↻** at its right end while changes
 made on the device are waiting for the next sync. Open tasks are sorted high
 priority first, then normal, then low. High-priority titles are in bold until
 the task is done; that is the only priority marker. Long titles wrap over two lines.

@@ -104,7 +104,7 @@ class TaskListActivity final : public UiListActivity {
   static constexpr unsigned long kNoticeMs = 2000;
   void showNotice(StatusNotice next);
   const char* noticeText() const;
-  // Une op attend encore le serveur : le titre porte alors U+21BB. Lu sur la
+  // Une op attend encore le serveur : le bord droit du titre porte alors U+21BB. Lu sur la
   // carte en onEnter() (jamais depuis le rendu), puis leve
   // par chaque op ajoutee pendant la visite — rien ne vide la file tant que
   // l'ecran est ouvert (la sync redemarre l'appareil).

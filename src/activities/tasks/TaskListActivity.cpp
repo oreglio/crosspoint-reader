@@ -741,18 +741,18 @@ int TaskListActivity::rowOfTask(const char* id) const {
 
 void TaskListActivity::drawChrome() {
   const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
-  // Une op attend le serveur : une fleche circulaire suit le compteur, dans le
-  // texte meme du titre. Le titre est toujours en UI_12 gras (UIScale.cpp), qui
-  // porte U+21BB (scripts/measure_label.py inter_12_bold) ; un glyphe colle au
-  // texte suit l'alignement du titre sur chaque theme (centre, a gauche, a cote
-  // de l'horloge), ce qu'une icone posee a une abscisse calculee ne ferait pas.
-  // Rien quand tout est envoye : l'etat normal ne se signale pas.
   char title[48];
-  std::snprintf(title, sizeof(title), pendingOps ? "%s (%d) \u21BB" : "%s (%d)", tr(STR_TASK_TITLE), openCount);
+  std::snprintf(title, sizeof(title), "%s (%d)", tr(STR_TASK_TITLE), openCount);
+  // Une op attend le serveur : une fleche circulaire au bord droit de la ligne
+  // du titre. Passee comme `subtitle`, que les themes placent a droite, alignee
+  // sur la ligne de base du titre, dans la petite police (inter_8_regular porte
+  // U+21BB, scripts/measure_label.py). Rien quand tout est envoye : l'etat
+  // normal ne se signale pas.
+  const char* pendingMark = pendingOps ? "\u21BB" : nullptr;
   if (mappedInput.hasTouchHardware()) {
-    TouchHeaderBackButton::draw(renderer, uiTarget, header, title, false);
+    TouchHeaderBackButton::draw(renderer, uiTarget, header, title, false, 0, pendingMark);
   } else {
-    GUI.drawHeader(renderer, header, title);
+    GUI.drawHeader(renderer, header, title, pendingMark);
   }
 }
 
