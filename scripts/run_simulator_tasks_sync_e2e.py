@@ -366,6 +366,8 @@ def real_server_scenarios(r: Runner, srv: Crossdrop) -> None:
     work = r.fresh("real-order-del")
     fs = work / "fs_"
     x, y, z = (srv.req("POST", "/web/api/tasks", {"title": f"Basse {n}", "priority": 2})["id"] for n in "XYZ")
+    # W ne sert qu'au lot de suppression plus bas : il doit etre sur la carte.
+    w = srv.req("POST", "/web/api/tasks", {"title": "Basse W", "priority": 2})["id"]
     low = [t["id"] for t in srv.req("GET", "/web/api/tasks")["tasks"] if t["priority"] == 2 and not t["done"]]
     srv.req("POST", "/web/api/tasks/reorder", {"priority": 2, "ids": [z, x, y] + [i for i in low if i not in (x, y, z)]})
     seed_card(fs, srv.base, secret, [])
@@ -379,6 +381,18 @@ def real_server_scenarios(r: Runner, srv: Crossdrop) -> None:
     c, web = card(fs), srv.tasks()
     r.check("real: a del op removes the task on both sides", x not in web and x not in c["tasks"]
             and y in c["tasks"] and c["ops"] is None, lines)
+    # Actions en lot : le web supprime Y par /bulk ; la liseuse supprime Z et
+    # une autre tache basse dans une meme file, enregistrements au format
+    # d'appendOpBatch ("\n" + ligne + "\n"). Tout doit disparaitre partout.
+    before = card(fs)["tasks"]
+    srv.req("POST", "/web/api/tasks/bulk", {"action": "delete", "ids": [y]})
+    batch = [z, w]
+    (tasks_dir(fs) / "ops.ndjson").write_text("".join(f'\n{{"op":"del","id":"{i}"}}\n' for i in batch))
+    lines = run_sim(work, "bulk-del")
+    c, web = card(fs), srv.tasks()
+    gone = [y] + batch
+    r.check("real: a web bulk delete and a device del batch land on both sides", w in before
+            and all(i not in web and i not in c["tasks"] for i in gone) and c["ops"] is None, lines, f"gone={gone}")
 
     # 10. Serveur reappaire ailleurs : 401, carte identique.
     srv.pair(new_secret())
