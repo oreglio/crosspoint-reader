@@ -56,7 +56,7 @@ class TaskOpLineSplitter {
   bool lastLineTooLong() const { return lastTooLong_; }
 
  private:
-  char line_[TASK_OP_LINE_MAX];
+  char line_[TASK_OP_LINE_MAX] = {};
   size_t len_ = 0;
   bool overflow_ = false;
   bool lastTooLong_ = false;

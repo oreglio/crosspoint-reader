@@ -81,7 +81,7 @@ class TaskSyncReader {
 
   TaskSyncCallbacks cb_;
   Mode mode_ = Mode::Line;
-  char line_[LINE_BUF_SIZE];
+  char line_[LINE_BUF_SIZE] = {};
   size_t lineLen_ = 0;
   bool overflow_ = false;
   bool error_ = false;
