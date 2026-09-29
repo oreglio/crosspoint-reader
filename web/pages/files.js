@@ -3294,20 +3294,25 @@ function rewriteSplitSectionReferences(content, sourcePath, anchorTargets) {
   return changed ? safeSerialize(doc, content) : content;
 }
 
-function splitLongXhtmlSections(xhtmlFiles, opfContent, opfPath, enabled) {
-  if (!enabled) return { files: xhtmlFiles, splitSections: {}, anchorTargets: new Map(), sourceSpineMap: null };
+/**
+ * `sourceSpineHrefs` is the spine the source map points into: the input book's,
+ * before empty stubs were collapsed out of `opfContent`, so that indices still
+ * match the DocFragment numbers other readers use for the same file.
+ */
+function splitLongXhtmlSections(xhtmlFiles, opfContent, opfPath, enabled, sourceSpineHrefs) {
+  const sourceByHref = {};
+  sourceSpineHrefs.forEach((href, sourceSpineIndex) => {
+    sourceByHref[href] = { sourceSpineIndex };
+  });
+  const sourceSpineMap = { version: 1, spineCount: sourceSpineHrefs.length, sourceByHref };
+  if (!enabled) return { files: xhtmlFiles, splitSections: {}, anchorTargets: new Map(), sourceSpineMap };
 
   const parser = new DOMParser();
   const serializer = new XMLSerializer();
   const out = {};
   const splitSections = {};
   const anchorTargets = new Map();
-  const originalSpineHrefs = parseOpfSpineHrefs(opfContent, opfPath);
-  const spinePaths = new Set(originalSpineHrefs);
-  const sourceByHref = {};
-  originalSpineHrefs.forEach((href, sourceSpineIndex) => {
-    sourceByHref[href] = { sourceSpineIndex };
-  });
+  const spinePaths = new Set(parseOpfSpineHrefs(opfContent, opfPath));
 
   for (const [path, content] of Object.entries(xhtmlFiles)) {
     if (!spinePaths.has(path)) {
@@ -3452,20 +3457,14 @@ function splitLongXhtmlSections(xhtmlFiles, opfContent, opfPath, enabled) {
         tagOffsets.set(name, (tagOffsets.get(name) || 0) + 1);
       }
       sourceByHref[partPath] = {
-        sourceSpineIndex: originalSpineHrefs.indexOf(path),
+        sourceSpineIndex: sourceSpineHrefs.indexOf(path),
         containerDepth: splitContainer.childPath.length,
         childRanges: Array.from(rangesByName.values()),
       };
     });
   }
 
-  const hasSplits = Object.keys(splitSections).length > 0;
-  return {
-    files: out,
-    splitSections,
-    anchorTargets,
-    sourceSpineMap: hasSplits ? { version: 1, spineCount: originalSpineHrefs.length, sourceByHref } : null,
-  };
+  return { files: out, splitSections, anchorTargets, sourceSpineMap };
 }
 
 function addSplitSectionsToOpf(opfContent, opfPath, splitSections) {
@@ -3536,6 +3535,91 @@ function normalizedReferenceCharactersPerPage(value) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? Math.max(1, Math.min(10000, parsed)) : X_DEFAULT_REFERENCE_CHARACTERS_PER_PAGE;
 }
+
+// --- source-spine-map (node-testable block) ---
+// KOSync positions name the ORIGINAL book's spine (/body/DocFragment[n]), which is
+// what Readest and KOReader hold. The source spine map in x-locations.json is the
+// only link from an optimized spine back to it, so re-optimizing an optimized book
+// must carry that link through instead of rebuilding it from the optimized spine.
+
+/**
+ * Where each spine item of the EPUB being optimized sits in the original book.
+ * `original`: no earlier optimization moved anything, the spine is the original's.
+ * `mapped`: `entries[i]` is the original position of input spine item i.
+ * `lost`: an earlier pass split or reordered the spine without a usable map.
+ */
+function readPriorSourceSpineMap(manifestText, inputSpineHrefs) {
+  if (manifestText == null) return { kind: "original" };
+  let manifest;
+  try {
+    manifest = JSON.parse(manifestText);
+  } catch {
+    return { kind: "lost" };
+  }
+  const recordedSpine = Array.isArray(manifest?.spine) ? manifest.spine : [];
+  if (
+    recordedSpine.length !== inputSpineHrefs.length ||
+    recordedSpine.some((entry) => entry?.href !== inputSpineHrefs[entry?.index])
+  ) {
+    return { kind: "lost" };
+  }
+  const map = manifest.sourceSpineMap;
+  if (!map) {
+    const wasSplit =
+      (Array.isArray(manifest.chapterGroups) && manifest.chapterGroups.length > 0) ||
+      inputSpineHrefs.some((href) => SECTION_SPLIT_SUFFIX_RE.test(href));
+    return wasSplit ? { kind: "lost" } : { kind: "original" };
+  }
+  const mapped = Array.isArray(map.spine) ? map.spine : [];
+  if (!Number.isInteger(map.spineCount) || mapped.length !== inputSpineHrefs.length) return { kind: "lost" };
+  const entries = new Array(inputSpineHrefs.length);
+  for (const { index, ...entry } of mapped) {
+    if (!Number.isInteger(index) || index < 0 || index >= entries.length || entries[index]) return { kind: "lost" };
+    if (!Number.isInteger(entry.sourceSpineIndex) || entry.sourceSpineIndex >= map.spineCount) return { kind: "lost" };
+    entries[index] = entry;
+  }
+  return { kind: "mapped", spineCount: map.spineCount, entries };
+}
+
+/**
+ * Chain "output item within input item" (`current`) onto "input item within the
+ * original" (`prior`). Split parts are container children counted per tag name,
+ * so a part of a part is an offset inside the outer part's range. Returns null
+ * when the two splits used different containers and cannot be chained.
+ */
+function composeSourceSpineEntry(prior, current) {
+  if (!Array.isArray(current.childRanges)) return { ...prior };
+  if (!Array.isArray(prior.childRanges)) {
+    return {
+      sourceSpineIndex: prior.sourceSpineIndex,
+      containerDepth: current.containerDepth,
+      childRanges: current.childRanges,
+    };
+  }
+  if (prior.containerDepth !== current.containerDepth) return null;
+  const childRanges = [];
+  for (const range of current.childRanges) {
+    const outer = prior.childRanges.find((candidate) => candidate.name === range.name);
+    if (!outer || range.offset + range.count > outer.count) return null;
+    childRanges.push({ name: range.name, offset: outer.offset + range.offset, count: range.count });
+  }
+  return { sourceSpineIndex: prior.sourceSpineIndex, containerDepth: prior.containerDepth, childRanges };
+}
+
+/** `current` maps output hrefs onto the input spine; the result maps them onto the original. Null if impossible. */
+function composeSourceSpineMap(prior, current) {
+  if (prior.kind === "original") return current;
+  if (prior.kind !== "mapped") return null;
+  const sourceByHref = {};
+  for (const [href, entry] of Object.entries(current.sourceByHref)) {
+    const priorEntry = prior.entries[entry.sourceSpineIndex];
+    const composed = priorEntry ? composeSourceSpineEntry(priorEntry, entry) : null;
+    if (!composed) return null;
+    sourceByHref[href] = composed;
+  }
+  return { version: current.version, spineCount: prior.spineCount, sourceByHref };
+}
+// --- end source-spine-map ---
 
 function buildXLocationManifest(
   opfContent,
@@ -5214,6 +5298,16 @@ async function convertEpubFile(file, progressCallback, opts = {}) {
     processedXhtmlFiles[xhtmlPath] = t;
   }
 
+  // Read before the spine changes: other readers' positions index this spine.
+  const inputSpineHrefs = opfContent ? parseOpfSpineHrefs(opfContent, opfPath) : [];
+  const priorLocationKey = Object.keys(zip.files).find(
+    (p) => p.toLowerCase() === X_LOCATION_MANIFEST_PATH.toLowerCase(),
+  );
+  const priorSourceSpineMap = readPriorSourceSpineMap(
+    priorLocationKey ? await zip.files[priorLocationKey].async("string") : null,
+    inputSpineHrefs,
+  );
+
   const collapseResult = collapseReaderEmptySpineItems(processedXhtmlFiles, opfContent, opfPath);
   opfContent = collapseResult.opfContent;
   for (const [xhtmlPath, content] of Object.entries(processedXhtmlFiles)) {
@@ -5224,7 +5318,13 @@ async function convertEpubFile(file, progressCallback, opts = {}) {
   }
 
   const splitLongSections = !!document.getElementById("splitLongSectionsToggle")?.checked;
-  const sectionSplitResult = splitLongXhtmlSections(processedXhtmlFiles, opfContent, opfPath, splitLongSections);
+  const sectionSplitResult = splitLongXhtmlSections(
+    processedXhtmlFiles,
+    opfContent,
+    opfPath,
+    splitLongSections,
+    inputSpineHrefs,
+  );
   processedXhtmlFiles = sectionSplitResult.files;
   for (const [xhtmlPath, content] of Object.entries(processedXhtmlFiles)) {
     processedXhtmlFiles[xhtmlPath] = rewriteSplitSectionReferences(
@@ -5279,12 +5379,33 @@ async function convertEpubFile(file, progressCallback, opts = {}) {
     const referenceCharactersInput = document.getElementById("referenceCharactersInput");
     const referenceCharactersPerPage = normalizedReferenceCharactersPerPage(referenceCharactersInput?.value);
     if (referenceCharactersInput) referenceCharactersInput.value = referenceCharactersPerPage;
+    const spineChanged =
+      Object.keys(sectionSplitResult.splitSections).length > 0 || collapseResult.redirects.size > 0;
+    let sourceSpineMap = null;
+    if (priorSourceSpineMap.kind === "mapped" || spineChanged) {
+      sourceSpineMap = composeSourceSpineMap(priorSourceSpineMap, sectionSplitResult.sourceSpineMap);
+    }
+    if (priorSourceSpineMap.kind === "mapped" && sourceSpineMap) {
+      log("KOSync position map: carried over from the earlier optimization", "", "INFO");
+    } else if (priorSourceSpineMap.kind === "mapped") {
+      log(
+        "KOSync position map: could not be carried over — sync with the original book will fail; optimize the original EPUB instead",
+        "warning",
+        "INFO",
+      );
+    } else if (priorSourceSpineMap.kind === "lost") {
+      log(
+        "KOSync position map: already lost by an earlier optimization — sync with the original book will fail; optimize the original EPUB instead",
+        "warning",
+        "INFO",
+      );
+    }
     const locationManifest = buildXLocationManifest(
       t,
       opfPath,
       processedXhtmlFiles,
       referenceCharactersPerPage,
-      sectionSplitResult.sourceSpineMap,
+      sourceSpineMap,
     );
     if (locationManifest) {
       out.file(X_LOCATION_MANIFEST_PATH, JSON.stringify(locationManifest), DEFLATE_OPTS);
