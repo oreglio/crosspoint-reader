@@ -103,6 +103,13 @@ class TaskStore : public PersistableStore<TaskStore> {
   const TaskRecord* find(const char* id) const;
 
   bool appendOp(const TaskOp& op);
+  // Action en lot (selection, « supprimer les faites ») : la file s'ouvre UNE
+  // fois pour les `count` ops au lieu d'une fois par op. `fill` construit
+  // l'op `i` ; chaque op garde son propre write(), donc la regle du fragment
+  // isole (taskOpToRecord) tient comme pour appendOp(). S'arrete au premier
+  // echec et rend le nombre d'ops ecrites : seules celles-la doivent etre
+  // appliquees a l'index (la file avant l'index).
+  size_t appendOpBatch(size_t count, bool (*fill)(void* ctx, size_t i, TaskOp& out), void* ctx);
   // `skip` saute les premieres ops valides : une sync envoie au plus
   // TASK_MAX_OPS_PER_SYNC ops par requete et lit les suivantes par tranches,
   // sans toucher au fichier avant d'avoir tout envoye.

@@ -223,3 +223,54 @@ TEST(TaskListClampSelection, EmptyRowsReturnsNegativeOne) {
   std::vector<TaskListRow> rows;
   EXPECT_EQ(taskListClampSelection(rows, 0), -1);
 }
+
+// --- cibles d'une action en lot ----------------------------------------------
+// Toujours du plus grand indice au plus petit : effacer dans cet ordre ne
+// decale aucun indice qui reste a traiter.
+
+TEST(TaskSelectionTargets, SelectedIndicesComeOutDescending) {
+  TaskSelection selection;
+  selection.set(0);
+  selection.set(4);
+  selection.set(2);
+  uint8_t out[MAX_TASKS];
+  ASSERT_EQ(taskSelectionTargets(selection, 5, out), 3u);
+  EXPECT_EQ(out[0], 4);
+  EXPECT_EQ(out[1], 2);
+  EXPECT_EQ(out[2], 0);
+}
+
+TEST(TaskSelectionTargets, BitsPastTheRecordCountAreIgnored) {
+  // Une sélection plus longue que l'index (tâche disparue entre-temps) ne
+  // doit jamais désigner un enregistrement qui n'existe pas.
+  TaskSelection selection;
+  selection.set(1);
+  selection.set(7);
+  uint8_t out[MAX_TASKS];
+  ASSERT_EQ(taskSelectionTargets(selection, 3, out), 1u);
+  EXPECT_EQ(out[0], 1);
+}
+
+TEST(TaskSelectionTargets, EmptySelectionGivesNothing) {
+  uint8_t out[MAX_TASKS];
+  EXPECT_EQ(taskSelectionTargets(TaskSelection{}, 10, out), 0u);
+}
+
+TEST(TaskDoneTargets, OnlyFinishedTasksDescending) {
+  std::vector<TaskRecord> records = {
+      make("w1", "a", 1, true),
+      make("w2", "b", 1, false),
+      make("w3", "c", 0, true),
+      make("w4", "d", 2, false),
+  };
+  uint8_t out[MAX_TASKS];
+  ASSERT_EQ(taskDoneTargets(records, out), 2u);
+  EXPECT_EQ(out[0], 2);
+  EXPECT_EQ(out[1], 0);
+}
+
+TEST(TaskDoneTargets, NothingDoneGivesNothing) {
+  std::vector<TaskRecord> records = {make("w1", "a", 1), make("w2", "b", 1)};
+  uint8_t out[MAX_TASKS];
+  EXPECT_EQ(taskDoneTargets(records, out), 0u);
+}

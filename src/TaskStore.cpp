@@ -410,6 +410,39 @@ bool TaskStore::appendOp(const TaskOp& op) {
   return ok;
 }
 
+size_t TaskStore::appendOpBatch(const size_t count, bool (*fill)(void* ctx, size_t i, TaskOp& out), void* ctx) {
+  if (count == 0 || fill == nullptr) return 0;
+  // Meme garde qu'appendOp() : un compteur d'acquittement sans file ferait
+  // sauter les premieres ops du lot a la prochaine sync.
+  if (!Storage.exists(opsPath())) removeIfExists(ackedOpsPath());
+
+  HalFile file = Storage.open(opsPath(), O_WRONLY | O_CREAT | O_APPEND);
+  if (!file) {
+    LOG_ERR(TAG, "Could not open the ops queue for a batch of %u", static_cast<unsigned>(count));
+    return 0;
+  }
+  // Une op et son enregistrement a la fois sur la pile (~740 o), jamais le
+  // lot entier : 120 ops feraient ~27 Ko.
+  size_t written = 0;
+  for (; written < count; ++written) {
+    TaskOp op{};
+    if (!fill(ctx, written, op)) break;
+    char record[TASK_OP_RECORD_MAX];
+    const size_t len = taskOpToRecord(op, record, sizeof(record));
+    if (len == 0) {
+      LOG_ERR(TAG, "Op too large to serialize; batch stopped at %u", static_cast<unsigned>(written));
+      break;
+    }
+    if (file.write(record, len) != len) {
+      LOG_ERR(TAG, "Failed to append op %u of a batch of %u", static_cast<unsigned>(written),
+              static_cast<unsigned>(count));
+      break;
+    }
+  }
+  file.close();
+  return written;
+}
+
 size_t TaskStore::readOps(TaskOp* out, size_t max, size_t skip) const {
   if (out == nullptr || max == 0) return 0;
   // Seules les ops VALIDES comptent pour `skip`, comme pour le compte rendu :

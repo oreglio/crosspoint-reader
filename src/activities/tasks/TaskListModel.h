@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bitset>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -53,3 +55,17 @@ void buildTaskListRows(const std::vector<int>& order, int openCount, bool showDo
 // coche ou un repli peut raccourcir la liste). Aucune ligne n'est sautee,
 // quelle que soit sa nature. Rend -1 si `rows` est vide.
 int taskListClampSelection(const std::vector<TaskListRow>& rows, int selected);
+
+// Mode selection de la liste : un bit par enregistrement de `records`, indexe
+// comme TaskListRow::recordIndex. 16 octets en membre, sans tas. Valable tant
+// que l'index ne change pas : le mode n'ecrit rien avant l'action finale, qui
+// le quitte.
+using TaskSelection = std::bitset<MAX_TASKS>;
+
+// Cibles d'une action en lot, en indices de `records`, du plus GRAND au plus
+// petit : effacer dans cet ordre ne decale aucun indice qui reste a traiter.
+// `out` doit tenir MAX_TASKS entrees ; rend le nombre ecrit. Les bits au-dela
+// de `recordCount` sont ignores.
+size_t taskSelectionTargets(const TaskSelection& selection, size_t recordCount, uint8_t* out);
+// Les taches faites, dans le meme ordre et au meme contrat.
+size_t taskDoneTargets(const std::vector<TaskRecord>& records, uint8_t* out);

@@ -48,3 +48,19 @@ int taskListClampSelection(const std::vector<TaskListRow>& rows, int selected) {
   if (selected >= total) return total - 1;
   return selected;
 }
+
+size_t taskSelectionTargets(const TaskSelection& selection, const size_t recordCount, uint8_t* out) {
+  size_t n = 0;
+  for (size_t i = std::min(recordCount, MAX_TASKS); i-- > 0;) {
+    if (selection.test(i)) out[n++] = static_cast<uint8_t>(i);
+  }
+  return n;
+}
+
+size_t taskDoneTargets(const std::vector<TaskRecord>& records, uint8_t* out) {
+  size_t n = 0;
+  for (size_t i = std::min(records.size(), MAX_TASKS); i-- > 0;) {
+    if (records[i].done) out[n++] = static_cast<uint8_t>(i);
+  }
+  return n;
+}
