@@ -520,7 +520,11 @@ uint16_t CrossPointSettings::getReadingIdleTimeThresholdSeconds() const {
 
 void CrossPointSettings::toJson(JsonDocument& doc) const {
   std::lock_guard<std::mutex> lock(_mutex);
-  for (const auto& info : getBaseSettingsList()) {
+  // saveToFile() holds its own lease across this call and refuses to write
+  // when it could not get one, so a document missing the list is never saved.
+  const BaseSettingsListLease settingsList(/*mustBuild=*/false);
+  if (!settingsList.ok()) return;
+  for (const auto& info : settingsList.list()) {
     if (!info.key || (!info.valuePtr && !info.value16Ptr && !info.stringOffset)) continue;
     if (info.stringOffset) {
       const char* value = reinterpret_cast<const char*>(this) + info.stringOffset;
@@ -599,7 +603,10 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc, bool importingCrossPoint
   if (doc["statusBarChapterPageCount"].isNull()) applyLegacyStatusBarSettings(*this);
   screenInverted = clamp(doc["screenInverted"] | screenInverted, 2, screenInverted);
 
-  for (const auto& info : getBaseSettingsList()) {
+  // Loading must never fall back to defaults a later save would write over
+  // the user's settings: build the list whatever the heap, as before.
+  const BaseSettingsListLease settingsList(/*mustBuild=*/true);
+  for (const auto& info : settingsList.list()) {
     if (!info.key || (!info.valuePtr && !info.value16Ptr && !info.stringOffset)) continue;
     if (info.stringOffset) {
       char* destination = reinterpret_cast<char*>(this) + info.stringOffset;
@@ -986,6 +993,13 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc, bool importingCrossPoint
 }
 
 bool CrossPointSettings::saveToFile() const {
+  // Held across toJson(): a document built without the list would lack every
+  // setting, and writing it would reset them all on the next load.
+  const BaseSettingsListLease settingsList(/*mustBuild=*/false);
+  if (!settingsList.ok()) {
+    LOG_ERR("CPS", "Settings not saved: not enough memory to build the settings list");
+    return false;
+  }
   std::lock_guard<std::mutex> lock(storeMutex);
   JsonDocument doc;
   toJson(doc);

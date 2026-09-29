@@ -1636,7 +1636,8 @@ void CrossPointWebServer::handleGetSettings() const {
   // The web API only reads it, so iterate the static base list directly rather
   // than copying its nested vectors and callbacks while WiFi is using the heap.
   sdFontSystem.refreshIfDirty();
-  const auto& settings = getBaseSettingsList();
+  const BaseSettingsListLease settingsLease(/*mustBuild=*/true);
+  const auto& settings = settingsLease.list();
   const auto& fontFamilies = sdFontSystem.registry().getFamilies();
   const SdCardFontFamilyInfo* selectedSdFamily =
       SETTINGS.sdFontFamilyName[0] == '\0' ? nullptr : sdFontSystem.registry().findFamily(SETTINGS.sdFontFamilyName);

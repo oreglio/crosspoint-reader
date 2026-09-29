@@ -87,7 +87,6 @@ inline esp_sleep_wakeup_cause_t esp_sleep_get_wakeup_cause() { return ESP_SLEEP_
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
-#include "SettingsList.h"
 #include "SilentRestart.h"
 #include "TaskStore.h"
 #include "activities/Activity.h"
@@ -1378,12 +1377,6 @@ void setup() {
   HalSystem::checkPanic();
 
   SETTINGS.loadFromFile();
-  // A minimal network boot never shows a settings list, and on the C3 the TLS
-  // handshake and the EPUB inflate need the ~36 KB it holds. File transfer
-  // keeps it: its web portal serves the settings API.
-  if (isNetworkResume && snapshotTarget != static_cast<uint32_t>(NetworkBootTarget::FILE_TRANSFER)) {
-    releaseBaseSettingsList();
-  }
   Storage.installDateTimeCallback(&SETTINGS.clockUtcOffsetQ);
   APP_STATE.loadFromFile();
   mirrorWakeShortPressToNvs();

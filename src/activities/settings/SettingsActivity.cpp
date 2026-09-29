@@ -304,7 +304,8 @@ void SettingsActivity::rebuildSettingsLists() {
   systemGlobalStatsSettings.clear();
 
   if (isFileBrowserView()) {
-    fileBrowserSettings = buildFileBrowserSettingsList(getBaseSettingsList());
+    const BaseSettingsListLease baseSettings(/*mustBuild=*/true);
+    fileBrowserSettings = buildFileBrowserSettingsList(baseSettings.list());
     currentSettings = &fileBrowserSettings;
     settingsCount = static_cast<int>(currentSettings->size());
     return;
