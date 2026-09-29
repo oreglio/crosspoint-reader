@@ -5,6 +5,7 @@
 #include <Logging.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <utility>
@@ -70,14 +71,36 @@ constexpr char DONE_ROW_EXPANDED_MARK[] = "\u00BB";
 // se ressente pareil d'un ecran a l'autre.
 constexpr unsigned long kHoldMs = 800;
 
-fui::BitmapRef taskBullet(const bool done) {
+// Cases carrees du mode selection, meme format que les pastilles : la forme
+// change pour que le mode se voie d'un coup d'oeil (un rond dit « faite », un
+// carre dit « choisie »). Case vide : non choisie.
+static const uint8_t TASK_BOX_EMPTY[] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0xff, 0xc0, 0x3f, 0xff, 0xc0, 0x30, 0x00, 0xc0,
+    0x30, 0x00, 0xc0, 0x30, 0x00, 0xc0, 0x30, 0x00, 0xc0, 0x30, 0x00, 0xc0, 0x30, 0x00, 0xc0,
+    0x30, 0x00, 0xc0, 0x30, 0x00, 0xc0, 0x30, 0x00, 0xc0, 0x30, 0x00, 0xc0, 0x30, 0x00, 0xc0,
+    0x30, 0x00, 0xc0, 0x3f, 0xff, 0xc0, 0x3f, 0xff, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// Case pleine, coche en reserve blanche : choisie.
+static const uint8_t TASK_BOX_CHECKED[] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0xff, 0xc0, 0x3f, 0xff, 0xc0, 0x3f, 0xff, 0xc0,
+    0x3f, 0xff, 0xc0, 0x3f, 0xfc, 0xc0, 0x3f, 0xf8, 0xc0, 0x3f, 0xf1, 0xc0, 0x39, 0xe3, 0xc0,
+    0x38, 0xc7, 0xc0, 0x38, 0x07, 0xc0, 0x3c, 0x0f, 0xc0, 0x3e, 0x1f, 0xc0, 0x3f, 0x3f, 0xc0,
+    0x3f, 0xff, 0xc0, 0x3f, 0xff, 0xc0, 0x3f, 0xff, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+fui::BitmapRef taskBitmap(const uint8_t* data) {
   fui::BitmapRef ref;
-  ref.data = done ? TASK_BULLET_DONE : TASK_BULLET_OPEN;
+  ref.data = data;
   ref.width = TASK_BULLET_PX;
   ref.height = TASK_BULLET_PX;
   ref.format = fui::BitmapFormat::BW1;
   return ref;
 }
+
+fui::BitmapRef taskBullet(const bool done) { return taskBitmap(done ? TASK_BULLET_DONE : TASK_BULLET_OPEN); }
+
+fui::BitmapRef taskBox(const bool picked) { return taskBitmap(picked ? TASK_BOX_CHECKED : TASK_BOX_EMPTY); }
 }  // namespace
 
 int TaskListActivity::taskListFontId() {
@@ -122,6 +145,9 @@ void TaskListActivity::onEnter() {
   uiTarget.setFont(fui::GfxRendererTarget::FONT_BODY, listFontId);
 
   showDone = false;
+  selecting = false;
+  selection.reset();
+  selectionCount = 0;
   task_keep_awake::active = false;
   notice = StatusNotice::None;
   dirty = true;
@@ -253,7 +279,8 @@ void TaskListActivity::buildRows(UiScreen& screen) {
       const TaskRecord& rec = records[static_cast<size_t>(row.recordIndex)];
       item.label = rec.title;
       // Pastille circulaire de la maquette : anneau ouvert / disque plein.
-      item.icon = taskBullet(rec.done);
+      // En mode selection, la case dit « choisie » a la place de la pastille.
+      item.icon = selecting ? taskBox(selection.test(static_cast<size_t>(row.recordIndex))) : taskBullet(rec.done);
       // Priorite haute seulement : ListItem::emphasis est un booleen par
       // ligne (freeink-sdk, ajoute pour ce chantier -- fui::ListProps::
       // labelText ne portait qu'un TextStyle unique pour tout l'appel de
@@ -286,7 +313,11 @@ void TaskListActivity::activateIndex(int index) {
   if (index < 0 || index >= static_cast<int>(rows.size())) return;
   switch (rows[static_cast<size_t>(index)].kind) {
     case TaskRowKind::Task:
-      toggleAt(index);
+      if (selecting) {
+        toggleSelectionAt(index);
+      } else {
+        toggleAt(index);
+      }
       return;
     case TaskRowKind::DoneSection:
       toggleDoneSection();
@@ -331,6 +362,18 @@ bool TaskListActivity::handleCustomInput() {
     requestUpdate();
   }
   if (popup.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
+  if (selecting) {
+    // Sans rien de choisi, les deux libelles sont vides et les boutons ne
+    // font rien.
+    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      if (selectionCount > 0) tickSelection();
+      return true;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+      if (selectionCount > 0) promptDeleteSelection();
+      return true;
+    }
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
     openDetailAt(activeNav().selected);
     return true;
@@ -368,7 +411,10 @@ bool TaskListActivity::handleButtons() {
     if (selected < 0 || selected >= listCount()) return true;
     // Sur « + Ajouter » et « N faites », un appui long fait l'action normale :
     // le menu ne concerne qu'une tache.
-    if (mappedInput.getHeldTime() >= kHoldMs && rows[static_cast<size_t>(selected)].kind == TaskRowKind::Task) {
+    // En mode selection, un appui long choisit la ligne comme un appui court :
+    // le menu n'y a pas cours.
+    if (!selecting && mappedInput.getHeldTime() >= kHoldMs &&
+        rows[static_cast<size_t>(selected)].kind == TaskRowKind::Task) {
       openTaskMenu(selected);
     } else {
       activateIndex(selected);
@@ -378,7 +424,21 @@ bool TaskListActivity::handleButtons() {
   return false;
 }
 
-void TaskListActivity::onRowLongPress(const int index) { openTaskMenu(index); }
+void TaskListActivity::onRowLongPress(const int index) {
+  if (selecting) {
+    activateIndex(index);
+  } else {
+    openTaskMenu(index);
+  }
+}
+
+void TaskListActivity::onBackButton() {
+  if (selecting) {
+    stopSelection();
+    return;
+  }
+  finish();
+}
 
 void TaskListActivity::openTaskMenu(const int index) {
   if (index < 0 || index >= static_cast<int>(rows.size()) ||
@@ -391,14 +451,22 @@ void TaskListActivity::openTaskMenu(const int index) {
   // l'action, jamais sur un indice de ligne, donc deplacer une entree ne
   // decale pas les autres. Supprimer n'est jamais la selection par defaut ;
   // Synchroniser ferme la liste, qui redemarre l'appareil : en bas, a part.
-  enum class MenuAction : uint8_t { Tick, View, Edit, KeepAwake, TextSize, Delete, Sync };
-  static constexpr MenuAction kMenu[] = {MenuAction::Tick,      MenuAction::View,     MenuAction::Edit,
-                                         MenuAction::KeepAwake, MenuAction::TextSize, MenuAction::Delete,
-                                         MenuAction::Sync};
+  // « Supprimer les faites » n'apparait que s'il y en a : le tableau est donc
+  // construit a chaque ouverture, pas constant.
+  enum class MenuAction : uint8_t { Tick, View, Edit, Select, DeleteDone, KeepAwake, TextSize, Delete, Sync };
+  constexpr size_t kMenuMax = 9;
+  std::array<MenuAction, kMenuMax> menu{};
+  size_t menuCount = 0;
+  for (const MenuAction action :
+       {MenuAction::Tick, MenuAction::View, MenuAction::Edit, MenuAction::Select, MenuAction::DeleteDone,
+        MenuAction::KeepAwake, MenuAction::TextSize, MenuAction::Delete, MenuAction::Sync}) {
+    if (action == MenuAction::DeleteDone && doneCount <= 0) continue;
+    menu[menuCount++] = action;
+  }
   std::vector<std::string> options;
-  options.reserve(sizeof(kMenu) / sizeof(kMenu[0]));
-  for (const MenuAction action : kMenu) {
-    switch (action) {
+  options.reserve(menuCount);
+  for (size_t i = 0; i < menuCount; ++i) {
+    switch (menu[i]) {
       case MenuAction::Tick:
         options.emplace_back(rec.done ? tr(STR_TASK_MENU_REOPEN) : tr(STR_TASK_MENU_TICK));
         break;
@@ -408,6 +476,15 @@ void TaskListActivity::openTaskMenu(const int index) {
       case MenuAction::Edit:
         options.emplace_back(tr(STR_TASK_MENU_EDIT));
         break;
+      case MenuAction::Select:
+        options.emplace_back(tr(STR_TASK_MENU_SELECT));
+        break;
+      case MenuAction::DeleteDone: {
+        char label[64];
+        std::snprintf(label, sizeof(label), tr(STR_TASK_MENU_DELETE_DONE), doneCount);
+        options.emplace_back(label);
+        break;
+      }
       case MenuAction::KeepAwake:
         options.emplace_back(task_keep_awake::active ? tr(STR_TASK_MENU_ALLOW_SLEEP) : tr(STR_TASK_MENU_KEEP_AWAKE));
         break;
@@ -423,10 +500,10 @@ void TaskListActivity::openTaskMenu(const int index) {
     }
   }
   app.clearTapFlash();
-  popup.show(rec.title, options, 0, [this, id](const int choice) {
-    if (choice < 0 || static_cast<size_t>(choice) >= sizeof(kMenu) / sizeof(kMenu[0])) return;
+  popup.show(rec.title, options, 0, [this, id, menu, menuCount](const int choice) {
+    if (choice < 0 || static_cast<size_t>(choice) >= menuCount) return;
     const int row = rowOfTask(id.c_str());
-    switch (kMenu[choice]) {
+    switch (menu[static_cast<size_t>(choice)]) {
       case MenuAction::Tick:
         toggleAt(row);
         break;
@@ -435,6 +512,12 @@ void TaskListActivity::openTaskMenu(const int index) {
         break;
       case MenuAction::Edit:
         editTaskTitle(id);
+        break;
+      case MenuAction::Select:
+        startSelection(id);
+        break;
+      case MenuAction::DeleteDone:
+        promptDeleteDone();
         break;
       case MenuAction::KeepAwake:
         // Pour la visite seulement : onEnter() le remet a faux, donc quitter la
@@ -618,8 +701,166 @@ void TaskListActivity::deleteTask(const std::string& id) {
   if (next >= 0) moveSelectionTo(next);
 }
 
+void TaskListActivity::promptDeleteDone() {
+  if (doneCount <= 0) return;
+  const std::string heading = tr(STR_DELETE) + std::string("? ");
+  char body[64];
+  std::snprintf(body, sizeof(body), tr(STR_TASK_DONE_TASKS_COUNT), doneCount);
+  startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, body),
+                         [this](const ActivityResult& result) {
+                           if (!result.isCancelled) {
+                             // 120 octets de pile : un indice par tache au plus.
+                             uint8_t targets[MAX_TASKS];
+                             const size_t count = taskDoneTargets(TASK_STORE.all(), targets);
+                             applyBatch(BatchAction::Delete, targets, count);
+                           }
+                           requestUpdate(true);
+                         });
+}
+
+void TaskListActivity::startSelection(const std::string& id) {
+  const int row = rowOfTask(id.c_str());
+  selecting = true;
+  selection.reset();
+  selectionCount = 0;
+  // La tache dont on a ouvert le menu est deja choisie : c'est presque
+  // toujours la premiere qu'on voulait.
+  if (row >= 0) toggleSelectionAt(row);
+  requestUpdate();
+}
+
+void TaskListActivity::stopSelection() {
+  selecting = false;
+  selection.reset();
+  selectionCount = 0;
+  requestUpdate();
+}
+
+void TaskListActivity::toggleSelectionAt(const int index) {
+  if (index < 0 || index >= static_cast<int>(rows.size())) return;
+  const TaskListRow& row = rows[static_cast<size_t>(index)];
+  if (row.kind != TaskRowKind::Task || row.recordIndex < 0) return;
+  const size_t bit = static_cast<size_t>(row.recordIndex);
+  // std::bitset::flip() hors bornes leve out_of_range, soit abort() sans
+  // exceptions. L'index ne depasse jamais MAX_TASKS (fromJson, stageUpsert),
+  // mais la garde coute une comparaison.
+  if (bit >= MAX_TASKS) return;
+  selection.flip(bit);
+  selectionCount += selection.test(bit) ? 1 : -1;
+  requestUpdate();
+}
+
+void TaskListActivity::tickSelection() {
+  uint8_t targets[MAX_TASKS];
+  const size_t picked = taskSelectionTargets(selection, TASK_STORE.all().size(), targets);
+  // Cocher laisse telles quelles les taches deja faites : une op Done(true)
+  // de plus ecraserait une reouverture faite entre-temps sur le web.
+  const std::vector<TaskRecord>& records = TASK_STORE.all();
+  size_t open = 0;
+  for (size_t i = 0; i < picked; ++i) {
+    if (!records[targets[i]].done) targets[open++] = targets[i];
+  }
+  applyBatch(BatchAction::Tick, targets, open);
+}
+
+void TaskListActivity::promptDeleteSelection() {
+  const std::string heading = tr(STR_DELETE) + std::string("? ");
+  char body[64];
+  std::snprintf(body, sizeof(body), tr(STR_TASK_SELECTED_COUNT), selectionCount);
+  startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, body),
+                         [this](const ActivityResult& result) {
+                           // Annuler garde le mode et sa selection : on corrige le choix,
+                           // on ne le refait pas.
+                           if (!result.isCancelled) {
+                             uint8_t targets[MAX_TASKS];
+                             const size_t count = taskSelectionTargets(selection, TASK_STORE.all().size(), targets);
+                             applyBatch(BatchAction::Delete, targets, count);
+                           }
+                           requestUpdate(true);
+                         });
+}
+
+void TaskListActivity::applyBatch(const BatchAction action, const uint8_t* targets, const size_t count) {
+  // L'action termine le mode, meme sans cible : Droite sur une selection de
+  // taches toutes deja faites ne laisse pas l'ecran dans un etat muet.
+  selecting = false;
+  selection.reset();
+  selectionCount = 0;
+  if (count == 0) {
+    requestUpdate();
+    return;
+  }
+
+  struct Ctx {
+    const std::vector<TaskRecord>* records;
+    const uint8_t* targets;
+    TaskOpKind kind;
+  } ctx{&TASK_STORE.all(), targets, action == BatchAction::Delete ? TaskOpKind::Del : TaskOpKind::Done};
+  // La file avant l'index, comme pour une seule tache (deleteTask, toggleAt) :
+  // seules les `queued` premieres cibles, dont l'op est sur la carte, sont
+  // appliquees ici.
+  const size_t queued = TASK_STORE.appendOpBatch(
+      count,
+      [](void* raw, const size_t i, TaskOp& op) {
+        const auto* c = static_cast<const Ctx*>(raw);
+        op.kind = c->kind;
+        std::snprintf(op.id, sizeof(op.id), "%s", (*c->records)[c->targets[i]].id);
+        op.done = true;
+        return true;
+      },
+      &ctx);
+  if (queued < count) {
+    LOG_ERR(TAG, "Only %u of %u batch ops were queued", static_cast<unsigned>(queued), static_cast<unsigned>(count));
+    showNotice(StatusNotice::WriteFailed);
+  }
+  if (queued == 0) {
+    requestUpdate();
+    return;
+  }
+  pendingOps = true;
+
+  {
+    // erase() decale les enregistrements suivants et `rows`/`order` indexent
+    // ce vecteur : tout le lot et la reconstruction sous un seul verrou, comme
+    // deleteTask(). Les cibles vont du plus grand indice au plus petit, donc
+    // chaque effacement laisse valides celles qui restent.
+    RenderLock lock(*this);
+    for (size_t i = 0; i < queued; ++i) {
+      // Copie (216 octets de pile) : stageUpsert() ecrit dans le vecteur
+      // qu'on lit, et stageRemove() efface l'element dont on lirait l'id.
+      TaskRecord rec = TASK_STORE.all()[targets[i]];
+      if (action == BatchAction::Delete) {
+        TASK_STORE.stageRemove(rec.id);
+      } else {
+        rec.done = true;
+        TASK_STORE.stageUpsert(rec);
+      }
+    }
+    dirty = true;
+    rebuildOrder();
+  }
+  // Une seule ecriture de l'index pour tout le lot, au lieu d'une par tache.
+  // Les notes des taches supprimees partent a la sync suivante, comme pour
+  // deleteTask().
+  if (!TASK_STORE.saveIndex()) showNotice(StatusNotice::WriteFailed);
+  const int next = taskListClampSelection(rows, activeNav().selected);
+  if (next >= 0) moveSelectionTo(next);
+  requestUpdate();
+}
+
 void TaskListActivity::toggleDoneSection() {
   showDone = !showDone;
+  // Replier en mode selection deselectionne les taches faites : une action
+  // ne porte jamais sur une ligne qu'on ne voit plus.
+  if (selecting && !showDone) {
+    const std::vector<TaskRecord>& records = TASK_STORE.all();
+    for (size_t i = 0; i < records.size() && i < MAX_TASKS; ++i) {
+      if (records[i].done && selection.test(i)) {
+        selection.reset(i);
+        --selectionCount;
+      }
+    }
+  }
   dirty = true;
   rebuildOrder();
   // Ne s'execute que selection SUR la ligne "N faites" (activateIndex()).
@@ -863,7 +1104,11 @@ int TaskListActivity::rowOfTask(const char* id) const {
 void TaskListActivity::drawChrome() {
   const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
   char title[48];
-  std::snprintf(title, sizeof(title), "%s (%d)", tr(STR_TASK_TITLE), openCount);
+  if (selecting) {
+    std::snprintf(title, sizeof(title), "%s (%d)", tr(STR_TASK_SELECTION), selectionCount);
+  } else {
+    std::snprintf(title, sizeof(title), "%s (%d)", tr(STR_TASK_TITLE), openCount);
+  }
   // Une op attend le serveur : une fleche circulaire au bord droit de la ligne
   // du titre. Passee comme `subtitle`, que les themes placent a droite, alignee
   // sur la ligne de base du titre, dans la petite police (inter_8_regular porte
@@ -896,7 +1141,17 @@ void TaskListActivity::drawFooter() {
   const char* confirmLabel = selectedDone ? tr(STR_TASK_UNTICK) : tr(STR_TASK_TICK);
   const char* rightLabel = tr(STR_TASK_DETAIL);
   const char* leftLabel = tr(STR_TASK_NEW_SHORT);
-  if (kind == TaskRowKind::DoneSection) {
+  if (selecting) {
+    // Mode selection : Confirmer choisit, Droite coche, Gauche efface
+    // (« supprimer » depasse la case de 8 px en francais, measure_label.py),
+    // Retour sort du mode. Rien de choisi : ni cocher ni effacer.
+    const bool picked = kind == TaskRowKind::Task && selected >= 0 && selected < static_cast<int>(rows.size()) &&
+                        selection.test(static_cast<size_t>(rows[static_cast<size_t>(selected)].recordIndex));
+    confirmLabel = picked ? tr(STR_TASK_UNPICK) : tr(STR_TASK_PICK);
+    if (kind == TaskRowKind::DoneSection) confirmLabel = showDone ? tr(STR_TASK_COLLAPSE) : tr(STR_TASK_EXPAND);
+    leftLabel = selectionCount > 0 ? tr(STR_TASK_ERASE_SHORT) : "";
+    rightLabel = selectionCount > 0 ? tr(STR_TASK_TICK) : "";
+  } else if (kind == TaskRowKind::DoneSection) {
     confirmLabel = showDone ? tr(STR_TASK_COLLAPSE) : tr(STR_TASK_EXPAND);
     rightLabel = "";
   } else if (kind == TaskRowKind::AddTask) {

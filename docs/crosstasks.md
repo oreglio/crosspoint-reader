@@ -49,13 +49,30 @@ the task is done; that is the only priority marker. Long titles wrap over two li
   opens the task's menu.
 
 Holding **Confirm** on a task (about a second) opens its menu: **Tick** (or
-**Reopen**), **View**, **Edit** (title, then priority), **Keep screen on**,
+**Reopen**), **View**, **Edit** (title, then priority), **Select**,
+**Delete done tasks (N)** (only when some are done), **Keep screen on**,
 **Task text size** (the same setting as in Settings, applied on the spot),
 **Delete** and, last, **Sync tasks**. **Keep screen on** stops the device from
 going to sleep while you stay in Tasks (the list and a task's page); leaving
 Tasks turns it off again. Deleting asks for confirmation first; the task disappears at once
 and the next sync deletes it on the server too. **Sync tasks** from this menu
 comes back to the list when the sync screen closes.
+
+**Select** turns the list into a selection: round bullets become square boxes,
+the title reads **Selection (N)**, and the task you held starts out selected.
+
+| Button | In selection |
+| --- | --- |
+| Confirm (or a tap) | Select or deselect the task; on **N done**, expand or collapse |
+| Right | Tick every selected task (finished ones stay as they are) |
+| Left | Delete every selected task, after a confirmation |
+| Back | Leave the selection without changing anything |
+
+Collapsing **N done** deselects the finished tasks, so an action never touches a
+row you can no longer see. **Delete done tasks (N)** deletes every finished task
+at once, after a confirmation. Either way, the next sync applies the change on the
+server too. The server's web page has the same tools above its list: **Select**
+(with **All**, **Tick**, **Delete**) and **Clear done**, each deletion confirmed first.
 
 Adding a task opens the keyboard for the title, then asks for a priority (High,
 Normal or Low). Cancelling either step creates nothing. The list holds up to

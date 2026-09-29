@@ -50,15 +50,19 @@ class TaskListActivity final : public UiListActivity {
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
   // La popup d'abord (elle possede tous les boutons tant qu'elle est ouverte),
-  // puis Right (detail) et Left (ajouter), hors du contrat de base.
+  // puis Right (detail, ou cocher la selection) et Left (ajouter, ou effacer
+  // la selection), hors du contrat de base.
   bool handleCustomInput() override;
   // Confirmer se lit au RELACHEMENT, pas au front d'appui comme dans la base :
   // la duree de l'appui choisit entre l'action de la ligne et son menu. Meme
   // idiome et meme seuil que la Library (dispatch a la relache selon
   // getHeldTime()).
   bool handleButtons() override;
-  // Appui long tactile sur une ligne : le meme menu.
+  // Appui long tactile sur une ligne : le meme menu (en mode selection :
+  // choisir la ligne, comme un toucher).
   void onRowLongPress(int index) override;
+  // Retour (bouton ou fleche de l'en-tete) quitte d'abord le mode selection.
+  void onBackButton() override;
   // En-tete (compteur + marque d'envoi en attente), rejoue par la base a chaque passe de
   // reconstruction ; pieds : les quatre libelles propres a cet ecran.
   void drawChrome() override;
@@ -71,8 +75,9 @@ class TaskListActivity final : public UiListActivity {
   // Confirmer (ou un toucher) sur la ligne "N faites" : accordeon.
   void toggleDoneSection();
   void openDetailAt(int index);
-  // Menu d'une tache : cocher/rouvrir, voir, modifier, garder l'ecran allume,
-  // taille du texte, supprimer, synchroniser. Les choix retrouvent la ligne par l'id de la
+  // Menu d'une tache : cocher/rouvrir, voir, modifier, selectionner,
+  // supprimer les faites (s'il y en a), garder l'ecran allume, taille du
+  // texte, supprimer, synchroniser. Les choix retrouvent la ligne par l'id de la
   // tache, jamais par un indice retenu : l'ordre peut avoir change entre
   // l'ouverture et le choix.
   void openTaskMenu(int index);
@@ -82,6 +87,27 @@ class TaskListActivity final : public UiListActivity {
   void editTaskPriority(const std::string& id);
   void promptDeleteTask(const std::string& id);
   void deleteTask(const std::string& id);
+  // « Supprimer les faites (N) » du menu, apres confirmation.
+  void promptDeleteDone();
+
+  // Mode selection (menu > Selectionner) : Confirmer ou un toucher choisit la
+  // ligne, Droite coche les taches choisies, Gauche les supprime apres
+  // confirmation, Retour quitte le mode. Rien n'est ecrit avant l'action,
+  // qui quitte le mode : `selection` reste donc indexee comme TASK_STORE.all().
+  void startSelection(const std::string& id);
+  void stopSelection();
+  void toggleSelectionAt(int index);
+  void tickSelection();
+  void promptDeleteSelection();
+  enum class BatchAction : uint8_t { Tick, Delete };
+  // Une op par cible dans UNE ouverture de la file, puis l'index une seule
+  // fois. `targets` : indices de TASK_STORE.all() du plus grand au plus petit
+  // (taskSelectionTargets / taskDoneTargets), pour que les effacements ne
+  // decalent pas les suivants.
+  void applyBatch(BatchAction action, const uint8_t* targets, size_t count);
+  bool selecting = false;
+  TaskSelection selection;
+  int selectionCount = 0;
   // Apres une modification d'une tache existante : reconstruit l'ordre et
   // garde la selection sur elle (la priorite la deplace dans le tri).
   void refreshAfterEdit(const char* id);

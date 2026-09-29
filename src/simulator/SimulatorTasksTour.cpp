@@ -67,6 +67,9 @@ constexpr TourStep kSteps[] = {
     {"menu-down-2", Act::Tap, Button::Down},
     {"menu-down-3", Act::Tap, Button::Down},
     {"menu-down-4", Act::Tap, Button::Down},
+    // Selectionner et « Supprimer les faites » s'intercalent avant Supprimer.
+    {"menu-down-5", Act::Tap, Button::Down},
+    {"menu-down-6", Act::Tap, Button::Down},
     {"14-menu-delete-selected", Act::Tap, Button::Down},
     {"15-delete-confirm", Act::Tap, Button::Confirm},
     // La confirmation s'ouvre sur Annuler, comme pour un livre : Bas d'abord.
@@ -78,6 +81,38 @@ constexpr TourStep kSteps[] = {
     {"17-menu-edit-selected", Act::Tap, Button::Down},
     {"18-edit-keyboard", Act::Tap, Button::Confirm},
     {"leave-keyboard", Act::Tap, Button::Back},
+    // Mode selection : la tache du menu arrive choisie, on en choisit une
+    // seconde, puis on efface les deux apres confirmation.
+    {"menu-select", Act::Hold, Button::Confirm},
+    {"select-down-1", Act::Tap, Button::Down},
+    {"select-down-2", Act::Tap, Button::Down},
+    {"19-menu-select-selected", Act::Tap, Button::Down},
+    {"20-selection-mode", Act::Tap, Button::Confirm},
+    {"select-move", Act::Tap, Button::Down},
+    {"21-two-picked", Act::Tap, Button::Confirm},
+    {"22-selection-delete-confirm", Act::Tap, Button::Left},
+    {"selection-confirm-down", Act::Tap, Button::Down},
+    {"23-selection-deleted", Act::Tap, Button::Confirm},
+    // Cocher en lot : la tache du menu, choisie d'office, coule avec l'autre.
+    {"menu-select-2", Act::Hold, Button::Confirm},
+    {"select2-down-1", Act::Tap, Button::Down},
+    {"select2-down-2", Act::Tap, Button::Down},
+    {"select2-down-3", Act::Tap, Button::Down},
+    {"select2-enter", Act::Tap, Button::Confirm},
+    {"select2-move", Act::Tap, Button::Down},
+    {"select2-pick", Act::Tap, Button::Confirm},
+    {"24-selection-ticked", Act::Tap, Button::Right},
+    // « Supprimer les faites (N) », au milieu du menu, confirme. La coche a
+    // laisse le curseur sur « N faites » : remonter sur la derniere ouverte.
+    {"done-up", Act::Tap, Button::Up},
+    {"menu-done", Act::Hold, Button::Confirm},
+    {"done-down-1", Act::Tap, Button::Down},
+    {"done-down-2", Act::Tap, Button::Down},
+    {"done-down-3", Act::Tap, Button::Down},
+    {"25-menu-delete-done-selected", Act::Tap, Button::Down},
+    {"26-delete-done-confirm", Act::Tap, Button::Confirm},
+    {"done-confirm-down", Act::Tap, Button::Down},
+    {"27-done-deleted", Act::Tap, Button::Confirm},
     {"06-all-done", Act::SeedAllDone, Button::Confirm},
     {"07-empty", Act::SeedEmpty, Button::Confirm},
     {"08-add-keyboard", Act::Tap, Button::Left},
@@ -98,7 +133,8 @@ constexpr size_t kStepCount = sizeof(kSteps) / sizeof(kSteps[0]);
 constexpr TourStep kKeepAwakeSteps[] = {
     {"list", Act::OpenList, Button::Confirm}, {"hold", Act::Hold, Button::Confirm},
     {"down-1", Act::Tap, Button::Down},       {"down-2", Act::Tap, Button::Down},
-    {"down-3", Act::Tap, Button::Down},       {"toggle", Act::Tap, Button::Confirm},
+    {"down-3", Act::Tap, Button::Down},       {"down-4", Act::Tap, Button::Down},
+    {"down-5", Act::Tap, Button::Down},       {"toggle", Act::Tap, Button::Confirm},
     {"detail", Act::Tap, Button::Right},
 };
 constexpr size_t kKeepAwakeStepCount = sizeof(kKeepAwakeSteps) / sizeof(kKeepAwakeSteps[0]);

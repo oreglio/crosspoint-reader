@@ -29,9 +29,16 @@ START_MS, PERIOD_MS, SHOT_OFFSET_MS = 3500, 1300, 1000
 STEPS = [
     "00-pair-cold-boot", "01-list", "move-down", "02-ticked-sinks", "move-up", "03-done-row-selected",
     "04-done-expanded", "reopen", "05-detail-with-note", "05b-detail-ticked", "back-to-list",
-    "13-task-menu", "menu-down-1", "menu-down-2", "menu-down-3", "menu-down-4", "14-menu-delete-selected",
+    "13-task-menu", "menu-down-1", "menu-down-2", "menu-down-3", "menu-down-4", "menu-down-5",
+    "menu-down-6", "14-menu-delete-selected",
     "15-delete-confirm", "confirm-down", "16-deleted", "menu-again", "menu-edit-1", "17-menu-edit-selected",
     "18-edit-keyboard", "leave-keyboard",
+    "menu-select", "select-down-1", "select-down-2", "19-menu-select-selected", "20-selection-mode", "select-move",
+    "21-two-picked", "22-selection-delete-confirm", "selection-confirm-down", "23-selection-deleted",
+    "menu-select-2", "select2-down-1", "select2-down-2", "select2-down-3", "select2-enter", "select2-move",
+    "select2-pick", "24-selection-ticked",
+    "done-up", "menu-done", "done-down-1", "done-down-2", "done-down-3", "25-menu-delete-done-selected",
+    "26-delete-done-confirm", "done-confirm-down", "27-done-deleted",
     "06-all-done", "07-empty", "08-add-keyboard", "09-pair", "10-pair-confirm",
     "11-pair-cancelled", "ask-again", "pick-confirm", "12-pair-renewed", "end",
 ]
@@ -54,6 +61,13 @@ TASKS = [
     {"id": "d00000006", "t": "Payer la facture EDF", "p": 1, "d": True, "n": 0},
     {"id": "d00000007", "t": "Reserver le train", "p": 2, "d": True, "n": 0},
     {"id": "d00000008", "t": "Envoyer les photos", "p": 1, "d": True, "n": 0},
+    # Priorite basse, ids les plus grands : en fin des ouvertes, sans deplacer
+    # les lignes du haut que les premieres etapes visent. Elles nourrissent
+    # le mode selection (suppression puis coche en lot) et laissent une tache
+    # ouverte pour l'appui long de « Supprimer les faites ».
+    {"id": "d00000009", "t": "Ranger le garage", "p": 2, "d": False, "n": 0},
+    {"id": "d0000000a", "t": "Trier les factures", "p": 2, "d": False, "n": 0},
+    {"id": "d0000000b", "t": "Vider le grenier", "p": 2, "d": False, "n": 0},
 ]
 
 
