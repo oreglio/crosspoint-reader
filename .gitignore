@@ -65,3 +65,4 @@ lib/AppVersion/AppVersionGenerated.h
 
 # Superpowers brainstorming mockups (local only)
 .superpowers/
+lib/ScalableFont/*.generated.h

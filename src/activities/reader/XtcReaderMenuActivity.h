@@ -16,6 +16,7 @@ class XtcReaderMenuActivity final : public Activity {
   enum class MenuAction {
     SELECT_CHAPTER,
     READING_STATS,
+    TOGGLE_BOOK_STATS_TRACKING,
     TOGGLE_COMPLETED,
     DELETE_STATS,
     DELETE_CACHE,
@@ -24,7 +25,7 @@ class XtcReaderMenuActivity final : public Activity {
   };
 
   XtcReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string title, bool hasChapters,
-                        bool isBookCompleted);
+                        bool isBookCompleted, bool globalStatsEnabled, bool bookStatsEnabled);
 
   void onEnter() override;
   void onExit() override;
@@ -37,19 +38,21 @@ class XtcReaderMenuActivity final : public Activity {
  private:
   using UiHost = UiAppHost;
   using UiApp = UiHost::App;
-  static constexpr size_t kMaxMenuItems = 7;
+  static constexpr size_t kMaxMenuItems = 8;
 
   struct MenuItem {
     MenuAction action;
     StrId labelId;
   };
 
-  static std::vector<MenuItem> buildMenuItems(bool hasChapters, bool isBookCompleted, bool hasTouch);
+  static std::vector<MenuItem> buildMenuItems(bool hasChapters, bool isBookCompleted, bool hasTouch,
+                                              bool globalStatsEnabled, bool bookStatsEnabled);
   void finishCancelled();
 
   ButtonNavigator buttonNavigator;
   std::string title;
   std::vector<MenuItem> items;
+  bool bookStatsEnabled = true;
   std::array<freeink::ui::ListItem, kMaxMenuItems> listItems{};
   int selectedIndex = 0;
   UiHost ui;

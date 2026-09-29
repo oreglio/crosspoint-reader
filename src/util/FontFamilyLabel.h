@@ -3,10 +3,12 @@
 #include <SdCardFontRegistry.h>
 
 #include <cstdint>
+#include <iterator>
 #include <string>
 #include <string_view>
 
 #include "I18nKeys.h"
+#include "../ReaderFontSizeStep.h"
 
 struct FontFamilyPointSizeRange {
   uint8_t first = 0;
@@ -40,32 +42,17 @@ inline constexpr uint8_t BUILTIN_FONT_FAMILY_COUNT =
     static_cast<uint8_t>(sizeof(BUILTIN_FONT_FAMILIES) / sizeof(BUILTIN_FONT_FAMILIES[0]));
 
 // The point sizes the built-in families actually offer, which is what their
-// labels must advertise -- a hardcoded 10-16 promised sizes the picker could
-// not deliver once 14 and 16 were dropped.
-inline constexpr FontFamilyPointSizeRange builtinFontPointSizeRange() {
-  return {
-#if !defined(OMIT_TINY_FONT)
-      10,
-#elif !defined(OMIT_SMALL_FONT)
-      12,
-#elif !defined(OMIT_MEDIUM_FONT)
-      14,
-#else
-      16,
-#endif
-#if !defined(OMIT_LARGE_FONT)
-          16
-#elif !defined(OMIT_MEDIUM_FONT)
-          14
-#elif !defined(OMIT_SMALL_FONT)
-          12
-#else
-          10
-#endif
-  };
-}
+// labels must advertise. BUILTIN_READER_FONT_SIZES already leaves out every
+// size this build dropped, and holds the whole scalable range when the
+// reader renders vector fonts.
+inline constexpr FontFamilyPointSizeRange BUILTIN_FONT_POINT_SIZE_RANGE{
+    BUILTIN_READER_FONT_SIZES[0], BUILTIN_READER_FONT_SIZES[std::size(BUILTIN_READER_FONT_SIZES) - 1]};
+
+inline constexpr FontFamilyPointSizeRange builtinFontPointSizeRange() { return BUILTIN_FONT_POINT_SIZE_RANGE; }
 
 inline FontFamilyPointSizeRange fontFamilyPointSizeRange(const SdCardFontFamilyInfo& family) {
+  if (family.firstSize) return {family.firstSize, family.lastSize};
+  if (family.isScalable()) return {8, 22};
   FontFamilyPointSizeRange range;
   for (const auto& file : family.files) {
     if (file.style != 0) continue;

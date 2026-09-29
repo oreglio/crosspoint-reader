@@ -13,7 +13,7 @@ The sections here focus on larger CrossInk-specific reader features. Small fixes
 
 Reader settings are available directly from the in-book menu without leaving the book.
 
-Open the reader menu and select **Reader Options** to adjust settings such as:
+Open the reader menu and select **Book Options** to adjust settings such as:
 
 - Font family
 - Font size
@@ -28,6 +28,11 @@ Open the reader menu and select **Reader Options** to adjust settings such as:
 - Dark Reader Mode
 
 Changes take effect immediately.
+
+EPUB layout choices such as font size and margins can be saved for that book
+and take precedence over matching global defaults. Status bar settings are global. See [Global settings and individual
+books](./user-guide.md#362-reader) for how to restore a book's layout choices
+to the global defaults.
 
 For books that are slow to index or fail because of complex publisher styling,
 see [EPUB Indexing Methods](./epub-indexing.md) and
@@ -82,6 +87,19 @@ Related docs:
 
 - [SD Card Fonts](./sd-card-fonts.md)
 
+## Custom TTF Fonts
+
+On ESP32-S3 readers, you can use your own static TrueType (`.ttf`) fonts. Copy
+the files into `/fonts` on the SD card, either together or in a folder named
+after the font family. Restart the reader or refresh its font list, then choose
+the family from the font picker.
+
+For the full range of text styles, include all four faces: regular, bold,
+italic, and bold italic. A family with fewer faces can still be used, but some
+styles will fall back to another face. Variable fonts are not supported.
+
+See [Scalable Fonts](./scalable-fonts.md) for installation details and limits.
+
 ## Dark Reader Mode
 
 Dark Reader Mode reverses the reader colors so text is shown light-on-dark.
@@ -132,7 +150,7 @@ consistent when you change fonts, spacing, orientation, or indexing mode.
 To enable them:
 
 1. Open the reader menu and select **Reader Options**.
-2. Select **Customize Status Bar**.
+2. Select **Status Bars**.
 3. Toggle **Stable Page Numbers** on.
 
 The option appears only when the current EPUB contains valid CrossInk reference
@@ -228,7 +246,15 @@ clipping and its highlight, not an entry already exported to
 
 ## Reading Stats
 
-CrossInk tracks per-book reading stats automatically and aggregates them into global stats.
+CrossInk tracks per-book reading stats automatically and aggregates them into global stats for EPUB and XTC files.
+
+### Turn tracking on or off
+
+The device-wide switch is in **Settings > System > Reading Stats > Track Reading Stats**. When it is off, CrossInk stops recording new per-book and all-time stats. It does not delete saved stats or saved Time Left pace estimates. Turning tracking back on makes the saved history available again and resumes recording for books whose own tracking is enabled. Reading time and pages from the period when tracking was off are not added later.
+
+While device-wide tracking is off, recorded-stat actions and displays are hidden from the menus and home themes that normally show them. The Dashboard can still show a saved Time Left estimate when one is available. The **Reading Stats** and **Minimal Stats** sleep screens fall back to the regular Minimal sleep screen when tracking is off device-wide or for the recent book. The tracking switch remains available in Settings so it can be turned back on.
+
+You can also pause stats for one EPUB or XTC book while device-wide tracking is on. For an EPUB, use **Track Reading Stats** in the Reader Menu's **Settings** tab; for an XTC book, use **Track Reading Stats** in its Reader Menu. You can also use the book's Library/File Browser action menu when available. This preserves the book's saved stats and stops adding stats for that book, including its contribution to all-time totals. While paused, that book's **Reading Stats** view and book-specific theme display are hidden; its saved Time Left estimate may still appear in the Dashboard. Re-enable tracking to show the saved book history and resume recording.
 
 Tracked stats include:
 

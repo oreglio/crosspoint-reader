@@ -10,6 +10,7 @@
 #include <mutex>
 
 #include "ReaderFontSizeStep.h"
+#include "util/ReaderStatusBarConfig.h"
 
 class CrossPointSettings : public PersistableStore<CrossPointSettings> {
  private:
@@ -91,6 +92,12 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     PROGRESS_BAR_THICK = 2,
     STATUS_BAR_PROGRESS_BAR_THICKNESS_COUNT
   };
+  enum BOOK_PERCENTAGE_FORMAT {
+    BOOK_PERCENTAGE_WHOLE = 0,
+    BOOK_PERCENTAGE_ONE_DECIMAL = 1,
+    BOOK_PERCENTAGE_TWO_DECIMALS = 2,
+    BOOK_PERCENTAGE_FORMAT_COUNT
+  };
   enum STATUS_BAR_TITLE { BOOK_TITLE = 0, CHAPTER_TITLE = 1, HIDE_TITLE = 2, STATUS_BAR_TITLE_COUNT };
   enum STATUS_BAR_TIME_LEFT {
     TIME_LEFT_HIDE = 0,
@@ -102,6 +109,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     XTC_STATUS_BAR_HIDE = 0,
     XTC_STATUS_BAR_BOTTOM = 1,
     XTC_STATUS_BAR_TOP = 2,
+    XTC_STATUS_BAR_BOTH = 3,
     XTC_STATUS_BAR_MODE_COUNT
   };
   enum HIDE_CLOCK_MODE { HIDE_CLOCK_NEVER = 0, HIDE_CLOCK_IN_READER = 1, HIDE_CLOCK_ALWAYS = 2, HIDE_CLOCK_MODE_COUNT };
@@ -192,6 +200,21 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     SIDE_LONG_QUICK_TOGGLES = 4,
     SIDE_LONG_LIBRARY = 5,
     SIDE_LONG_PRESS_COUNT
+  };
+
+  // Side-button actions share shortcut IDs with Power. These extra IDs are
+  // reader-only actions; keep their persisted values separate and stable.
+  enum SIDE_BUTTON_ACTION : uint8_t {
+    SIDE_PREVIOUS_CHAPTER = 64,
+    SIDE_NEXT_CHAPTER,
+    SIDE_INCREASE_FONT,
+    SIDE_DECREASE_FONT,
+    SIDE_ROTATE_COUNTERCLOCKWISE,
+    SIDE_ROTATE_CLOCKWISE,
+    // This fork: open the EPUB reader's quick-toggles drawer. Persisted, and
+    // parked far from upstream's run above so its future appends (70, 71, ...)
+    // never land on the same value.
+    SIDE_QUICK_TOGGLES = 96,
   };
 
   // Font family options (built-in fonts only; SD card fonts use sdFontFamilyName)
@@ -308,6 +331,13 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     SHORTCUT_LIBRARY = 31,
     PREVIOUS_PAGE = 32,
     NEARBY_POSITION_SYNC = 33,
+    // Upstream calls this action LIBRARY (its 33). It stays SHORTCUT_LIBRARY
+    // here, at 31: LIBRARY already names LONG_PRESS_BUTTON_BEHAVIOR's value in
+    // this class scope, and devices persisted 31. Upstream code naming the
+    // shortcut is renamed to SHORTCUT_LIBRARY at each sync.
+    // Power-only choices. Keep SLEEP=1 as the existing Sleep/Wake setting.
+    SLEEP_ONLY = 34,
+    WAKE_ONLY = 35,
     SHORT_PWRBTN_COUNT
   };
 
@@ -346,6 +376,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     CHORD_TOGGLE_TOUCHSCREEN = 28,
     CHORD_PREVIOUS_PAGE = 29,
     CHORD_NEARBY_POSITION_SYNC = 30,
+    CHORD_LIBRARY = 31,
     POWER_CHORD_ACTION_COUNT
   };
 
@@ -383,7 +414,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     LYRA_CAROUSEL = 4,
     MINIMAL = 5,
     DASHBOARD = 6,
-    UI_THEME_COUNT = 7
+    COVER_GRID = 7,
+    UI_THEME_COUNT = 8
   };
   enum RECENT_BOOKS_VIEW { RECENT_BOOKS_LIST = 0, RECENT_BOOKS_GRID = 1, RECENT_BOOKS_VIEW_COUNT };
 
@@ -473,6 +505,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t statusBar = FULL;
   uint8_t statusBarChapterPageCount = 1;
   uint8_t statusBarBookProgressPercentage = 1;
+  uint8_t statusBarBookPercentageFormat = BOOK_PERCENTAGE_WHOLE;
   uint8_t stablePageNumbers = 0;
   uint8_t statusBarProgressBar = HIDE_PROGRESS;
   uint8_t statusBarProgressBarThickness = PROGRESS_BAR_NORMAL;
@@ -480,6 +513,20 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t statusBarTimeLeft = TIME_LEFT_HIDE;
   uint8_t statusBarBattery = 1;
   uint8_t xtcStatusBarMode = XTC_STATUS_BAR_HIDE;
+  ReaderStatusBarConfig topReaderStatusBar{};
+  ReaderStatusBarConfig bottomReaderStatusBar = [] {
+    ReaderStatusBarConfig config;
+    config.slots = {ReaderStatusBarItem::Battery,
+                    ReaderStatusBarItem::Empty,
+                    ReaderStatusBarItem::Empty,
+                    ReaderStatusBarItem::TitleChapter,
+                    ReaderStatusBarItem::ChapterPageCount,
+                    ReaderStatusBarItem::BookProgressPercentage,
+                    ReaderStatusBarItem::Empty};
+    return config;
+  }();
+  uint8_t legacyXtcTopUsesBottom = 0;
+  uint8_t showClockOutsideReader = 0;
   // Clock visibility mode (requires an RTC-backed clock).
   uint8_t hideClock = HIDE_CLOCK_ALWAYS;
   // Clock UTC offset in quarter-hour steps, biased by 48 so it fits in uint8_t.
@@ -513,11 +560,18 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t disableReaderTouchscreen = 0;
   // Available only on multi-touch hardware; defaults on for pinch font resizing.
   uint8_t pinchFontResizeEnabled = 1;
+  // Two-finger twist rotates the reader screen. Multi-touch hardware only.
+  uint8_t twoFingerRotationEnabled = 1;
   // Configurable two-finger swipes. A non-empty action may be assigned to one direction only.
   uint8_t twoFingerSwipeUp = TWO_FINGER_SWIPE_NOT_SET;
   uint8_t twoFingerSwipeDown = TWO_FINGER_SWIPE_NOT_SET;
   uint8_t twoFingerSwipeLeft = TWO_FINGER_SWIPE_NOT_SET;
   uint8_t twoFingerSwipeRight = TWO_FINGER_SWIPE_NOT_SET;
+  // One-finger slides along the screen edges. These can share action choices.
+  uint8_t leftEdgeUp = TWO_FINGER_SWIPE_NOT_SET;
+  uint8_t leftEdgeDown = TWO_FINGER_SWIPE_NOT_SET;
+  uint8_t rightEdgeUp = TWO_FINGER_SWIPE_NOT_SET;
+  uint8_t rightEdgeDown = TWO_FINGER_SWIPE_NOT_SET;
   // Short power button action behaviour
   uint8_t shortPwrBtn = IGNORE;
   // Long power button action behaviour
@@ -539,13 +593,17 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // EPUB reading orientation settings
   // 0 = portrait (default), 1 = landscape clockwise, 2 = inverted, 3 = landscape counter-clockwise
   uint8_t orientation = PORTRAIT;
-  // Button layouts (front layout retained for migration only)
+  // Legacy layouts are retained for migration only.
   uint8_t frontButtonLayout = BACK_CONFIRM_LEFT_RIGHT;
   uint8_t sideButtonLayout = PREV_NEXT;
   uint8_t frontButtonOrientationAware = FRONT_ORIENTATION_AWARE_OFF;
   uint8_t sideButtonOrientationAware = 0;
-  // Action performed when side buttons are long-pressed in reader
+  // Legacy shared side-button long action, retained for migration only.
   uint8_t sideButtonLongPress = SIDE_LONG_CHAPTER_SKIP;
+  uint8_t sideButtonUpShort = PREVIOUS_PAGE;
+  uint8_t sideButtonUpLong = SIDE_PREVIOUS_CHAPTER;
+  uint8_t sideButtonDownShort = PAGE_TURN;
+  uint8_t sideButtonDownLong = SIDE_NEXT_CHAPTER;
   // Front button remap (logical -> hardware)
   // Used by MappedInputManager to translate logical buttons into physical front buttons.
   uint8_t frontButtonBack = FRONT_HW_BACK;
@@ -618,7 +676,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t longPressButtonBehavior = OFF;
   // UI Theme
   uint8_t uiTheme = LYRA;
-  // Recent Books screen layout
+  // Recently Opened layout in Library; keep the original raw values for older settings.
   uint8_t recentBooksView = RECENT_BOOKS_LIST;
   // UI scale (list fonts + row heights); touch boards default one step larger
   uint8_t uiScale = defaultUiScale();
@@ -644,6 +702,19 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t dictionaryFontPointSize = 0;
   // Show hidden files/directories (starting with '.') in the file browser (0 = hidden, 1 = show)
   uint8_t showHiddenFiles = 0;
+  // Upstream's own Library preferences. Only its Library screens read them, and
+  // this fork does not build those; kept so the shared settings code compiles.
+  // libraryUseMetadata is declared once, further down, with this fork's note.
+  uint8_t librarySortMethod = 4;
+  uint8_t librarySortDescending = 1;
+  uint8_t libraryListExpanded = 1;
+  uint8_t libraryShowSeries = 1;
+  uint8_t libraryShowGenre = 1;
+  uint8_t libraryShowEpub = 1;
+  uint8_t libraryShowXtc = 1;
+  uint8_t libraryShowTxt = 1;
+  uint8_t libraryShowMarkdown = 1;
+  uint8_t libraryHideFinishedBooks = 0;
   // Hide file extensions in the file browser right-side value column (0 = show, 1 = hide)
   uint8_t hideFileExtension = 0;
   // File browser display row style (0 = one-line theme list, 1 = two-line compact display)
@@ -703,16 +774,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   char deviceName[21] = "";
   // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.
   uint8_t quickResumeSleepScreen = QUICK_RESUME_NEVER;
-#ifdef CROSSINK_ENABLE_READING_STATS_TOGGLE
-  // Debug/test builds can disable stat writes so navigation tests do not affect personal reading stats.
+  // Master switch for automatic reading statistics; Time Left pace remains independent.
   uint8_t trackReadingStats = 1;
-#endif
 
   ~CrossPointSettings() = default;
 
-  static constexpr uint16_t POWER_BUTTON_WAKE_SHORT_MS = 10;
-  static constexpr uint16_t POWER_BUTTON_WAKE_LONG_MS = 200;
   static constexpr uint16_t POWER_BUTTON_LONG_PRESS_MS = 400;
+  static constexpr uint16_t POWER_BUTTON_WAKE_SHORT_MS = 10;
+  static constexpr uint16_t POWER_BUTTON_WAKE_LONG_MS = POWER_BUTTON_LONG_PRESS_MS;
   static constexpr uint8_t MIN_SLEEP_TIMEOUT_MINUTES = 1;
   static constexpr uint8_t SLEEP_TIMEOUT_NEVER_MINUTES = 31;
   static constexpr uint8_t MAX_SLEEP_TIMEOUT_MINUTES = SLEEP_TIMEOUT_NEVER_MINUTES;
@@ -738,21 +807,17 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   static constexpr size_t MAX_DEVICE_NAME_LENGTH = sizeof(deviceName) - 1;
 
   uint16_t getPowerButtonWakeDuration() const {
-    return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? POWER_BUTTON_WAKE_SHORT_MS
-                                                                    : POWER_BUTTON_WAKE_LONG_MS;
+    return shortPowerPressWakes() ? POWER_BUTTON_WAKE_SHORT_MS : POWER_BUTTON_WAKE_LONG_MS;
   }
 
-  bool shouldShowClockInReader() const { return hideClock == HIDE_CLOCK_NEVER; }
-  bool shouldShowClockOutsideReader() const {
-    return hideClock == HIDE_CLOCK_NEVER || hideClock == HIDE_CLOCK_IN_READER;
+  bool shortPowerPressWakes() const { return shortPwrBtn == SLEEP || shortPwrBtn == WAKE_ONLY; }
+
+  bool shouldShowClockInReader() const {
+    return topReaderStatusBar.contains(ReaderStatusBarItem::Clock) ||
+           bottomReaderStatusBar.contains(ReaderStatusBarItem::Clock);
   }
-  bool shouldTrackReadingStats() const {
-#ifdef CROSSINK_ENABLE_READING_STATS_TOGGLE
-    return trackReadingStats != 0;
-#else
-    return true;
-#endif
-  }
+  bool shouldShowClockOutsideReader() const { return showClockOutsideReader != 0; }
+  bool shouldTrackReadingStats() const { return trackReadingStats != 0; }
   static const char* getDefaultDeviceName();
   const char* getEffectiveDeviceName() const;
   uint16_t getReadingIdleTimeThresholdSeconds() const;
@@ -782,30 +847,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   bool loadFromFile();
   static const char* getFilePath() { return "/.crosspoint/crossink-settings.json"; }
   void toJson(JsonDocument& doc) const;
-  bool fromJson(JsonVariantConst doc);
+  bool fromJson(JsonVariantConst doc, bool importingCrossPoint = false);
 
-  struct StatusBarSpec {
-    bool showChapterPageCount = false;
-    bool showBookProgressPercent = false;
-    bool showStablePageNumbers = false;
-    uint8_t titleMode = HIDE_TITLE;
-    uint8_t timeLeftMode = TIME_LEFT_HIDE;
-    bool showBattery = false;
-    bool showBatteryPercent = false;
-    bool showClock = false;
-    uint8_t progressBarMode = HIDE_PROGRESS;
-    uint8_t progressBarHeightPx = 0;
-    uint8_t xtcMode = XTC_STATUS_BAR_HIDE;
-
-    bool textLaneVisible(bool clockAvailable) const {
-      return showChapterPageCount || showBookProgressPercent || showStablePageNumbers || titleMode != HIDE_TITLE ||
-             timeLeftMode != TIME_LEFT_HIDE || showBattery || (showClock && clockAvailable);
-    }
-    bool showsProgressBar() const { return progressBarMode != HIDE_PROGRESS; }
-    bool showsTitle() const { return titleMode != HIDE_TITLE; }
-  };
-
-  StatusBarSpec statusBarSpec() const;
+  static bool parseReaderStatusBars(JsonVariantConst json, ReaderStatusBarsPayload& config);
+  ReaderStatusBarConfig readerStatusBar(ReaderStatusBarPosition position) const;
+  void setReaderStatusBar(ReaderStatusBarPosition position, const ReaderStatusBarConfig& config);
   ReaderRenderSpec readerRenderSpec(uint16_t viewportWidth, uint16_t viewportHeight,
                                     EpubRenderMode renderMode = EpubRenderMode::CrossInkDefault) const;
 

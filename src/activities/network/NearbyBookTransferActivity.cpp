@@ -5,8 +5,10 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <LibraryState.h>
+#include <LibraryBuilder.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <SdCardFontSystem.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -135,6 +137,7 @@ void NearbyBookTransferActivity::onEnter() {
 }
 
 void NearbyBookTransferActivity::onExit() {
+  library::invalidateLibraryIndex();
   sourceFile_.close();
   receiveFile_.close();
   stopRadio();
@@ -517,6 +520,7 @@ bool NearbyBookTransferActivity::finishReceivedFile(const uint64_t expectedBytes
   ImageFolderIndex::invalidateForPath(finalPath_.c_str());
   // A book just landed: the Library rebuilds, reconciled, on its next entry.
   library::markShelfStaleIfBook(finalPath_.c_str());
+  sdFontSystem.markRegistryDirtyForPath(finalPath_.c_str());
   return true;
 }
 

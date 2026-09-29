@@ -87,6 +87,7 @@ class Epub {
   uint32_t totalWords = 0;
   uint32_t wordsPerReferencePage = 0;
   uint32_t totalReferencePages = 0;
+  bool referencePagesUseCharacters = false;
   bool xLocationsLoaded = false;
   OpenFailure lastLoadFailure = OpenFailure::None;
   bool sourceSpineMapDeclared = false;
@@ -96,10 +97,9 @@ class Epub {
     Complete,
   };
 
-  void migrateLegacyCachePath(const std::string& cacheDir) const;
   bool findContentOpfFile(std::string* contentOpfFile) const;
   bool parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, bool writeSpineEntries = true,
-                       bool collectCssFiles = true);
+                       bool collectCssFiles = true, bool metadataOnly = false, std::string* seriesIndex = nullptr);
 
  public:
   // Title and author only, for the library index build. Reads the book's own
@@ -127,12 +127,29 @@ class Epub {
   explicit Epub(std::string filepath, const std::string& cacheDir);
   ~Epub() = default;
   static std::string cachePathForFilePath(const std::string& filepath, const std::string& cacheDir);
+  // Resolve the stable cache path and migrate an older hash-named directory if
+  // needed, without opening the EPUB or loading its metadata/location indexes.
+  static std::string resolveCachePathForFilePath(const std::string& filepath, const std::string& cacheDir);
+
   // True when a metadata cache already exists for this book, i.e. load() will
   // hit the fast path instead of rebuilding. Cheap: no parsing, just a stat.
   static bool hasCache(const std::string& filepath, const std::string& cacheDir);
   std::string& getBasePath() { return contentBasePath; }
   bool load(bool buildIfMissing = true, bool skipLoadingCss = false,
             XLocationLoadMode xLocationLoadMode = XLocationLoadMode::Immediate, bool cacheCumulativeSpineSizes = false);
+  // Title and author only, without building the spine/TOC/CSS/cover caches
+  // load() does. Reuses an existing metadata cache when there is one unless
+  // allowCachedMetadata is false. Cache invalidation is the caller's job, so
+  // metadata reads cannot delete per-book progress or settings. Parsing stops
+  // at </metadata>, before the manifest. Used by the
+  // Library index builder, which reads every EPUB on the card and cannot
+  // afford a full load() per book.
+  //
+  // This fork: allowCachedMetadata has no default, so a two-argument call
+  // resolves to the loadMetadata(title, author) above -- the one this fork's
+  // index core uses, with EpubQuickMetadata's measured 8 KB inflate bound.
+  bool loadMetadata(std::string& title, std::string& author, bool allowCachedMetadata,
+                    std::string* series = nullptr, std::string* genre = nullptr, std::string* seriesIndex = nullptr);
   // Loads optional stable-page and source-spine metadata after a Skip-mode open.
   // Failure leaves normal size-based progress available.
   bool loadXLocations();
@@ -168,6 +185,8 @@ class Epub {
   // thumbnail height.
   // Returns false on missing cache/cover, unsupported image format, or conversion failure.
   bool generateThumbBmp(int width, int height, const GfxRenderer* renderer = nullptr, int readerFontId = 0) const;
+  // Generate a Home thumbnail from the EPUB cover without building reader pages or indexes.
+  bool generateThumbBmpFromSource(int height, const GfxRenderer* renderer = nullptr, int readerFontId = 0);
   // Writes a thumbnail that can either crop-to-fill or contain unusual cover
   // ratios, depending on the source image dimensions.
   bool generateAdaptiveThumbBmp(int width, int height, const GfxRenderer* renderer = nullptr,
@@ -195,14 +214,17 @@ class Epub {
 
   size_t getBookSize() const;
   bool hasXLocations() const { return xLocationsLoaded; }
-  bool hasStablePageNumbers() const {
-    return xLocationsLoaded && totalWords > 0 && wordsPerReferencePage > 0 && totalReferencePages > 0;
-  }
+  bool hasStablePageNumbers() const;
+  uint32_t getReferencePageCount() const { return hasStablePageNumbers() ? totalReferencePages : 0; }
   float calculateSizeProgress(int currentSpineIndex, float currentSpineRead) const;
   float calculateProgress(int currentSpineIndex, float currentSpineRead) const;
-  bool resolveLocationPercentToSpineProgress(int percent, int& spineIndex, float& spineProgress) const;
+  // percent is 0.0-100.0; callers may pass fractional values from decimal keypad entry.
+  bool resolveLocationPercentToSpineProgress(float percent, int& spineIndex, float& spineProgress) const;
   bool resolveReferencePage(int currentSpineIndex, float currentSpineRead, uint32_t& currentPage,
                             uint32_t& pageCount) const;
+  bool resolveReferencePageToSpineProgress(uint32_t page, int& spineIndex, float& spineProgress) const;
+  bool resolveReferencePageTarget(uint32_t page, int& spineIndex, float& spineProgress, uint32_t& spineUnitOffset,
+                                  uint32_t& spineUnitCount, bool& usesCharacters) const;
   bool resolveChapterGroupRange(int currentSpineIndex, int& firstSpineIndex, int& lastSpineIndex) const;
   bool hasChapterGroups() const { return locationChapterGroupCount > 0; }
   bool hasSourceSpineMap() const { return sourceSpineMapCount > 0; }
@@ -219,5 +241,5 @@ class Epub {
   std::string getCachedCoverImagePath(const std::string& coverImageHref) const;
   bool ensureCachedCoverImage(const std::string& coverImageHref, std::string& outPath) const;
   bool generateThumbBmpInternal(int width, int height, bool adaptiveContain, const GfxRenderer* renderer,
-                                int readerFontId) const;
+                                int readerFontId, const std::string* coverHrefOverride = nullptr) const;
 };

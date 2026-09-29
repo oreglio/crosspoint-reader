@@ -4,7 +4,9 @@
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <LibraryState.h>
+#include <LibraryBuilder.h>
 #include <Logging.h>
+#include <SdCardFontSystem.h>
 #include <esp_rom_crc.h>
 
 #include <algorithm>
@@ -275,6 +277,7 @@ bool removeRecursive(const char* path, size_t depth = 0) {
 
   if (!file.isDirectory()) {
     file.close();
+    library::invalidateLibraryIndex();
     const bool removed = Storage.remove(path);
     if (removed) clearCachesForPath(path);
     return removed;
@@ -398,6 +401,7 @@ void handleMkdir() {
         return;
       }
       ImageFolderIndex::invalidateForPath(path);
+      sdFontSystem.markRegistryDirtyForPath(path);
     }
     writeLine("OK\n");
   } else {
@@ -565,6 +569,8 @@ void handleWrite() {
     return;
   }
 
+  library::invalidateLibraryIndex();
+  sdFontSystem.markRegistryDirtyForPath(path);
   if (Storage.exists(path)) {
     Storage.remove(path);
   }
@@ -577,6 +583,7 @@ void handleWrite() {
   clearCachesForPath(path);
   ImageFolderIndex::invalidateForPath(path);
   library::markShelfStaleIfBook(path);
+  sdFontSystem.markRegistryDirtyForPath(path);
   writeLine("OK\n");
 }
 
@@ -593,8 +600,10 @@ void handleRemove() {
     return;
   }
 
+  sdFontSystem.markRegistryDirtyForPath(path);
   if (removeRecursive(path)) {
     ImageFolderIndex::invalidateForPath(path);
+    sdFontSystem.markRegistryDirtyForPath(path);
     writeLine("OK\n");
   } else {
     writeLine("ERR:remove_failed\n");
@@ -628,12 +637,15 @@ void handleRename() {
   }
 
   if (Storage.rename(src, dst)) {
+    library::invalidateLibraryIndex();
     clearCachesForPath(src);
     clearCachesForPath(dst);
     ImageFolderIndex::invalidateForPath(src);
+    sdFontSystem.markRegistryDirtyForPath(src);
     ImageFolderIndex::invalidateForPath(dst);
     // A moved book changes its folder on the shelf.
     library::markShelfStaleIfBook(dst);
+    sdFontSystem.markRegistryDirtyForPath(dst);
     writeLine("OK\n");
   } else {
     writeLine("ERR:rename_failed\n");

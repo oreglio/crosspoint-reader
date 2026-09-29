@@ -14,6 +14,9 @@
 #include "SilentRestart.h"
 #include "activities/settings/FontSelectionActivity.h"
 #include "activities/settings/StatusBarSettingsActivity.h"
+#if CROSSINK_SCALABLE_FONTS
+#include "activities/settings/TtfRenderOptionsActivity.h"
+#endif
 #include "activities/util/IntervalSelectionActivity.h"
 #include "activities/util/OptionSelectionActivity.h"
 #include "components/TouchHeaderBackButton.h"
@@ -81,8 +84,9 @@ void ReaderOptionsActivity::rebuildSettingsList() {
   fontSettings.clear();
   pageLayoutSettings.clear();
   screenMarginSettings.clear();
-  sdFontSystem.refreshIfDirty();
-  const auto allSettings = getSettingsList(&sdFontSystem.registry());
+  const bool needsFonts = activeSubmenu == SettingAction::ReaderFontOptions;
+  if (needsFonts) sdFontSystem.refreshIfDirty();
+  const auto allSettings = getSettingsList(needsFonts ? &sdFontSystem.registry() : nullptr);
   settings = buildBookReaderSettingsParentList(allSettings);
   const auto indexingMethod = std::find_if(settings.begin(), settings.end(), [](const SettingInfo& setting) {
     return setting.nameId == StrId::STR_INDEXING_METHOD;
@@ -101,12 +105,21 @@ void ReaderOptionsActivity::rebuildSettingsList() {
                                              setting.nameId == StrId::STR_DOWNLOAD_FONTS;
                                     }),
                      fontSettings.end());
+#if CROSSINK_SCALABLE_FONTS
+  if (needsFonts && sdFontSystem.isScalableFamily(SETTINGS.sdFontFamilyName)) {
+    const auto fontSize = std::find_if(fontSettings.begin(), fontSettings.end(), [](const SettingInfo& setting) {
+      return setting.nameId == StrId::STR_FONT_SIZE;
+    });
+    const auto insertAt = fontSize == fontSettings.end() ? fontSettings.end() : std::next(fontSize);
+    fontSettings.insert(insertAt, SettingInfo::Action(StrId::STR_TTF_RENDERING, SettingAction::TtfRendering));
+  }
+#endif
 
   // Dictionary-specific font controls are useful only when an installed dictionary can use them.
   DictionaryRegistry installedDictionaryRegistry;
   const bool hasInstalledDictionaries = installedDictionaryRegistry.discover();
   installedDictionaryRegistry.clear();
-  if (!hasInstalledDictionaries) {
+  if (!hasInstalledDictionaries || !needsFonts) {
     setCurrentSettings();
     selectedIndex = 0;
     return;
@@ -132,8 +145,12 @@ void ReaderOptionsActivity::rebuildSettingsList() {
   }
   const auto fontSize = std::find_if(fontSettings.begin(), fontSettings.end(),
                                      [](const SettingInfo& setting) { return setting.nameId == StrId::STR_FONT_SIZE; });
-  const size_t dictionaryFontIndex =
+  size_t dictionaryFontIndex =
       fontSize == fontSettings.end() ? 0 : static_cast<size_t>(std::distance(fontSettings.begin(), fontSize) + 1);
+  if (dictionaryFontIndex < fontSettings.size() &&
+      fontSettings[dictionaryFontIndex].nameId == StrId::STR_TTF_RENDERING) {
+    ++dictionaryFontIndex;
+  }
   fontSettings.insert(fontSettings.begin() + dictionaryFontIndex, std::move(dictionaryFont));
 
   SettingInfo dictionaryFontSize;
@@ -234,6 +251,11 @@ StrId ReaderOptionsActivity::activeSubmenuTitleId() const {
 void ReaderOptionsActivity::openSubmenu(SettingAction action) {
   parentSubmenu = activeSubmenu;
   activeSubmenu = action;
+  if (action == SettingAction::ReaderFontOptions) {
+    RenderLock lock;
+    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP), true);
+    rebuildSettingsList();
+  }
   setCurrentSettings();
   selectedIndex = 0;
   topIndex = 0;
@@ -525,6 +547,24 @@ void ReaderOptionsActivity::toggleCurrentSetting() {
       silentRestartToManageFonts();
       return;
     }
+#if CROSSINK_SCALABLE_FONTS
+    if (setting.action == SettingAction::TtfRendering) {
+      if (settingsDirty) {
+        persistReaderSettings();
+        settingsDirty = false;
+      }
+      startActivityForResult(
+          std::make_unique<TtfRenderOptionsActivity>(renderer, mappedInput, SETTINGS.sdFontFamilyName, true),
+          [this](const ActivityResult& result) {
+            if (const auto* options = std::get_if<TtfRenderOptionsResult>(&result.data)) {
+              ttfRenderingChanged = ttfRenderingChanged || options->activeFamilyChanged;
+            }
+            rebuildSettingsList();
+            requestUpdate();
+          });
+      return;
+    }
+#endif
     if (setting.action == SettingAction::CustomiseStatusBar) {
       if (settingsDirty) {
         persistReaderSettings();
@@ -576,7 +616,7 @@ void ReaderOptionsActivity::loop() {
       persistReaderSettings();
       settingsDirty = false;
     }
-    finish();
+    finishWithResult();
     return;
   }
   if (mappedInput.wasHomeGesture()) {
@@ -584,10 +624,7 @@ void ReaderOptionsActivity::loop() {
       persistReaderSettings();
       settingsDirty = false;
     }
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
+    finishWithResult(true);
     return;
   }
   if (uiReady) {
@@ -645,9 +682,16 @@ void ReaderOptionsActivity::loop() {
       persistReaderSettings();
       settingsDirty = false;
     }
-    finish();
+    finishWithResult();
     return;
   }
+}
+
+void ReaderOptionsActivity::finishWithResult(const bool cancelled) {
+  ActivityResult result{TtfRenderOptionsResult{ttfRenderingChanged}};
+  result.isCancelled = cancelled;
+  setResult(std::move(result));
+  finish();
 }
 
 void ReaderOptionsActivity::optionsScreen(UiApp::ScreenType& screen, void* user) {

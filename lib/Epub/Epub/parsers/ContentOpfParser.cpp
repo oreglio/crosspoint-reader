@@ -3,6 +3,7 @@
 #include <FsHelpers.h>
 #include <Logging.h>
 #include <Serialization.h>
+#include <Utf8.h>
 #include <XmlParserUtils.h>
 
 #include <cctype>
@@ -31,6 +32,57 @@ bool startsWithImageMediaType(const std::string& mediaType) {
   }
 
   return true;
+}
+
+bool isXmlWhitespace(const char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
+
+// Metadata text comes straight from the (untrusted) OPF; unbounded growth on a
+// maliciously large title would exhaust the heap. Downstream consumers
+// truncate far below this anyway, so overflow is clamped, not fatal.
+constexpr size_t MAX_METADATA_TEXT = 512;
+
+// Appends one characterData() chunk to a metadata field, collapsing XML
+// whitespace runs to a single space and (for multi-author dc:creator) joining
+// entries with ", " — done here rather than per-callback because expat can
+// split one text node into several write() calls, notably around entity
+// references, and title/author must read the same either way.
+void appendMetadataText(std::string& out, const XML_Char* text, const int len, bool& spacePending, bool& truncated,
+                        bool* separatorPending = nullptr) {
+  if (truncated) return;
+  if (out.size() >= MAX_METADATA_TEXT) {
+    out.resize(static_cast<size_t>(utf8SafeTruncateBuffer(out.data(), static_cast<int>(out.size()))));
+    truncated = true;
+    return;
+  }
+  for (int i = 0; i < len; i++) {
+    const char c = text[i];
+    if (isXmlWhitespace(c)) {
+      spacePending = true;
+      continue;
+    }
+
+    // Check capacity against the WHOLE unit about to be appended (separator
+    // or space, plus the character), not just the character: checking the
+    // character alone let a pending ", " or ' ' push `out` a byte or two past
+    // the cap right at a multi-<dc:creator> boundary.
+    const bool useSeparator = separatorPending != nullptr && *separatorPending;
+    const bool useSpace = !useSeparator && spacePending && !out.empty();
+    const size_t prefixLen = useSeparator ? 2 : (useSpace ? 1 : 0);
+    if (out.size() + prefixLen + 1 > MAX_METADATA_TEXT) {
+      LOG_DBG("COF", "Metadata text exceeds %u bytes; truncating", static_cast<unsigned>(MAX_METADATA_TEXT));
+      out.resize(static_cast<size_t>(utf8SafeTruncateBuffer(out.data(), static_cast<int>(out.size()))));
+      truncated = true;
+      return;
+    }
+    if (useSeparator) {
+      out.append(", ");
+      *separatorPending = false;
+    } else if (useSpace) {
+      out.push_back(' ');
+    }
+    spacePending = false;
+    out.push_back(c);
+  }
 }
 
 bool readItemIdMatches(HalFile& file, const std::string& targetId, bool& matches) {
@@ -138,7 +190,7 @@ bool ContentOpfParser::findItemHref(const std::string& idref, std::string& href)
 }
 
 bool ContentOpfParser::setup() {
-  if (!itemIndexArena.init(ITEM_INDEX_ARENA_SLAB_BYTES)) {
+  if (!metadataOnly && !itemIndexArena.init(ITEM_INDEX_ARENA_SLAB_BYTES)) {
     LOG_ERR("COF", "Failed to allocate manifest index arena (%u bytes)",
             static_cast<unsigned>(ITEM_INDEX_ARENA_SLAB_BYTES));
     lowMemoryFailure = true;
@@ -160,6 +212,11 @@ bool ContentOpfParser::setup() {
 
 ContentOpfParser::~ContentOpfParser() {
   destroyXmlParser(parser);
+  // metadataOnly stops before <manifest>/<spine>/<guide> ever open the item
+  // cache file, so there is nothing below to close or remove.
+  if (metadataOnly) {
+    return;
+  }
   if (tempItemStore) {
     tempItemStore.close();
   }
@@ -203,6 +260,16 @@ size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
     currentBufferPos += toRead;
     remainingInBuffer -= toRead;
     remainingSize -= toRead;
+
+    if (metadataOnly && metadataComplete) {
+      // Signal the caller to stop feeding bytes (Epub::readItemContentsToStream's
+      // allowEarlyStop) with a short count. `size - remainingInBuffer` is how
+      // much of THIS call was actually consumed; if that happens to equal the
+      // full `size` (metadata ended exactly on a chunk boundary), report one
+      // byte short instead so the return value is unambiguously "not all of it".
+      const size_t processed = size - remainingInBuffer;
+      return processed < size ? processed : size - 1;
+    }
   }
 
   return size;
@@ -211,6 +278,20 @@ size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
 void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
   auto* self = static_cast<ContentOpfParser*>(userData);
   (void)atts;
+
+  if (self->metadataOnly && self->metadataComplete) {
+    return;
+  }
+  // A metadata-only read is done the moment any of these open: well-formed
+  // EPUB2/3 already closed </metadata> first (handled in endElement below),
+  // but a malformed package that jumps straight to the manifest must not open
+  // the item-cache file just to have this same check discard it a level down.
+  if (self->metadataOnly &&
+      (strcmp(name, "manifest") == 0 || strcmp(name, "opf:manifest") == 0 || strcmp(name, "spine") == 0 ||
+       strcmp(name, "opf:spine") == 0 || strcmp(name, "guide") == 0 || strcmp(name, "opf:guide") == 0)) {
+    self->metadataComplete = true;
+    return;
+  }
 
   if (self->state == START && (strcmp(name, "package") == 0 || strcmp(name, "opf:package") == 0)) {
     self->state = IN_PACKAGE;
@@ -226,17 +307,30 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     // Only capture the first dc:title element; subsequent ones are subtitles
     if (self->title.empty()) {
       self->state = IN_BOOK_TITLE;
+      self->metadataSpacePending = false;
     }
     return;
   }
 
   if (self->state == IN_METADATA && strcmp(name, "dc:creator") == 0) {
     self->state = IN_BOOK_AUTHOR;
+    self->metadataSpacePending = false;
+    self->authorSeparatorPending = !self->author.empty();
     return;
   }
 
   if (self->state == IN_METADATA && strcmp(name, "dc:language") == 0) {
     self->state = IN_BOOK_LANGUAGE;
+    self->metadataSpacePending = false;
+    return;
+  }
+
+  if (self->state == IN_METADATA && strcmp(name, "dc:subject") == 0) {
+    // Subjects are free-form tags; keep the first one as the Library genre.
+    if (self->subject.empty()) {
+      self->state = IN_BOOK_SUBJECT;
+      self->metadataSpacePending = false;
+    }
     return;
   }
 
@@ -272,18 +366,69 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 
   if (self->state == IN_METADATA && (strcmp(name, "meta") == 0 || strcmp(name, "opf:meta") == 0)) {
     bool isCover = false;
-    std::string coverItemId;
+    bool isSeries = false;
+    bool isSeriesIndex = false;
+    bool isCollection = false;
+    bool isCollectionType = false;
+    bool isCollectionPosition = false;
+    const char* content = nullptr;
+    const char* id = nullptr;
+    const char* refines = nullptr;
 
     for (int i = 0; atts[i]; i += 2) {
       if (strcmp(atts[i], "name") == 0 && strcmp(atts[i + 1], "cover") == 0) {
         isCover = true;
       } else if (strcmp(atts[i], "content") == 0) {
-        coverItemId = atts[i + 1];
+        content = atts[i + 1];
+      } else if (strcmp(atts[i], "name") == 0 && strcmp(atts[i + 1], "calibre:series") == 0) {
+        isSeries = true;
+      } else if (strcmp(atts[i], "name") == 0 && strcmp(atts[i + 1], "calibre:series_index") == 0) {
+        isSeriesIndex = true;
+      } else if (strcmp(atts[i], "property") == 0 && strcmp(atts[i + 1], "belongs-to-collection") == 0) {
+        isCollection = true;
+      } else if (strcmp(atts[i], "property") == 0 && strcmp(atts[i + 1], "collection-type") == 0) {
+        isCollectionType = true;
+      } else if (strcmp(atts[i], "property") == 0 && strcmp(atts[i + 1], "group-position") == 0) {
+        isCollectionPosition = true;
+      } else if (strcmp(atts[i], "id") == 0) {
+        id = atts[i + 1];
+      } else if (strcmp(atts[i], "refines") == 0) {
+        refines = atts[i + 1];
       }
     }
 
     if (isCover) {
-      self->coverItemId = coverItemId;
+      if (content) self->coverItemId = content;
+    }
+    if (isSeries && self->series.empty() && content) {
+      const size_t bytes = std::min(strlen(content), MAX_METADATA_TEXT);
+      self->series.assign(content, static_cast<size_t>(utf8SafeTruncateBuffer(content, static_cast<int>(bytes))));
+    }
+    if (isSeriesIndex && self->seriesIndex.empty() && content) {
+      self->seriesIndex.assign(content, std::min(strlen(content), MAX_METADATA_TEXT));
+    }
+    if (isCollection && self->series.empty() && id) {
+      if (self->collectionType == "series") {
+        self->series = std::move(self->collectionName);
+        self->seriesIndex = std::move(self->collectionPosition);
+      }
+      self->collectionName.clear();
+      self->collectionType.clear();
+      self->collectionPosition.clear();
+      self->collectionId.assign(id, std::min(strlen(id), MAX_METADATA_TEXT));
+      self->seriesTruncated = false;
+      self->collectionTypeTruncated = false;
+      self->collectionPositionTruncated = false;
+      self->state = IN_BOOK_COLLECTION;
+      self->metadataSpacePending = false;
+    }
+    if (isCollectionType && refines && refines[0] == '#' && self->collectionId == refines + 1) {
+      self->state = IN_BOOK_COLLECTION_TYPE;
+      self->metadataSpacePending = false;
+    }
+    if (isCollectionPosition && refines && refines[0] == '#' && self->collectionId == refines + 1) {
+      self->state = IN_BOOK_COLLECTION_POSITION;
+      self->metadataSpacePending = false;
     }
     return;
   }
@@ -421,21 +566,39 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 void XMLCALL ContentOpfParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<ContentOpfParser*>(userData);
 
+  if (self->metadataOnly && self->metadataComplete) {
+    return;
+  }
+
   if (self->state == IN_BOOK_TITLE) {
-    self->title.append(s, len);
+    appendMetadataText(self->title, s, len, self->metadataSpacePending, self->titleTruncated);
     return;
   }
 
   if (self->state == IN_BOOK_AUTHOR) {
-    if (!self->author.empty()) {
-      self->author.append(", ");  // Add separator for multiple authors
-    }
-    self->author.append(s, len);
+    appendMetadataText(self->author, s, len, self->metadataSpacePending, self->authorTruncated,
+                       &self->authorSeparatorPending);
     return;
   }
 
   if (self->state == IN_BOOK_LANGUAGE) {
-    self->language.append(s, len);
+    appendMetadataText(self->language, s, len, self->metadataSpacePending, self->languageTruncated);
+    return;
+  }
+  if (self->state == IN_BOOK_SUBJECT) {
+    appendMetadataText(self->subject, s, len, self->metadataSpacePending, self->subjectTruncated);
+    return;
+  }
+  if (self->state == IN_BOOK_COLLECTION) {
+    appendMetadataText(self->collectionName, s, len, self->metadataSpacePending, self->seriesTruncated);
+    return;
+  }
+  if (self->state == IN_BOOK_COLLECTION_TYPE) {
+    appendMetadataText(self->collectionType, s, len, self->metadataSpacePending, self->collectionTypeTruncated);
+    return;
+  }
+  if (self->state == IN_BOOK_COLLECTION_POSITION) {
+    appendMetadataText(self->collectionPosition, s, len, self->metadataSpacePending, self->collectionPositionTruncated);
     return;
   }
 }
@@ -443,6 +606,10 @@ void XMLCALL ContentOpfParser::characterData(void* userData, const XML_Char* s, 
 void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ContentOpfParser*>(userData);
   (void)name;
+
+  if (self->metadataOnly && self->metadataComplete) {
+    return;
+  }
 
   if (self->state == IN_SPINE && (strcmp(name, "spine") == 0 || strcmp(name, "opf:spine") == 0)) {
     self->state = IN_PACKAGE;
@@ -476,9 +643,26 @@ void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) 
     self->state = IN_METADATA;
     return;
   }
+  if (self->state == IN_BOOK_SUBJECT && strcmp(name, "dc:subject") == 0) {
+    self->state = IN_METADATA;
+    return;
+  }
+  if ((self->state == IN_BOOK_COLLECTION || self->state == IN_BOOK_COLLECTION_TYPE ||
+       self->state == IN_BOOK_COLLECTION_POSITION) &&
+      (strcmp(name, "meta") == 0 || strcmp(name, "opf:meta") == 0)) {
+    self->state = IN_METADATA;
+    return;
+  }
 
   if (self->state == IN_METADATA && (strcmp(name, "metadata") == 0 || strcmp(name, "opf:metadata") == 0)) {
+    if (self->series.empty() && self->collectionType == "series") {
+      self->series = std::move(self->collectionName);
+      self->seriesIndex = std::move(self->collectionPosition);
+    }
     self->state = IN_PACKAGE;
+    if (self->metadataOnly) {
+      self->metadataComplete = true;
+    }
     return;
   }
 

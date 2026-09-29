@@ -26,6 +26,28 @@ struct portMUX_TYPE {};
 class Activity;    // forward declaration
 class RenderLock;  // forward declaration
 
+#if CROSSINK_APP_CAP_TOUCH
+struct LiveLightSwipeState {
+  Activity* owner = nullptr;
+  bool tracking = false;
+  bool active = false;
+  bool blocked = false;
+  bool changed = false;
+  bool initialOn = false;
+  uint8_t action = 0;
+  int startX = 0;
+  int startY = 0;
+  int firstX = 0;
+  int firstY = 0;
+  int secondX = 0;
+  int secondY = 0;
+  int direction = 0;
+  int movementSign = 0;
+  bool vertical = false;
+  uint8_t initialValue = 0;
+};
+#endif
+
 enum class RequestUpdateResult { Rendered, Rejected };
 enum class HomeMenuItem {
   NONE,
@@ -61,6 +83,10 @@ class ActivityManager {
   MappedInputManager& mappedInput;
   std::vector<std::unique_ptr<Activity>> stackActivities;
   std::unique_ptr<Activity> currentActivity;
+#if CROSSINK_APP_CAP_TOUCH
+  LiveLightSwipeState edgeLightSwipe;
+  LiveLightSwipeState twoFingerLightSwipe;
+#endif
 
   void exitActivity(const RenderLock& lock);
 

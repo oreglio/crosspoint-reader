@@ -4,6 +4,10 @@
 
 #include <atomic>
 
+// Upstream's UiAppHost.h includes this too; screens ported from it rely on
+// the transitive include (drawLucideIcon, makeUiTarget, ...).
+#include "UiAppHelpers.h"
+
 class GfxRenderer;
 class MappedInputManager;
 

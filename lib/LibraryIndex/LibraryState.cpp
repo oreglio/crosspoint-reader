@@ -64,20 +64,28 @@ bool reanchorLibraryStateSelection(const FavoriteKey& from, const FavoriteKey& t
   return saveLibraryState(state);
 }
 
+namespace {
+// An empty file is the whole message. Failure is not worth failing the
+// transfer over — the manual rebuild button still exists.
+void writeStaleMarker(const char* reason) {
+  HalFile marker;
+  if (Storage.openFileForWrite("LIBST", STALE_PATH, marker)) {
+    marker.close();
+    LOG_INF("LIBST", "shelf marked stale by %s", reason);
+  }
+}
+}  // namespace
+
 void markShelfStaleIfBook(const char* path) {
   if (path == nullptr) return;
   const std::string name(path);
   const bool book = FsHelpers::hasEpubExtension(name) || FsHelpers::checkFileExtension(name, ".txt") ||
                     FsHelpers::checkFileExtension(name, ".md") || FsHelpers::checkFileExtension(name, ".xtc");
   if (!book) return;
-  // An empty file is the whole message. Failure is not worth failing the
-  // transfer over — the manual rebuild button still exists.
-  HalFile marker;
-  if (Storage.openFileForWrite("LIBST", STALE_PATH, marker)) {
-    marker.close();
-    LOG_INF("LIBST", "shelf marked stale by %s", name.c_str());
-  }
+  writeStaleMarker(name.c_str());
 }
+
+void invalidateLibraryIndex() { writeStaleMarker("a file change"); }
 
 bool takeShelfStale() {
   if (!Storage.exists(STALE_PATH)) return false;

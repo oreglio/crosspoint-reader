@@ -8,6 +8,7 @@ enum class EpubReaderMenuAction : uint8_t {
   SELECT_CHAPTER,
   FOOTNOTES,
   GO_TO_PERCENT,
+  GO_TO_STABLE_PAGE,
   AUTO_PAGE_TURN,
   ROTATE_SCREEN,
   SCREENSHOT,
@@ -20,6 +21,7 @@ enum class EpubReaderMenuAction : uint8_t {
   DELETE_CACHE,
   RESET_READING_PACE,
   READING_STATS,
+  TOGGLE_BOOK_STATS_TRACKING,
   TOGGLE_COMPLETED,
   READER_OPTIONS,
   CONTROLS_OPTIONS,
@@ -32,11 +34,17 @@ enum class EpubReaderMenuAction : uint8_t {
   LOOKUP_HISTORY,
   SET_BOOK_DICTIONARY,
   STATUS_BAR_SETTINGS,
+  RESET_BOOK_READER_SETTINGS,
 };
 
 enum class ReaderDrawerTab : uint8_t { Font = 0, Layout = 1, More = 2, Location = 3, Settings = 4, Count };
 
 constexpr size_t READER_DRAWER_TAB_COUNT = static_cast<size_t>(ReaderDrawerTab::Count);
+constexpr ReaderDrawerTab adjacentReaderDrawerTab(const ReaderDrawerTab tab, const bool forward) {
+  const size_t current = static_cast<size_t>(tab);
+  return static_cast<ReaderDrawerTab>((current + (forward ? 1 : READER_DRAWER_TAB_COUNT - 1)) %
+                                      READER_DRAWER_TAB_COUNT);
+}
 constexpr uint16_t READER_AUTO_PAGE_TURN_MIN_SECONDS = 5;
 constexpr uint16_t READER_AUTO_PAGE_TURN_MAX_SECONDS = 120;
 
@@ -48,14 +56,46 @@ enum class ReaderDrawerPane : uint8_t {
   Margins,
   Chapters,
   Percent,
+  StablePage,
   AutoPageTurn,
   Dictionary,
   DictionaryFont,
   EnumOptions,
+  TtfRendering,
 };
+
+enum class ReaderButtonSliderInput : uint8_t { Next, Previous, Confirm, Back };
+enum class ReaderButtonSliderAction : uint8_t { None, Increase, Decrease, LeavePane };
+
+struct ReaderButtonSliderState {
+  uint8_t focus = 0;
+  bool editing = false;
+};
+
+constexpr ReaderButtonSliderAction readerButtonSliderInput(ReaderButtonSliderState& state,
+                                                           const ReaderButtonSliderInput input) {
+  if (input == ReaderButtonSliderInput::Back) {
+    if (state.editing) {
+      state.editing = false;
+      return ReaderButtonSliderAction::None;
+    }
+    return ReaderButtonSliderAction::LeavePane;
+  }
+  if (input == ReaderButtonSliderInput::Confirm) {
+    state.editing = !state.editing;
+    return ReaderButtonSliderAction::None;
+  }
+  if (state.editing) {
+    return input == ReaderButtonSliderInput::Next ? ReaderButtonSliderAction::Increase
+                                                  : ReaderButtonSliderAction::Decrease;
+  }
+  state.focus = input == ReaderButtonSliderInput::Next ? 1 : 0;
+  return ReaderButtonSliderAction::None;
+}
 
 enum class ReaderDrawerCatalogItem : uint8_t {
   ReaderFont,
+  TtfRendering,
   DictionaryFont,
   Spacing,
   TextAa,
@@ -72,6 +112,7 @@ enum class ReaderDrawerCatalogItem : uint8_t {
   Images,
   SelectChapter,
   GoToPercent,
+  GoToStablePage,
   BookmarkToggle,
   ViewBookmarks,
   Screenshot,
@@ -96,6 +137,19 @@ enum class ReaderDrawerCatalogItem : uint8_t {
   FontSize,
   DictionaryFontFamily,
   DictionaryFontSize,
+  TtfHinting,
+  TtfRaster,
+  TtfInterpreter,
+  TtfWeight,
+  TtfSlant,
+  TtfStemDarkening,
+  TtfReset,
+  ResetBookReaderSettings,
+  ReadingStats,
+  TrackBookStats,
+  SyncProgress,
+  NearbyPositionSync,
+  SendNearbyBook,
 };
 
 struct ReaderDrawerAvailability {
@@ -104,10 +158,14 @@ struct ReaderDrawerAvailability {
   bool hasBookmarks = false;
   bool hasClippings = false;
   bool showReadingPaceReset = false;
+  bool hasStablePageNumbers = false;
+  bool buttonDevice = false;
+  bool globalStatsEnabled = true;
+  bool bookStatsEnabled = true;
 };
 
 struct ReaderDrawerTabCatalog {
-  std::array<ReaderDrawerCatalogItem, 12> items{};
+  std::array<ReaderDrawerCatalogItem, 13> items{};
   uint8_t count = 0;
 
   constexpr void add(const ReaderDrawerCatalogItem item) { items[count++] = item; }
@@ -143,7 +201,10 @@ constexpr ReaderDrawerCatalog makeReaderDrawerCatalog(const ReaderDrawerAvailabi
   }
   more.add(ReaderDrawerCatalogItem::SelectChapter);
   more.add(ReaderDrawerCatalogItem::GoToPercent);
+  if (available.hasStablePageNumbers) more.add(ReaderDrawerCatalogItem::GoToStablePage);
   more.add(ReaderDrawerCatalogItem::AutoPageTurn);
+  if (available.buttonDevice && available.globalStatsEnabled && available.bookStatsEnabled)
+    more.add(ReaderDrawerCatalogItem::ReadingStats);
   if (available.hasFootnotes) more.add(ReaderDrawerCatalogItem::Footnotes);
 
   auto& location = catalog[static_cast<size_t>(ReaderDrawerTab::Location)];
@@ -154,6 +215,11 @@ constexpr ReaderDrawerCatalog makeReaderDrawerCatalog(const ReaderDrawerAvailabi
   }
   location.add(ReaderDrawerCatalogItem::SaveClipping);
   if (available.hasClippings) location.add(ReaderDrawerCatalogItem::ViewClippings);
+  if (available.buttonDevice) {
+    location.add(ReaderDrawerCatalogItem::SyncProgress);
+    location.add(ReaderDrawerCatalogItem::NearbyPositionSync);
+    location.add(ReaderDrawerCatalogItem::SendNearbyBook);
+  }
   location.add(ReaderDrawerCatalogItem::Screenshot);
   location.add(ReaderDrawerCatalogItem::DisplayQr);
 
@@ -164,14 +230,12 @@ constexpr ReaderDrawerCatalog makeReaderDrawerCatalog(const ReaderDrawerAvailabi
   settings.add(ReaderDrawerCatalogItem::RenderMode);
   settings.add(ReaderDrawerCatalogItem::IndexingMethod);
   settings.add(ReaderDrawerCatalogItem::ToggleCompleted);
+  if (available.globalStatsEnabled) settings.add(ReaderDrawerCatalogItem::TrackBookStats);
   if (available.showReadingPaceReset) settings.add(ReaderDrawerCatalogItem::ResetReadingPace);
   settings.add(ReaderDrawerCatalogItem::DeleteCache);
-  settings.add(ReaderDrawerCatalogItem::DeleteStats);
+  if (available.globalStatsEnabled && available.bookStatsEnabled) settings.add(ReaderDrawerCatalogItem::DeleteStats);
+  settings.add(ReaderDrawerCatalogItem::ResetBookReaderSettings);
   return catalog;
-}
-
-constexpr bool shouldReopenTouchReaderDrawer(const bool reopenDrawer, const bool hasTouchHardware) {
-  return reopenDrawer && hasTouchHardware;
 }
 
 constexpr bool readerDrawerStepChangesSettings(const ReaderDrawerPane pane) {
@@ -179,14 +243,36 @@ constexpr bool readerDrawerStepChangesSettings(const ReaderDrawerPane pane) {
          pane == ReaderDrawerPane::AutoPageTurn;
 }
 
+// Only settings with an existing live text preview reserve sample space.
+constexpr bool readerDrawerShowsSamplePreview(const ReaderDrawerPane pane, const ReaderDrawerTab tab,
+                                              const ReaderDrawerCatalogItem option) {
+  return (pane == ReaderDrawerPane::Root && tab == ReaderDrawerTab::Font) || pane == ReaderDrawerPane::ReaderFont ||
+         pane == ReaderDrawerPane::FontFamily || pane == ReaderDrawerPane::Spacing ||
+         pane == ReaderDrawerPane::Margins ||
+         (pane == ReaderDrawerPane::EnumOptions &&
+          (option == ReaderDrawerCatalogItem::FontSize || option == ReaderDrawerCatalogItem::Alignment));
+}
+
 constexpr bool readerDrawerSliderPreviewsText(const ReaderDrawerPane pane) {
   return pane == ReaderDrawerPane::Spacing || pane == ReaderDrawerPane::Margins;
 }
 
-// These are the only panes that place two annotated sliders in one drawer.
-// Keep their extra landscape height separate from the compact list panes.
+constexpr bool shouldRenderReaderDrawerAntiAliasing(const bool previewRendered, const bool textAntiAliasing,
+                                                    const bool foregroundBlack) {
+  return previewRendered && textAntiAliasing && foregroundBlack;
+}
+
+// Panes with more vertical content than a single control row: Spacing/Margins place
+// two annotated sliders, and Percent/StablePage place a 4-row numeric keypad. Keep
+// their extra landscape height separate from the compact list panes.
 constexpr bool readerDrawerNeedsTallLandscapeSheet(const ReaderDrawerPane pane) {
-  return readerDrawerSliderPreviewsText(pane);
+  return readerDrawerSliderPreviewsText(pane) || pane == ReaderDrawerPane::Percent ||
+         pane == ReaderDrawerPane::StablePage;
+}
+
+constexpr bool readerDrawerNeedsExternalBackdrop(const bool previewDirty, const bool previewModelValid,
+                                                 const bool activeFontChanged) {
+  return !previewDirty || (!previewModelValid && !activeFontChanged);
 }
 
 constexpr bool isReaderDrawerRowFocused(const bool buttonFocusActive, const int16_t selectedIndex,
@@ -247,6 +333,12 @@ struct ReaderSettingsDraft {
   uint8_t epubRenderMode = 0;
   uint8_t indexingMethod = 0;
 };
+
+inline void restoreReaderDraftFont(ReaderSettingsDraft& draft, const ReaderSettingsDraft& lastGood) {
+  draft.fontFamily = lastGood.fontFamily;
+  draft.readerFontPointSize = lastGood.readerFontPointSize;
+  draft.sdFontFamilyName = lastGood.sdFontFamilyName;
+}
 
 enum class ReaderSettingsChangeMask : uint8_t {
   None = 0,

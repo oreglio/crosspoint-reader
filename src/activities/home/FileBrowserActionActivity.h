@@ -2,6 +2,7 @@
 
 #include <I18n.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -25,9 +26,14 @@ enum class FileBrowserAction : int {
   EpubRenderMode = 13,
   ResetReaderSettings = 14,
   SendNearby = 15,
-  MarkArticleDone = 16,
-  PinBootFavorite = 17,
-  UnpinBootFavorite = 18,
+  PinBootFavorite = 16,
+  UnpinBootFavorite = 17,
+  Rename = 18,
+  ReadingStats = 19,
+  ToggleBookStatsTracking = 20,
+  // This fork (Raindrop articles). Values only travel from the menu to its
+  // caller within one visit, never to disk, so it simply follows upstream's.
+  MarkArticleDone = 21,
 };
 
 class FileBrowserActionActivity final : public Activity {
@@ -35,6 +41,7 @@ class FileBrowserActionActivity final : public Activity {
   struct MenuItem {
     FileBrowserAction action;
     StrId labelId;
+    std::optional<StrId> valueId;
   };
 
   FileBrowserActionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string title,

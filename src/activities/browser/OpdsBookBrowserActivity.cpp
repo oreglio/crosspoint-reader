@@ -98,6 +98,7 @@ void OpdsBookBrowserActivity::onEnter() {
 }
 
 void OpdsBookBrowserActivity::onExit() {
+  library::invalidateLibraryIndex();
   Activity::onExit();
   clearEntries();
   entries.reset();
@@ -110,7 +111,7 @@ void OpdsBookBrowserActivity::onExit() {
   }
   // OPDS launches from minimal network boot, so restore the full app state
   // even if setup failed before WiFi was started.
-  silentRestartAfterNetwork();
+  silentRestart();
 #endif
 }
 
@@ -509,12 +510,16 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
 
   clearEntries();
   const std::string url = UrlUtils::buildUrl(server.url, path);
+  // Keep the normalized server URL alive for the synchronous fetch so
+  // HttpDownloader can scope Basic auth even for legacy scheme-less entries.
+  const std::string authorizationOrigin = UrlUtils::ensureProtocol(server.url);
   LOG_DBG("OPDS", "Fetching: %s", url.c_str());
   OpdsParser parser(entries.get(), MAX_OPDS_FEED_ENTRIES);
   {
     OpdsParserStream stream{parser};
     HttpDownloader::DownloadOptions downloadOptions;
     downloadOptions.transport = HttpDownloader::Transport::WOLFSSL;
+    downloadOptions.authorizationOrigin = authorizationOrigin;
     const auto result = HttpDownloader::streamUrl(
         url, [&stream](const uint8_t* data, const size_t len) { return stream.write(data, len) == len; }, nullptr,
         server.username, server.password, std::move(downloadOptions));
@@ -630,6 +635,9 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   // Build full download URL relative to the current feed, not the root server URL
   const std::string feedUrl = UrlUtils::buildUrl(server.url, currentPath);
   std::string downloadUrl = UrlUtils::buildUrl(feedUrl, book.href);
+  // This temporary is intentionally retained until downloadToFile returns;
+  // DownloadOptions borrows it to avoid copying the server URL per transfer.
+  const std::string authorizationOrigin = UrlUtils::ensureProtocol(server.url);
   const char* downloadFolder = SETTINGS.opdsDownloadFolder;
   bool useDownloadFolder = downloadFolder[0] != '\0';
   if (useDownloadFolder && !Storage.exists(downloadFolder) && !Storage.mkdir(downloadFolder)) {
@@ -670,6 +678,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   downloadOptions.shouldCancel = pollCancel;
   downloadOptions.bufferSize = OPDS_DOWNLOAD_BUFFER_SIZE;
   downloadOptions.transport = HttpDownloader::Transport::WOLFSSL;
+  downloadOptions.authorizationOrigin = authorizationOrigin;
   int lastRenderedPercent = -1;
   unsigned long lastProgressUpdateMs = 0;
 

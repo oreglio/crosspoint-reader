@@ -2,6 +2,7 @@
 
 #include <builtinFonts/ui_symbols_10.h>
 
+#if !CROSSINK_SCALABLE_FONTS
 // Built-in reading fonts are fixed at 10, 12, 14, and 16 pt. They carry the
 // PHM CJK fallback ranges; emoticons were dropped upstream in v1.5.1.
 //
@@ -89,6 +90,7 @@
 #endif  // OMIT_LEXENDDECA_FONT
 
 #undef BUILTIN_READING_FONT_HEADER
+#endif  // !CROSSINK_SCALABLE_FONTS
 
 // UI fonts - no emoji or PHM variants. These are not build-time optional: the
 // shell needs all three sizes regardless of which reading fonts survive.

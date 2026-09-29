@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 /**
@@ -54,6 +55,9 @@ class HttpDownloader {
     // instead of the transport's default setInsecure(). ESP_HTTP ignores it
     // (that path already verifies via the ESP-IDF bundle).
     const char* caCertPem = nullptr;
+    // Borrowed only for this synchronous request. Basic credentials are sent
+    // only to this origin; empty keeps the request URL as the credential origin.
+    std::string_view authorizationOrigin;
   };
 
   /**

@@ -28,6 +28,7 @@ struct MenuResult {
   ReaderSettingsChangeMask changeMask = ReaderSettingsChangeMask::None;
   bool reopenDrawer = false;
   int16_t drawerValue = -1;
+  uint32_t drawerPage = 0;
 };
 
 struct ChapterResult {
@@ -39,7 +40,8 @@ struct ChapterResult {
 };
 
 struct PercentResult {
-  int percent = 0;
+  // 0.0-100.0; keypad entry allows two decimal places.
+  float percent = 0.0f;
 };
 
 struct IntervalResult {
@@ -97,6 +99,11 @@ struct TaskEditResult {
   bool changed = false;
 };
 
+struct TtfRenderOptionsResult {
+  bool changed = false;
+  bool activeFamilyChanged = false;
+};
+
 struct ClippingResult {
   std::string text;
   uint16_t sectionPage = 0;
@@ -137,7 +144,8 @@ using ResultVariant =
     std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult, IntervalResult,
                  OptionSelectionResult, PageResult, NetworkModeResult, FootnoteResult, BookmarkResult,
                  FileBrowserActionResult, FilePathResult, WordResult, ReadingStatsResult, TaskEditResult,
-                 ClippingResult, DictionaryClippingRequest, ClippingJumpResult, FrontlightPanelResult>;
+                 ClippingResult, TtfRenderOptionsResult, DictionaryClippingRequest, ClippingJumpResult,
+                 FrontlightPanelResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

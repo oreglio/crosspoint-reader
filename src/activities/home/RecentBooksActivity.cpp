@@ -262,6 +262,11 @@ void RecentBooksActivity::showBookActionMenu(const size_t bookIndex, const bool 
         switch (static_cast<FileBrowserAction>(actionResult->action)) {
           case FileBrowserAction::MarkArticleDone:  // les articles ne sont jamais dans les récents
             return;
+          // Upstream's file-browser actions; this list's menu never offers them.
+          case FileBrowserAction::Rename:
+          case FileBrowserAction::ReadingStats:
+          case FileBrowserAction::ToggleBookStatsTracking:
+            return;
           case FileBrowserAction::Delete:
             promptDeleteBook(book);
             return;

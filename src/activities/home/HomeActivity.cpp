@@ -7,6 +7,8 @@
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <LibraryBuilder.h>
+#include <LibraryIndexFile.h>
 #include <Memory.h>
 #include <MemoryBudget.h>
 #include <Serialization.h>
@@ -22,12 +24,9 @@
 #include <string>
 #include <vector>
 
-#if defined(CROSSINK_ISSUE_666_MEMORY_DIAGNOSTICS) && defined(ARDUINO_ARCH_ESP32) && !defined(SIMULATOR)
-#include <esp_memory_utils.h>
-#endif
-
 #include "../reader/BookReadingStats.h"
 #include "../reader/BookStatsActivity.h"
+#include "../reader/BookStatsTracking.h"
 #include "../reader/EpubReaderUtils.h"
 #include "../util/CountdownActivity.h"
 #include "../util/OptionSelectionActivity.h"
@@ -54,7 +53,8 @@ namespace {
 constexpr uint32_t CAROUSEL_CACHE_MAGIC = 0x43434152;  // "CCAR"
 // Cached frames include all Home visuals, including the menu icons. Bump this
 // whenever their rendering changes so stale snapshots are rebuilt after OTA.
-constexpr uint16_t CAROUSEL_CACHE_VERSION = 6;
+// 8: both sides changed Home rendering since 6 (this fork) and 7 (upstream).
+constexpr uint16_t CAROUSEL_CACHE_VERSION = 8;
 constexpr char CAROUSEL_CACHE_PATH[] = "/.crosspoint/home_carousel_cache.bin";
 constexpr char CAROUSEL_CACHE_TMP_PATH[] = "/.crosspoint/home_carousel_cache.tmp";
 constexpr uint32_t CAROUSEL_FRAME_MIN_FREE_AFTER_ALLOC = 64U * 1024U;
@@ -146,35 +146,6 @@ bool hasHeapForCarouselFrameCache() {
          ESP.getMaxAllocHeap() >= CAROUSEL_FRAME_MIN_MAX_ALLOC_AFTER_ALLOC;
 }
 
-#if defined(CROSSINK_ISSUE_666_MEMORY_DIAGNOSTICS) && defined(ARDUINO_ARCH_ESP32) && !defined(SIMULATOR)
-const char* carouselPointerPool(const void* ptr) {
-  if (!ptr) return "null";
-  if (esp_ptr_external_ram(ptr)) return "PSRAM";
-  if (esp_ptr_internal(ptr)) return "internal";
-  return "other";
-}
-
-// Temporary #666 probe: cache frames are full-screen buffers, so stack/static
-// storage is unsuitable. Check their containing heap regions only at cache
-// setup/copy time. A healthy region does not prove that an individual pointer
-// still owns a live allocation; the owner/alias check below covers that case.
-bool logCarouselMemoryDiagnostic(const char* stage, const int slotIdx, const void* source, const void* destination,
-                                 const size_t byteCount) {
-  const auto internal = MemoryBudget::snapshot();
-  const auto psram = MemoryBudget::psramSnapshot();
-  const bool sourceRegionIntact = source && heap_caps_check_integrity_addr(reinterpret_cast<intptr_t>(source), true);
-  const bool destinationRegionIntact =
-      destination && heap_caps_check_integrity_addr(reinterpret_cast<intptr_t>(destination), true);
-  LOG_INF("DIAG666",
-          "%s slot=%d bytes=%u task=%s src=%p(%s region=%d) dst=%p(%s region=%d); internal free=%u max=%u; "
-          "psram free=%u max=%u",
-          stage, slotIdx, static_cast<unsigned>(byteCount), pcTaskGetName(nullptr), source, carouselPointerPool(source),
-          sourceRegionIntact, destination, carouselPointerPool(destination), destinationRegionIntact, internal.freeHeap,
-          internal.maxAllocHeap, psram.freeHeap, psram.maxAllocHeap);
-  return sourceRegionIntact && destinationRegionIntact;
-}
-#endif
-
 void appendHashedFileStateToKey(std::string& key, const std::string& path) {
   FsFile file;
   if (!Storage.openFileForRead("HOME", path, file)) {
@@ -205,7 +176,7 @@ void appendHashedFileStateToKey(std::string& key, const std::string& path) {
 
 std::string getRecentBookCachePath(const RecentBook& book) {
   if (FsHelpers::hasEpubExtension(book.path)) {
-    return Epub::cachePathForFilePath(book.path, "/.crosspoint");
+    return Epub::resolveCachePathForFilePath(book.path, "/.crosspoint");
   }
   if (FsHelpers::hasXtcExtension(book.path)) {
     return "/.crosspoint/xtc_" + std::to_string(std::hash<std::string>{}(book.path));
@@ -216,51 +187,50 @@ std::string getRecentBookCachePath(const RecentBook& book) {
   return "";
 }
 
+BookReadingStats visibleRecentBookStats(const RecentBook& book, BookReadingStats stats) {
+  const std::string cachePath = getRecentBookCachePath(book);
+  if (!BookStatsTracking::isEnabled(cachePath)) {
+    BookReadingStats paceOnly;
+    paceOnly.avgSecondsPerForwardPage = stats.avgSecondsPerForwardPage;
+    paceOnly.paceSampleCount = stats.paceSampleCount;
+    paceOnly.estimatedTimeLeftSeconds = stats.estimatedTimeLeftSeconds;
+    return paceOnly;
+  }
+  return stats;
+}
+
 BookReadingStats loadRecentBookStats(const RecentBook& book) {
   if (!FsHelpers::hasEpubExtension(book.path) && !FsHelpers::hasXtcExtension(book.path)) {
     return BookReadingStats{};
   }
 
-  const std::string cachePath = getRecentBookCachePath(book);
-  return BookReadingStats::load(cachePath);
+  return visibleRecentBookStats(book, BookReadingStats::load(getRecentBookCachePath(book)));
 }
 
-bool loadEpubHighlightedContext(const RecentBook& book, const bool loadProgress, const bool loadChapterTitle,
-                                float* progressPercent, std::string* chapterTitle) {
-  if (!FsHelpers::hasEpubExtension(book.path) || (!loadProgress && !loadChapterTitle)) {
-    return false;
-  }
+float loadRecentBookProgress(const RecentBook& book) {
+  return FsHelpers::hasEpubExtension(book.path) ? RecentBookProgress::loadCachedEpubPercent(book)
+                                                : RecentBookProgress::loadPercent(book);
+}
 
-  Epub epub(book.path, "/.crosspoint");
-  if (!epub.load(false, true)) {
-    return false;
-  }
-
+std::string loadEpubHighlightedChapterTitle(const RecentBook& book) {
+  const std::string cachePath = getRecentBookCachePath(book);
   EpubReaderUtils::Progress progress;
-  if (!EpubReaderUtils::loadProgress(epub, progress, "HOME")) {
-    return false;
+  if (!EpubReaderUtils::readProgressFile("HOME", cachePath + "/progress.bin", progress) &&
+      !EpubReaderUtils::readProgressFile("HOME", cachePath + "/progress.bin.bak", progress)) {
+    return {};
   }
 
-  if (loadProgress && progressPercent) {
-    if (progress.hasPageCount && progress.pageCount > 0) {
-      const float chapterProgress =
-          static_cast<float>(progress.pageNumber + 1) / static_cast<float>(progress.pageCount);
-      *progressPercent =
-          std::clamp(epub.calculateProgress(progress.spineIndex, chapterProgress) * 100.0f, 0.0f, 100.0f);
-    } else {
-      *progressPercent = -1.0f;
-    }
+  // This metadata owner contains several strings and file handles. Keep it off
+  // the small activity stack, and never parse/index a book just to paint Home.
+  auto metadata = makeUniqueNoThrow<BookMetadataCache>(cachePath);
+  if (!metadata) {
+    LOG_ERR("HOME", "Cannot allocate chapter metadata");
+    return {};
   }
-
-  if (loadChapterTitle && chapterTitle) {
-    chapterTitle->clear();
-    const auto spineItem = epub.getSpineItem(progress.spineIndex);
-    if (spineItem.tocIndex >= 0) {
-      *chapterTitle = epub.getTocItem(spineItem.tocIndex).title;
-    }
-  }
-
-  return true;
+  if (!metadata->load() || progress.spineIndex >= metadata->getSpineCount()) return {};
+  const int tocIndex = metadata->getSpineEntry(progress.spineIndex).tocIndex;
+  if (tocIndex < 0 || tocIndex >= metadata->getTocCount()) return {};
+  return metadata->getTocEntry(tocIndex).title;
 }
 
 void updateRecentBookCover(const RecentBook& book) {
@@ -317,7 +287,7 @@ void appendHomeMenuItems(HomeMenuEntries& items, bool hasOpdsServers, bool hasRe
   items.push({tr(STR_MENU_RECENT_BOOKS), Recent, HomeMenuAction::RecentBooks});
 
   if (hasOpdsServers) {
-    items.push({tr(STR_OPDS_BROWSER), Library, HomeMenuAction::OpdsBrowser});
+    items.push({tr(STR_OPDS_BROWSER), Opds, HomeMenuAction::OpdsBrowser});
   }
   if (hasReadingStats) {
     items.push({tr(STR_READING_STATS), Chart, HomeMenuAction::ReadingStats});
@@ -349,7 +319,7 @@ HomeMenuEntries buildMinimalMenuItems(bool hasOpdsServers, bool hasReadingStats,
   items.push({tr(STR_MENU_RECENT_BOOKS), Recent, HomeMenuAction::RecentBooks});
 
   if (hasOpdsServers) {
-    items.push({tr(STR_OPDS_BROWSER), Library, HomeMenuAction::OpdsBrowser});
+    items.push({tr(STR_OPDS_BROWSER), Opds, HomeMenuAction::OpdsBrowser});
   }
   if (hasBookmarks || hasClippings) {
     items.push({savedItemsLabel(hasBookmarks, hasClippings), BookmarkIcon, HomeMenuAction::Bookmarks});
@@ -495,6 +465,7 @@ void appendCarouselCoverStateToKey(std::string& key, const RecentBook& book) {
     appendHashedFileStateToKey(key, cachePath + "/progress.bin");
     if (FsHelpers::hasEpubExtension(book.path) || FsHelpers::hasXtcExtension(book.path)) {
       appendHashedFileStateToKey(key, cachePath + "/stats_v5.bin");
+      appendHashedFileStateToKey(key, cachePath + "/reading_stats_off");
     }
   } else {
     key += "no-cache-path";
@@ -554,6 +525,8 @@ void buildCarouselCacheKey(const std::vector<RecentBook>& recentBooks, const boo
   // pixels, so a Light Mode snapshot cannot be reused in Dark Mode (or vice
   // versa).
   key += SETTINGS.screenInverted ? "dark:1" : "dark:0";
+  key += '\0';
+  key += SETTINGS.shouldTrackReadingStats() ? "tracking:1" : "tracking:0";
   key += '\0';
   // The carousel cache stores the bottom icon row too, so menu visibility must
   // be part of the key alongside book covers/progress.
@@ -665,6 +638,7 @@ static_assert(HomeActivity::kMaxCachedBooks >= LyraCarouselMetrics::values.homeR
               "kMaxCachedBooks must cover all carousel slots");
 
 int HomeActivity::getMenuItemCount() const {
+  if (coverGridUi) return static_cast<int>(recentBooks.size()) + (hasOpdsServers ? 5 : 4);
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Derived from the very builder the menu renders, so a row can never be drawn
   // without also being selectable. This was a hand-maintained tally of the fixed
@@ -685,7 +659,7 @@ int HomeActivity::getMenuItemCount() const {
 void HomeActivity::loadRecentBooks(int maxBooks) {
   recentBooks.clear();
   const auto& books = RECENT_BOOKS.getBooks();
-  recentBooks.reserve(std::min(static_cast<int>(books.size()), maxBooks));
+  recentBooks.reserve(coverGridUi ? maxBooks : std::min(static_cast<int>(books.size()), maxBooks));
 
   for (const RecentBook& storedBook : books) {
     // Limit to maximum number of recent books
@@ -703,12 +677,113 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
   }
 }
 
+void HomeActivity::fillCoverGridFromLibrary() {
+  if (recentBooks.size() >= CoverGridHomeUi::MAX_BOOKS) return;
+
+  struct LibraryReader {
+    library::LibraryIndexFile index;
+    library::ClixRecord record;
+  };
+  auto reader = makeUniqueNoThrow<LibraryReader>();
+  if (!reader) {
+    LOG_ERR("HOME", "Cannot allocate library index reader for cover grid");
+    return;
+  }
+  auto& index = reader->index;
+  const bool indexOpen = index.open(library::libraryIndexPath());
+  // This fork's shelf owns the "stale" flag (LibraryState::takeShelfStale) and
+  // reconciles on its own entry, so Home rebuilds only a missing index or one
+  // built with the other metadata setting.
+  const bool needsRefresh =
+      !indexOpen || index.header().metadataEnabled != static_cast<uint8_t>(SETTINGS.libraryUseMetadata != 0);
+  if (needsRefresh) {
+    index.close();
+    // Home has not painted yet. Give the same visible scan feedback as Library
+    // before rebuilding an index for a large SD card.
+    {
+      RenderLock lock;
+      renderer.clearScreen();
+      GUI.drawPopup(renderer, tr(STR_LIBRARY_SCANNING));
+      renderer.displayBuffer(initialRefreshMode);
+      initialRefreshMode = HalDisplay::FAST_REFRESH;
+    }
+    library::BuildStats stats;
+    if (!library::buildLibraryIndex("/", stats, SETTINGS.libraryUseMetadata != 0) ||
+        !index.open(library::libraryIndexPath())) {
+      LOG_ERR("HOME", "Cannot populate cover grid from library index");
+      return;
+    }
+  }
+
+  for (uint16_t row = 0; row < index.bookCount() && recentBooks.size() < CoverGridHomeUi::MAX_BOOKS; ++row) {
+    RecentBook book;
+    const uint16_t ordinal = index.ordinalForRow(library::SortOrder::AddedDesc, row);
+    if (ordinal == 0xffff || !index.readRecord(ordinal, reader->record) || !index.readPath(reader->record, book.path)) {
+      continue;
+    }
+    if (std::any_of(recentBooks.begin(), recentBooks.end(),
+                    [&book](const RecentBook& existing) { return existing.path == book.path; }) ||
+        RecentBooksStore::isMissing(book)) {
+      continue;
+    }
+    if (!index.readTitle(reader->record, book.title) || !index.readAuthor(reader->record, book.author)) continue;
+    recentBooks.push_back(std::move(book));
+  }
+}
+
+void HomeActivity::loadCoverGridThumbnails() {
+  recentsLoading = true;
+  bool showingLoading = false;
+  Rect popupRect;
+  for (size_t i = 0; i < recentBooks.size(); ++i) {
+    auto& book = recentBooks[i];
+    if (book.coverState == RecentBook::CoverState::Missing || !Storage.exists(book.path.c_str())) continue;
+    const int height = coverGridUi->thumbHeightFor(i);
+    if (book.coverBmpPath.empty()) {
+      if (FsHelpers::hasEpubExtension(book.path)) {
+        auto epub = makeUniqueNoThrow<Epub>(book.path, "/.crosspoint");
+        if (epub) book.coverBmpPath = epub->getThumbBmpPath();
+      } else if (FsHelpers::hasXtcExtension(book.path)) {
+        auto xtc = makeUniqueNoThrow<Xtc>(book.path, "/.crosspoint");
+        if (xtc) book.coverBmpPath = xtc->getThumbBmpPath();
+      }
+    }
+    const std::string thumbPath = UITheme::getCoverThumbPath(book.coverBmpPath, height);
+    if (thumbPath.empty() || Storage.exists(thumbPath.c_str())) continue;
+    if (!showingLoading) {
+      showingLoading = true;
+      popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+    }
+    GUI.fillPopupProgress(renderer, popupRect, static_cast<int>(100 * i / std::max<size_t>(1, recentBooks.size())));
+    renderer.displayBuffer();
+    if (FsHelpers::hasEpubExtension(book.path)) {
+      auto epub = makeUniqueNoThrow<Epub>(book.path, "/.crosspoint");
+      if (!epub) {
+        LOG_ERR("HOME", "Cannot allocate EPUB for cover grid thumbnail");
+        continue;
+      }
+      if (!epub->generateThumbBmpFromSource(height, &renderer, SETTINGS.getReaderFontId())) {
+        LOG_ERR("HOME", "Cannot create cover grid thumbnail: %s", book.path.c_str());
+      }
+    } else if (FsHelpers::hasXtcExtension(book.path)) {
+      auto xtc = makeUniqueNoThrow<Xtc>(book.path, "/.crosspoint");
+      if (!xtc) {
+        LOG_ERR("HOME", "Cannot allocate XTC for cover grid thumbnail");
+        continue;
+      }
+      if (xtc->load()) xtc->generateThumbBmp(height);
+    }
+  }
+  recentsLoaded = true;
+  recentsLoading = false;
+}
+
 void HomeActivity::loadAllBookStats() {
   const auto start = millis();
   const int count = std::min(static_cast<int>(recentBooks.size()), kMaxCachedBooks);
   for (int i = 0; i < count; ++i) {
     cachedBookStats[i] = loadRecentBookStats(recentBooks[i]);
-    cachedBookProgress[i] = RecentBookProgress::loadPercent(recentBooks[i]);
+    cachedBookProgress[i] = loadRecentBookProgress(recentBooks[i]);
   }
   bookStatsCached = true;
   LOG_DBG("HOME", "carousel: cached stats/progress for %d book(s) in %lums", count, millis() - start);
@@ -927,6 +1002,10 @@ void HomeActivity::onEnter() {
   RECENT_BOOKS.ensureLoaded();
 
   hasOpdsServers = OPDS_STORE.hasServers();
+  if (UITheme::hasCoverGridHome()) {
+    coverGridUi = makeUniqueNoThrow<CoverGridHomeUi>(renderer);
+    if (!coverGridUi) LOG_ERR("HOME", "Cannot allocate cover grid UI; using standard Home");
+  }
   const bool isCarouselTheme =
       static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::LYRA_CAROUSEL;
 
@@ -949,9 +1028,12 @@ void HomeActivity::onEnter() {
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int recentBooksToLoad =
-      std::min(kMaxCachedBooks, std::max(metrics.homeRecentBooksCount, HOME_BOOK_SWAP_RECENT_COUNT));
+      coverGridUi ? CoverGridHomeUi::MAX_BOOKS
+                  : std::min(kMaxCachedBooks, std::max(metrics.homeRecentBooksCount, HOME_BOOK_SWAP_RECENT_COUNT));
   RECENT_BOOKS.ensureLoaded();
   loadRecentBooks(recentBooksToLoad);
+  gridHasContinueReading = !recentBooks.empty();
+  if (coverGridUi) fillCoverGridFromLibrary();
 
   const auto selectInitialBook = [this, &metrics](const std::string& path) {
     if (path.empty()) {
@@ -960,7 +1042,7 @@ void HomeActivity::onEnter() {
 
     for (int i = 0; i < static_cast<int>(recentBooks.size()); ++i) {
       if (recentBooks[i].path == path) {
-        if (metrics.homeRecentBooksCount == 1 && i > 0) {
+        if (metrics.homeRecentBooksCount == 1 && i > 0 && !coverGridUi) {
           std::rotate(recentBooks.begin(), recentBooks.begin() + i, recentBooks.end());
           selectorIndex = 0;
           lastCarouselBookIndex = 0;
@@ -986,7 +1068,35 @@ void HomeActivity::onEnter() {
   }
   updateHighlightedBookContext(false);
 
-  if (initialMenuItem != HomeMenuItem::NONE) {
+  if (coverGridUi) {
+    const int base = static_cast<int>(recentBooks.size());
+    switch (initialMenuItem) {
+      case HomeMenuItem::FILE_BROWSER:
+        selectorIndex = base;
+        break;
+      case HomeMenuItem::LIBRARY:
+        selectorIndex = base + 1;
+        break;
+      case HomeMenuItem::OPDS_BROWSER:
+        selectorIndex = base + 2;
+        break;
+      case HomeMenuItem::FILE_TRANSFER:
+        selectorIndex = base + (hasOpdsServers ? 3 : 2);
+        break;
+      case HomeMenuItem::SETTINGS_MENU:
+        selectorIndex = base + (hasOpdsServers ? 4 : 3);
+        break;
+      // This fork's extra Home entries have no tile in upstream's cover-grid
+      // menu: coming back from them selects nothing in particular.
+      case HomeMenuItem::RECENTS:
+      case HomeMenuItem::RAINDROP:
+      case HomeMenuItem::TASKS:
+      case HomeMenuItem::NONE:
+        break;
+    }
+    coverGridUi->begin(recentBooks, hasOpdsServers, gridHasContinueReading,
+                       gridHasContinueReading ? loadRecentBookProgress(recentBooks.front()) : -1.0f);
+  } else if (initialMenuItem != HomeMenuItem::NONE) {
     const bool includeContinueReading = metrics.homeContinueReadingInMenu && !recentBooks.empty();
     const auto menuItems = buildSelectableHomeMenuItems(hasOpdsServers, hasReadingStats, hasBookmarks, hasClippings,
                                                         includeContinueReading);
@@ -1009,15 +1119,21 @@ int HomeActivity::getHighlightedBookIndex() const {
     return -1;
   }
 
+  if (coverGridUi) {
+    return selectorIndex < static_cast<int>(recentBooks.size()) ? selectorIndex : 0;
+  }
+
   const int visibleBookCount = getVisibleRecentBookCount();
   const int highlightedBookIdx = (selectorIndex < visibleBookCount) ? selectorIndex : lastCarouselBookIndex;
   return std::clamp(highlightedBookIdx, 0, visibleBookCount - 1);
 }
 
-int HomeActivity::getVisibleRecentBookCount() const { return ::getVisibleRecentBookCount(recentBooks); }
+int HomeActivity::getVisibleRecentBookCount() const {
+  return coverGridUi ? static_cast<int>(recentBooks.size()) : ::getVisibleRecentBookCount(recentBooks);
+}
 
 bool HomeActivity::canSwapHomeBook() const {
-  return UITheme::getInstance().getMetrics().homeRecentBooksCount == 1 && recentBooks.size() > 1;
+  return !coverGridUi && UITheme::getInstance().getMetrics().homeRecentBooksCount == 1 && recentBooks.size() > 1;
 }
 
 void HomeActivity::showNextRecentBookOnHome() {
@@ -1061,14 +1177,21 @@ std::unique_ptr<Activity> HomeActivity::createFrontlightReadingStatsActivity() {
     }
   }
   const std::string cachePath = validEpub ? Epub::cachePathForFilePath(path, "/.crosspoint") : std::string{};
-  const BookReadingStats bookStats = validEpub ? BookReadingStats::load(cachePath) : BookReadingStats{};
+  const bool showBookStats = validEpub && BookStatsTracking::isEnabled(cachePath);
+  const BookReadingStats bookStats = showBookStats ? BookReadingStats::load(cachePath) : BookReadingStats{};
+  if (!SETTINGS.shouldTrackReadingStats()) return {};
+  if (!showBookStats) {
+    title = tr(STR_READING_STATS);
+    progress = -1.0f;
+  }
   const GlobalReadingStats deviceStats = GlobalReadingStats::load();
   if (GlobalReadingStats::hasSyncedStats()) {
-    return makeUniqueNoThrow<BookStatsActivity>(renderer, mappedInput, title, cachePath, bookStats, progress, false, 0,
-                                                deviceStats, GlobalReadingStats::loadAggregated(deviceStats));
+    return makeUniqueNoThrow<BookStatsActivity>(renderer, mappedInput, title, showBookStats ? cachePath : std::string{},
+                                                bookStats, progress, false, 0, deviceStats,
+                                                GlobalReadingStats::loadAggregated(deviceStats));
   }
-  return makeUniqueNoThrow<BookStatsActivity>(renderer, mappedInput, title, cachePath, bookStats, progress, false, 0,
-                                              deviceStats);
+  return makeUniqueNoThrow<BookStatsActivity>(renderer, mappedInput, title, showBookStats ? cachePath : std::string{},
+                                              bookStats, progress, false, 0, deviceStats);
 }
 
 void HomeActivity::onFrontlightPanelClosed() {
@@ -1109,7 +1232,7 @@ bool HomeActivity::handleFrontlightPanelResult(const FrontlightPanelResult& resu
   return true;
 }
 
-void HomeActivity::updateHighlightedBookContext(const bool allowEpubLoad) {
+void HomeActivity::updateHighlightedBookContext(const bool allowChapterTitleRead) {
   currentBookStats = BookReadingStats{};
   currentBookProgressPercent = -1.0f;
   currentBookChapterTitle.clear();
@@ -1121,33 +1244,29 @@ void HomeActivity::updateHighlightedBookContext(const bool allowEpubLoad) {
     const bool isEpub = FsHelpers::hasEpubExtension(book.path);
     const bool loadChapterTitle = isDashboardTheme();
     if (useCachedStats) {
-      currentBookStats = cachedBookStats[idx];
+      currentBookStats = visibleRecentBookStats(book, cachedBookStats[idx]);
       currentBookProgressPercent = cachedBookProgress[idx];
-      if (allowEpubLoad && loadChapterTitle && isEpub) {
-        loadEpubHighlightedContext(book, false, true, nullptr, &currentBookChapterTitle);
+      if (allowChapterTitleRead && loadChapterTitle && isEpub) {
+        currentBookChapterTitle = loadEpubHighlightedChapterTitle(book);
       }
     } else {
       currentBookStats = loadRecentBookStats(book);
-      if (isEpub && allowEpubLoad) {
-        loadEpubHighlightedContext(book, true, loadChapterTitle, &currentBookProgressPercent, &currentBookChapterTitle);
-      } else if (!isEpub) {
-        currentBookProgressPercent = RecentBookProgress::loadPercent(book);
-      } else {
-        currentBookProgressPercent = RecentBookProgress::loadCachedEpubPercent(book);
-      }
-      if (loadChapterTitle && !isEpub) {
-        currentBookChapterTitle.clear();
+      currentBookProgressPercent = loadRecentBookProgress(book);
+      if (isEpub && allowChapterTitleRead && loadChapterTitle) {
+        currentBookChapterTitle = loadEpubHighlightedChapterTitle(book);
       }
     }
   }
 
-  hasReadingStats = hasAnyBookStats(currentBookStats) || hasAnyGlobalStats(globalStats) ||
-                    (showAllDevicesStats && hasAnyGlobalStats(allDevicesGlobalStats));
+  hasReadingStats =
+      SETTINGS.shouldTrackReadingStats() && (hasAnyBookStats(currentBookStats) || hasAnyGlobalStats(globalStats) ||
+                                             (showAllDevicesStats && hasAnyGlobalStats(allDevicesGlobalStats)));
 }
 
 void HomeActivity::onExit() {
   Activity::onExit();
 
+  coverGridUi.reset();
   carouselMenuTouchDownIndex = -1;
   freeCoverBuffer();
   gCarouselCache.invalidate();
@@ -1246,10 +1365,6 @@ bool HomeActivity::allocateCarouselFrameSlots(int targetFrameCount) {
       gCarouselCache.frameStorage[i] = std::move(frame);
       gCarouselCache.frames[i] = gCarouselCache.frameStorage[i].get();
       gCarouselCache.frameBookIdx[i] = -1;
-#if defined(CROSSINK_ISSUE_666_MEMORY_DIAGNOSTICS) && defined(ARDUINO_ARCH_ESP32) && !defined(SIMULATOR)
-      logCarouselMemoryDiagnostic("frame-allocated", i, renderer.getFrameBuffer(), gCarouselCache.frames[i],
-                                  bufferSize);
-#endif
     }
 
     if (!allocFailed) {
@@ -1290,11 +1405,11 @@ void HomeActivity::renderCarouselFrameToCurrentBuffer(int bookIdx, BookReadingSt
   if (bookIdx >= 0 && bookIdx < bookCount) {
     if (bookStatsCached && bookIdx < kMaxCachedBooks) {
       usedCachedStats = true;
-      frameStats = cachedBookStats[bookIdx];
+      frameStats = visibleRecentBookStats(recentBooks[bookIdx], cachedBookStats[bookIdx]);
       frameProgressPercent = cachedBookProgress[bookIdx];
     } else {
       frameStats = loadRecentBookStats(recentBooks[bookIdx]);
-      frameProgressPercent = RecentBookProgress::loadPercent(recentBooks[bookIdx]);
+      frameProgressPercent = loadRecentBookProgress(recentBooks[bookIdx]);
     }
     if (hasAnyBookStats(frameStats)) frameStatsPtr = &frameStats;
   }
@@ -1593,6 +1708,42 @@ void HomeActivity::loop() {
   }
 
   if (quickActionsPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+
+  if (coverGridUi) {
+    const int touched = coverGridUi->selectedAction(mappedInput);
+    if (coverGridUi->app.invalidated()) requestUpdate();
+    if (touched >= 0 && touched < getMenuItemCount()) {
+      selectorIndex = touched;
+      activateCoverGridSelection();
+      return;
+    }
+    if (mappedInput.wasPressed(MappedInputManager::Button::Back)) backPressSeen = true;
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back) && backPressSeen && gridHasContinueReading) {
+      onSelectBook(recentBooks.front().path);
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      activateCoverGridSelection();
+      return;
+    }
+
+    const int bookCount = static_cast<int>(recentBooks.size());
+    const int tabCount = hasOpdsServers ? 5 : 4;
+    const auto cycleBand = [this](const int base, const int count, const int dir) {
+      if (count <= 0) return;
+      const int current = selectorIndex - base;
+      selectorIndex =
+          base + (current < 0 || current >= count ? (dir > 0 ? 0 : count - 1) : (current + count + dir) % count);
+      requestUpdate();
+    };
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [&] { cycleBand(0, bookCount, -1); });
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [&] { cycleBand(0, bookCount, 1); });
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left},
+                                         [&] { cycleBand(bookCount, tabCount, -1); });
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right},
+                                         [&] { cycleBand(bookCount, tabCount, 1); });
+    return;
+  }
 
   if (usesMinimalHomeInteraction()) {
     const int pressedFrontButton = mappedInput.getPressedFrontButton();
@@ -2170,6 +2321,40 @@ void HomeActivity::loop() {
   }
 }
 
+void HomeActivity::activateCoverGridSelection() {
+  if (selectorIndex < 0) return;
+  if (selectorIndex < static_cast<int>(recentBooks.size())) {
+    onSelectBook(recentBooks[selectorIndex].path);
+    return;
+  }
+  const int tab = selectorIndex - static_cast<int>(recentBooks.size());
+  switch (tab) {
+    case 0:
+      onFileBrowserOpen();
+      break;
+    case 1:
+      onLibraryOpen();
+      break;
+    case 2:
+      if (hasOpdsServers) {
+        onOpdsBrowserOpen();
+      } else {
+        onFileTransferOpen();
+      }
+      break;
+    case 3:
+      if (hasOpdsServers) {
+        onFileTransferOpen();
+      } else {
+        onSettingsOpen();
+      }
+      break;
+    case 4:
+      if (hasOpdsServers) onSettingsOpen();
+      break;
+  }
+}
+
 bool HomeActivity::handleShortcutAction(const CrossPointSettings::SHORT_PWRBTN action) {
   if (action == CrossPointSettings::SHORT_PWRBTN::FILE_BROWSER) {
     onFileBrowserOpen();
@@ -2219,6 +2404,30 @@ void HomeActivity::render(RenderLock&&) {
     initialRefreshMode = HalDisplay::FAST_REFRESH;
   };
 
+  if (coverGridUi) {
+    renderer.clearScreen();
+    coverGridUi->setSelection(selectorIndex);
+    coverGridUi->render();
+    const auto labels = mappedInput.mapLabels(gridHasContinueReading ? tr(STR_READ) : "", tr(STR_SELECT),
+                                              tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    displayHomeBuffer();
+
+    if (coverGridUi->takeThumbHeightsChanged()) {
+      coverGridUi->refreshCoverPaths();
+      recentsLoaded = false;
+    }
+    if (!firstRenderDone) {
+      firstRenderDone = true;
+      requestUpdate();
+    } else if (!recentsLoaded && !recentsLoading) {
+      loadCoverGridThumbnails();
+      coverGridUi->refreshCoverPaths();
+      requestUpdate();
+    }
+    return;
+  }
+
   if (usesMinimalHomeInteraction()) {
     renderer.clearScreen();
 
@@ -2250,8 +2459,8 @@ void HomeActivity::render(RenderLock&&) {
     GUI.drawRecentBookCover(renderer, Rect{0, metrics.homeTopPadding, pageWidth, metrics.homeCoverTileHeight},
                             recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
                             std::bind(&HomeActivity::storeCoverBuffer, this),
-                            hasAnyBookStats(currentBookStats) ? &currentBookStats : nullptr, currentBookProgressPercent,
-                            &globalStats, currentBookChapterTitle.c_str());
+                            (isDashboardTheme() || hasAnyBookStats(currentBookStats)) ? &currentBookStats : nullptr,
+                            currentBookProgressPercent, &globalStats, currentBookChapterTitle.c_str());
 
     const int homeNavCount = minimalHomeNavCount(!recentBooks.empty());
     if (minimalHomeNavIndex >= homeNavCount) {
@@ -2419,22 +2628,8 @@ void HomeActivity::renderCarouselFrame(int bookIdx, int slotIdx) {
   }
   uint8_t* frameBuffer = renderer.getFrameBuffer();
   if (!frameBuffer || !gCarouselCache.frames[slotIdx]) return;
-#if defined(CROSSINK_ISSUE_666_MEMORY_DIAGNOSTICS) && defined(ARDUINO_ARCH_ESP32) && !defined(SIMULATOR)
-  const uint8_t* const ownedFrame = gCarouselCache.frameStorage[slotIdx].get();
-  if (ownedFrame != gCarouselCache.frames[slotIdx]) {
-    LOG_ERR("DIAG666", "pre-copy slot=%d cache alias=%p owner=%p", slotIdx, gCarouselCache.frames[slotIdx], ownedFrame);
-    return;
-  }
-#endif
   renderCarouselFrameToCurrentBuffer(bookIdx, nullptr, nullptr, nullptr);
 
-#if defined(CROSSINK_ISSUE_666_MEMORY_DIAGNOSTICS) && defined(ARDUINO_ARCH_ESP32) && !defined(SIMULATOR)
-  if (!logCarouselMemoryDiagnostic("pre-copy", slotIdx, frameBuffer, gCarouselCache.frames[slotIdx],
-                                   renderer.getBufferSize())) {
-    LOG_ERR("DIAG666", "pre-copy heap integrity failed; skipping carousel frame copy");
-    return;
-  }
-#endif
   memcpy(gCarouselCache.frames[slotIdx], frameBuffer, renderer.getBufferSize());
   gCarouselCache.frameBookIdx[slotIdx] = bookIdx;
   carouselFrames[slotIdx] = gCarouselCache.frames[slotIdx];
@@ -2523,16 +2718,40 @@ void HomeActivity::onCountdownOpen() {
 }
 
 void HomeActivity::onReadingStatsOpen() {
+  if (!SETTINGS.shouldTrackReadingStats()) return;
   const int highlightedBookIdx = getHighlightedBookIndex();
-  const std::string bookTitle =
+  std::string bookTitle =
       highlightedBookIdx >= 0 ? recentBooks[highlightedBookIdx].title : std::string(tr(STR_READING_STATS));
-  const std::string bookPath = getCurrentBookPath();
-  const std::string cachePath =
-      FsHelpers::hasEpubExtension(bookPath) ? Epub::cachePathForFilePath(bookPath, "/.crosspoint") : std::string{};
+  const bool hasBookStats =
+      highlightedBookIdx >= 0 && (FsHelpers::hasEpubExtension(recentBooks[highlightedBookIdx].path) ||
+                                  FsHelpers::hasXtcExtension(recentBooks[highlightedBookIdx].path));
+  std::string cachePath = hasBookStats ? getRecentBookCachePath(recentBooks[highlightedBookIdx]) : std::string{};
+  const bool showBookStats = !cachePath.empty() && BookStatsTracking::isBookEnabled(cachePath);
+  if (!showBookStats) {
+    cachePath.clear();
+    bookTitle = tr(STR_READING_STATS);
+  }
+  const BookReadingStats displayBookStats = showBookStats ? currentBookStats : BookReadingStats{};
+  const float progress = showBookStats ? currentBookProgressPercent : -1.0f;
   if (showAllDevicesStats) {
+    startActivityForResult(
+        std::make_unique<BookStatsActivity>(renderer, mappedInput, bookTitle, cachePath, displayBookStats, progress,
+                                            false, 0, globalStats, allDevicesGlobalStats, true),
+        [this](const ActivityResult& result) {
+          mappedInput.suppressNextConfirmRelease();
+          const auto* statsResult = std::get_if<ReadingStatsResult>(&result.data);
+          if (statsResult && statsResult->changed) {
+            globalStats = GlobalReadingStats::load();
+            showAllDevicesStats = GlobalReadingStats::hasSyncedStats();
+            allDevicesGlobalStats = showAllDevicesStats ? GlobalReadingStats::loadAggregated(globalStats) : globalStats;
+            bookStatsCached = false;
+            updateHighlightedBookContext();
+          }
+          requestUpdate();
+        });
+  } else {
     startActivityForResult(std::make_unique<BookStatsActivity>(renderer, mappedInput, bookTitle, cachePath,
-                                                               currentBookStats, currentBookProgressPercent, false, 0,
-                                                               globalStats, allDevicesGlobalStats, true),
+                                                               displayBookStats, progress, false, 0, globalStats, true),
                            [this](const ActivityResult& result) {
                              mappedInput.suppressNextConfirmRelease();
                              const auto* statsResult = std::get_if<ReadingStatsResult>(&result.data);
@@ -2546,22 +2765,6 @@ void HomeActivity::onReadingStatsOpen() {
                              }
                              requestUpdate();
                            });
-  } else {
-    startActivityForResult(
-        std::make_unique<BookStatsActivity>(renderer, mappedInput, bookTitle, cachePath, currentBookStats,
-                                            currentBookProgressPercent, false, 0, globalStats, true),
-        [this](const ActivityResult& result) {
-          mappedInput.suppressNextConfirmRelease();
-          const auto* statsResult = std::get_if<ReadingStatsResult>(&result.data);
-          if (statsResult && statsResult->changed) {
-            globalStats = GlobalReadingStats::load();
-            showAllDevicesStats = GlobalReadingStats::hasSyncedStats();
-            allDevicesGlobalStats = showAllDevicesStats ? GlobalReadingStats::loadAggregated(globalStats) : globalStats;
-            bookStatsCached = false;
-            updateHighlightedBookContext();
-          }
-          requestUpdate();
-        });
   }
 }
 

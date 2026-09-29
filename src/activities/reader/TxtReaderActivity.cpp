@@ -29,31 +29,6 @@
 namespace {
 constexpr size_t CHUNK_SIZE = 8 * 1024;  // 8KB chunk for reading
 
-// Which side-button long-press actions THIS reader dispatches. Exhaustive on
-// purpose: -Werror=switch turns the next action added to SIDE_LONG_PRESS into a
-// build failure here, where the dispatch lives, instead of a setting that is
-// offered in Settings and quietly does nothing. Answering false is not free --
-// see detectPageTurn: an unhandled action used to cost the side page-turners
-// their press-time response for a gesture that did nothing.
-bool handlesSideLongPress(const CrossPointSettings::SIDE_LONG_PRESS action) {
-  switch (action) {
-    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_ORIENTATION_CHANGE:
-    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_LIBRARY:
-    // Upstream gave this reader its own side-hold font-size step in the v1.5.1
-    // line, so the action is dispatched here now and the hold has to be waited
-    // for. Leaving it false would turn a page on the press and the new gesture
-    // would never fire.
-    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_FONT_SIZE:
-      return true;
-    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_CHAPTER_SKIP:
-    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_OFF:
-    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_QUICK_TOGGLES:
-    case CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_PRESS_COUNT:
-      return false;
-  }
-  return false;
-}
-
 constexpr unsigned long LONG_PRESS_MENU_MS = 600;
 // Cache file magic and version
 constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
@@ -367,6 +342,9 @@ void TxtReaderActivity::onEnter() {
 void TxtReaderActivity::onExit() {
   mappedInput.setReaderTouchscreenOverride(false);
   Activity::onExit();
+  if (auto* fontCache = renderer.getFontCacheManager()) {
+    fontCache->releaseSdFontCaches();
+  }
 
   // Deactivate reader-specific front button mapping.
   mappedInput.setReaderMode(false);
@@ -419,7 +397,9 @@ void TxtReaderActivity::loop() {
 #endif
   const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
   if (touch.tapped &&
-      ReaderUtils::isBottomStatusBarTap(renderer, touch.y, UITheme::getInstance().getStatusBarHeight())) {
+      (ReaderUtils::isBottomStatusBarTap(renderer, touch.y, UITheme::getInstance().getStatusBarHeight()) ||
+       ReaderUtils::isTopStatusBarTap(renderer, touch.y,
+                                      UITheme::getReaderStatusBarHeight(ReaderStatusBarPosition::Top)))) {
     if (SETTINGS.tapToHideStatusBar) {
       statusBarVisible = !statusBarVisible;
       requestUpdate();
@@ -445,6 +425,16 @@ void TxtReaderActivity::loop() {
       mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= LONG_PRESS_MENU_MS) {
     longPressMenuHandled = true;
     cycleReaderFont();
+    return;
+  }
+
+  if (SETTINGS.longPressMenuAction == CrossPointSettings::LONG_MENU_LIBRARY &&
+      mappedInput.getHeldTime() >= LONG_PRESS_MENU_MS &&
+      (mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
+       mappedInput.wasReleased(MappedInputManager::Button::Confirm))) {
+    longPressMenuHandled = mappedInput.isPressed(MappedInputManager::Button::Confirm);
+    mappedInput.suppressNextConfirmRelease();
+    activityManager.goToLibrary();
     return;
   }
 
@@ -484,55 +474,43 @@ void TxtReaderActivity::loop() {
     return;
   }
 
-  // The Library is format-agnostic, so the side gesture that opens it in the
-  // EPUB reader opens it here too. Without this the setting was offered in
-  // Settings, took effect in one reader out of three, and still cost the side
-  // page-turners their press-time response (see detectPageTurn) everywhere.
-  const bool sideLongPressChangesFont =
-      SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_FONT_SIZE;
-  const bool sideLongPressChangesOrientation =
-      SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_ORIENTATION_CHANGE;
-  const bool sideLongPressOpensLibrary =
-      SETTINGS.sideButtonLongPress == CrossPointSettings::SIDE_LONG_PRESS::SIDE_LONG_LIBRARY;
-  if (sideLongPressChangesFont || sideLongPressChangesOrientation || sideLongPressOpensLibrary) {
-    const bool topReleased = mappedInput.wasReleased(MappedInputManager::Button::Up);
-    const bool bottomReleased = mappedInput.wasReleased(MappedInputManager::Button::Down);
-    if (sideButtonLongPressHandled && (topReleased || bottomReleased)) {
-      sideButtonLongPressHandled = false;
-      return;
-    }
-
-    const bool longPressReady = mappedInput.getHeldTime() > ReaderUtils::SKIP_HOLD_MS;
-    const bool topLongPressed =
-        longPressReady && (mappedInput.isPressed(MappedInputManager::Button::Up) || topReleased);
-    const bool bottomLongPressed =
-        longPressReady && (mappedInput.isPressed(MappedInputManager::Button::Down) || bottomReleased);
-
-    // Direction carries no meaning for the Library, so either side button opens it.
-    if (!sideButtonLongPressHandled && sideLongPressOpensLibrary && (topLongPressed || bottomLongPressed)) {
-      sideButtonLongPressHandled = !(topReleased || bottomReleased);
-      activityManager.goToLibrary();
-      return;
-    }
-
-    if (!sideButtonLongPressHandled && sideLongPressChangesOrientation && (topLongPressed || bottomLongPressed)) {
-      sideButtonLongPressHandled = !(topReleased || bottomReleased);
-      if (sideLongPressChangesFont) {
-        changeReaderFontSize(/*larger=*/topLongPressed);
-        return;
+  const auto side = sideButtonShortcuts.update(mappedInput, millis());
+  if (SideButtonShortcuts::shouldConsume(side, mappedInput)) {
+    if (side.triggered) {
+      if (side.longPress)
+        mappedInput.suppressNextSideRelease(side.up ? MappedInputManager::Button::Up
+                                                    : MappedInputManager::Button::Down);
+      switch (side.action) {
+        case CrossPointSettings::PAGE_TURN:
+          if (currentPage < totalPages - 1) {
+            currentPage++;
+            requestUpdate();
+          }
+          break;
+        case CrossPointSettings::SIDE_INCREASE_FONT:
+        case CrossPointSettings::SIDE_DECREASE_FONT:
+          changeReaderFontSize(side.action == CrossPointSettings::SIDE_INCREASE_FONT);
+          break;
+        case CrossPointSettings::SIDE_ROTATE_COUNTERCLOCKWISE:
+        case CrossPointSettings::SIDE_ROTATE_CLOCKWISE:
+          handleTwoFingerRotation(side.action == CrossPointSettings::SIDE_ROTATE_CLOCKWISE);
+          break;
+        case CrossPointSettings::SIDE_PREVIOUS_CHAPTER:
+        case CrossPointSettings::SIDE_NEXT_CHAPTER:
+        case CrossPointSettings::IGNORE:
+          // Plain text has no chapter model.
+          break;
+        default: {
+          const auto action = static_cast<CrossPointSettings::SHORT_PWRBTN>(side.action);
+          if (action == CrossPointSettings::QUICK_LOCK)
+            handleGlobalPowerButtonAction(action, SideButtonShortcuts::quickLockTrigger(side));
+          else if (!handleShortcutAction(action))
+            handleGlobalPowerButtonAction(action);
+          break;
+        }
       }
-      SETTINGS.orientation = ReaderUtils::rotatedOrientation(SETTINGS.orientation, /*clockwise=*/bottomLongPressed);
-      SETTINGS.saveGlobalDefaults();
-      {
-        RenderLock lock(*this);
-        ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
-        pageOffsets.clear();
-        currentPageLines.clear();
-        initialized = false;
-      }
-      requestUpdate();
-      return;
     }
+    return;
   }
 
   const bool frontLongPressChangesFont = SETTINGS.longPressButtonBehavior == CrossPointSettings::FONT_SIZE_CHANGE;
@@ -574,9 +552,7 @@ void TxtReaderActivity::loop() {
     }
   }
 
-  auto [prevTriggered, nextTriggered, fromSideBtn, fromTilt] = ReaderUtils::detectPageTurn(
-      mappedInput,
-      handlesSideLongPress(static_cast<CrossPointSettings::SIDE_LONG_PRESS>(SETTINGS.sideButtonLongPress)));
+  auto [prevTriggered, nextTriggered, fromSideBtn, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
   (void)fromSideBtn;
@@ -719,6 +695,7 @@ bool TxtReaderActivity::supportsQuickAction(const CrossPointSettings::SHORT_PWRB
     case CrossPointSettings::SHORT_PWRBTN::TOGGLE_DARK_MODE:
     case CrossPointSettings::SHORT_PWRBTN::TOGGLE_FONT:
     case CrossPointSettings::SHORT_PWRBTN::FILE_BROWSER:
+    case CrossPointSettings::SHORT_PWRBTN::SHORTCUT_LIBRARY:
     case CrossPointSettings::SHORT_PWRBTN::TOGGLE_FRONTLIGHT:
     case CrossPointSettings::SHORT_PWRBTN::TOGGLE_TOUCHSCREEN:
       return true;
@@ -755,6 +732,9 @@ bool TxtReaderActivity::executeReaderShortcutAction(const CrossPointSettings::SH
       return true;
     case CrossPointSettings::SHORT_PWRBTN::FILE_BROWSER:
       activityManager.goToFileBrowser(txt ? txt->getPath() : "");
+      return true;
+    case CrossPointSettings::SHORT_PWRBTN::SHORTCUT_LIBRARY:
+      activityManager.goToLibrary();
       return true;
     case CrossPointSettings::SHORT_PWRBTN::TOGGLE_HOME_BUTTON_IN_READER:
       toggleHomeButtonInReader();
@@ -874,22 +854,23 @@ void TxtReaderActivity::initializeReader() {
   cachedParagraphAlignment = SETTINGS.paragraphAlignment;
   markdownMode = txt && FsHelpers::hasMarkdownExtension(txt->getPath());
   markdownIndent = renderer.getTextAdvanceX(cachedFontId, "- ", EpdFontFamily::REGULAR);
+  cachedTopStatusBarHeight = ReaderUtils::getTopStatusBarReservedHeight(renderer);
+  cachedBottomStatusBarHeight = UITheme::getInstance().getStatusBarHeight();
 
   // Calculate viewport dimensions
   renderer.getOrientedViewableTRBL(&cachedOrientedMarginTop, &cachedOrientedMarginRight, &cachedOrientedMarginBottom,
                                    &cachedOrientedMarginLeft);
   cachedOrientedMarginLeft += cachedHorizontalMargin;
   cachedOrientedMarginRight += cachedHorizontalMargin;
-  const int topStatusBarReservedHeight = ReaderUtils::getTopClockStatusBarReservedHeight(renderer);
+  const int topStatusBarReservedHeight = cachedTopStatusBarHeight;
   if (topStatusBarReservedHeight > 0) {
     cachedOrientedMarginTop += std::max(static_cast<int>(cachedVerticalMargin),
-                                        topStatusBarReservedHeight + ReaderUtils::TOP_CLOCK_TEXT_PADDING);
+                                        topStatusBarReservedHeight + ReaderUtils::TOP_STATUS_BAR_TEXT_PADDING);
   } else {
     cachedOrientedMarginTop += cachedVerticalMargin;
   }
   cachedOrientedMarginBottom += std::max(
-      cachedVerticalMargin,
-      static_cast<uint8_t>(UITheme::getInstance().getStatusBarHeight() + ReaderUtils::STATUS_BAR_TEXT_PADDING));
+      cachedVerticalMargin, static_cast<uint8_t>(cachedBottomStatusBarHeight + ReaderUtils::STATUS_BAR_TEXT_PADDING));
 
   viewportWidth = renderer.getScreenWidth() - cachedOrientedMarginLeft - cachedOrientedMarginRight;
   const int viewportHeight = renderer.getScreenHeight() - cachedOrientedMarginTop - cachedOrientedMarginBottom;
@@ -1000,9 +981,26 @@ void TxtReaderActivity::render(RenderLock&&) {
     return;
   }
 
+  bool relayout = false;
+  size_t readingOffset = 0;
+  if (initialized && (cachedTopStatusBarHeight != ReaderUtils::getTopStatusBarReservedHeight(renderer) ||
+                      cachedBottomStatusBarHeight != UITheme::getInstance().getStatusBarHeight())) {
+    if (currentPage >= 0 && currentPage < static_cast<int>(pageOffsets.size())) {
+      readingOffset = pageOffsets[currentPage];
+      relayout = true;
+    }
+    if (!flushQueuedProgress()) LOG_ERR("TRS", "Failed to save progress before status bar relayout");
+    initialized = false;
+  }
+
   // Initialize reader if not done
   if (!initialized) {
     initializeReader();
+    if (relayout && !pageOffsets.empty()) {
+      const auto nextPage = std::upper_bound(pageOffsets.begin(), pageOffsets.end(), readingOffset);
+      currentPage = std::max(0, static_cast<int>(nextPage - pageOffsets.begin()) - 1);
+      if (!saveProgress(currentPage)) LOG_ERR("TRS", "Failed to save progress after status bar relayout");
+    }
   }
 
   if (pageOffsets.empty()) {
@@ -1113,10 +1111,6 @@ void TxtReaderActivity::renderPage() {
   // BW rendering
   renderLines();
   renderStatusBar();
-  if (statusBarVisible) {
-    GUI.drawTopStatusBarClock(renderer, UITheme::getInstance().getMetrics().topPadding, nullptr, true, 0,
-                              ReaderUtils::readerDarkModeEnabled());
-  }
 
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
@@ -1132,12 +1126,24 @@ void TxtReaderActivity::renderStatusBar() const {
   }
 
   const float progress = totalPages > 0 ? (currentPage + 1) * 100.0f / totalPages : 0;
+  const auto needsTitle = [](const ReaderStatusBarConfig& bar) {
+    return bar.contains(ReaderStatusBarItem::TitleBook) || bar.contains(ReaderStatusBarItem::TitleChapter);
+  };
   std::string title;
-  if (SETTINGS.statusBarSpec().showsTitle()) {
+  if (needsTitle(SETTINGS.readerStatusBar(ReaderStatusBarPosition::Top)) ||
+      needsTitle(SETTINGS.readerStatusBar(ReaderStatusBarPosition::Bottom))) {
     title = txt->getTitle();
   }
-  GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title.c_str(), 0, 0, false, nullptr,
-                    ReaderUtils::readerDarkModeEnabled());
+  ReaderStatusBarContent content;
+  content.bookProgress = progress;
+  content.chapterPage = currentPage + 1;
+  content.chapterPageCount = totalPages;
+  content.bookTitle = title.c_str();
+  // TXT has no chapter metadata; preserve its existing title fallback.
+  content.chapterTitle = content.bookTitle;
+  content.darkMode = ReaderUtils::readerDarkModeEnabled();
+  GUI.drawReaderStatusBar(renderer, ReaderStatusBarPosition::Top, content);
+  GUI.drawReaderStatusBar(renderer, ReaderStatusBarPosition::Bottom, content);
 }
 
 bool TxtReaderActivity::getFrontlightPanelBookDetails(FrontlightPanelBookDetails& details) {
@@ -1210,6 +1216,7 @@ void TxtReaderActivity::loadProgress() {
         currentPage = 0;
       }
     }
+    f.close();
   }
 }
 
@@ -1375,10 +1382,10 @@ bool TxtReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gfx
   renderer.getOrientedViewableTRBL(&marginTop, &marginRight, &marginBottom, &marginLeft);
   marginLeft += horizontalMargin;
   marginRight += horizontalMargin;
-  const int topStatusBarReservedHeight = ReaderUtils::getTopClockStatusBarReservedHeight(renderer);
+  const int topStatusBarReservedHeight = ReaderUtils::getTopStatusBarReservedHeight(renderer);
   if (topStatusBarReservedHeight > 0) {
-    marginTop +=
-        std::max(static_cast<int>(verticalMargin), topStatusBarReservedHeight + ReaderUtils::TOP_CLOCK_TEXT_PADDING);
+    marginTop += std::max(static_cast<int>(verticalMargin),
+                          topStatusBarReservedHeight + ReaderUtils::TOP_STATUS_BAR_TEXT_PADDING);
   } else {
     marginTop += verticalMargin;
   }

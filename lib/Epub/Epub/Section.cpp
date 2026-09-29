@@ -1,6 +1,7 @@
 #include "Section.h"
 
 #include <Arduino.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <InflateStream.h>
@@ -9,6 +10,7 @@
 #include <MemoryBudget.h>
 #include <Serialization.h>
 
+#include "Epub/ReferencePageNavigation.h"
 #include "Epub/css/CssParser.h"
 #include "Page.h"
 #include "SectionPageIndexSerialization.h"
@@ -23,7 +25,11 @@ constexpr uint32_t SECTION_CACHE_MAGIC = 0x535843FF;  // bytes: 0xFF, "CXS"
 // v63: Paragraph base direction excludes direction changes from inline elements.
 // v66: Internal EPUB links preserve CSS superscript/subscript positioning.
 // v75: HTML hidden attributes suppress content in all reading modes.
-constexpr uint8_t SECTION_FILE_VERSION = 75;
+// v76: Paragraphs without source CSS indentation no longer receive a synthetic indent.
+// v77: Ordered lists, marker suppression, and list-container insets affect page layout.
+// v78: Inline CSS padding affects dialogue and other styled text positions.
+// v79: Hangul word boundaries and line-end splits change cached page positions.
+constexpr uint8_t SECTION_FILE_VERSION = 79;
 // Suspended incremental build: valid pages plus LUTs and a parse-watermark trailer.
 // Change this with layout or payload changes so stale partial pages cannot resume
 // under a different layout contract.
@@ -589,9 +595,9 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
       *epub, parsePath, renderer, fontId, lineCompression, extraParagraphSpacing, forceParagraphIndents,
       paragraphAlignment, viewportWidth, viewportHeight, hyphenationEnabled, effectiveFocusReadingEnabled,
       effectiveGuideReadingEnabled, wordSpacing,
-      [this, &pageIndex, &pageCompletionFailed, layoutAbortedForLowMemory](
+      [this, &pageIndex, &pageCompletionFailed, layoutAbortedForLowMemory, buildOptions](
           std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
-          const uint32_t visibleTextOffset) {
+          const uint32_t visibleTextOffset, const uint32_t referenceTextOffset) {
         if (pageCompletionFailed) {
           return;
         }
@@ -608,6 +614,10 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
           pageCompletionFailed = true;
           return;
         }
+        if (buildOptions.referenceUnitsAreCharacters && buildOptions.resolvedReferencePage &&
+            referenceTextOffset <= buildOptions.referenceUnitOffset) {
+          *buildOptions.resolvedReferencePage = static_cast<uint16_t>(pageIndex.size());
+        }
         const uint32_t fileOffset = this->onPageComplete(std::move(page));
         if (fileOffset == 0) {
           pageCompletionFailed = true;
@@ -616,7 +626,8 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
         pageIndex.appendPrepared({fileOffset, paragraphIndex, listItemIndex, visibleTextOffset});
       },
       embeddedStyle, contentBase, imageBasePath, imageRendering, std::move(tocAnchors), popupFn, cssParser, renderMode,
-      buildOptions.isPreview() ? std::string(buildOptions.previewAnchor) : std::string{}, buildOptions.previewMaxPages);
+      buildOptions.isPreview() ? std::string(buildOptions.previewAnchor) : std::string{}, buildOptions.previewMaxPages,
+      buildOptions.referenceUnitsAreCharacters);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
   bool cancelled = false;
   bool success = false;
@@ -683,6 +694,12 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
       cssParser->clear();
     }
     return false;
+  }
+
+  if (buildOptions.resolvedReferencePage && buildOptions.referenceUnitCount > 0 &&
+      !buildOptions.referenceUnitsAreCharacters) {
+    *buildOptions.resolvedReferencePage = EpubNavigation::resolveReferenceTargetToRenderedPage(
+        buildOptions.referenceUnitOffset, buildOptions.referenceUnitCount, visitor.getVisibleTextLength(), pageIndex);
   }
 
   const auto& anchors = visitor.getAnchors();
@@ -758,6 +775,12 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const SectionBuildOptions
   if (build_) {
     LOG_ERR("SCT", "startBuild called while a build is already active");
     return false;
+  }
+
+  // Reclaim rebuildable font data before CSS and layout allocate their
+  // working buffers. Font objects remain registered and reload on demand.
+  if (auto* fontCache = renderer.getFontCacheManager()) {
+    fontCache->releaseSdFontCaches();
   }
 
   const auto localPath = epub->getSpineItem(spineIndex).href;
@@ -902,7 +925,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const SectionBuildOptions
       paragraphAlignment, viewportWidth, viewportHeight, hyphenationEnabled, focusReadingEnabled, guideReadingEnabled,
       wordSpacing,
       [this, ctxPtr](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
-                     const uint32_t visibleTextOffset) {
+                     const uint32_t visibleTextOffset, const uint32_t) {
         if (ctxPtr->pageCompletionFailed) {
           return;
         }
@@ -928,7 +951,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const SectionBuildOptions
       },
       embeddedStyle, ctxPtr->contentBase, ctxPtr->imageBasePath, imageRendering, std::move(tocAnchors), popupFn,
       ctxPtr->cssParser, renderMode, buildOptions.isPreview() ? std::string(buildOptions.previewAnchor) : std::string{},
-      buildOptions.previewMaxPages);
+      buildOptions.previewMaxPages, false);
   if (!ctx->parser) {
     LOG_ERR("SCT", "Failed to allocate section parser");
     lastLayoutAbortedForLowMemory_ = true;
@@ -1676,6 +1699,13 @@ std::optional<uint16_t> Section::getPageForVisibleTextOffset(const uint32_t offs
     // An extension build starts from page zero while its previously committed
     // partial remains readable.  Its shorter live prefix must not hide a page
     // that the committed cache already knows how to resolve.
+  }
+
+  // A from-scratch build (no partial ever committed for this cache key) has nothing on
+  // disk yet: an offset beyond the live prefix above just hasn't been laid out, and
+  // openFileForRead() would fail every call until the build catches up or finishes.
+  if (build_ && !partial_) {
+    return std::nullopt;
   }
 
   FsFile f;

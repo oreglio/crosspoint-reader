@@ -23,6 +23,9 @@
 #include "ClockSyncActivity.h"
 #include "CrossPointSettings.h"
 #include "FontSelectionActivity.h"
+#if CROSSINK_SCALABLE_FONTS
+#include "TtfRenderOptionsActivity.h"
+#endif
 #include "FrontlightTimePickerActivity.h"
 #include "KOReaderSettingsActivity.h"
 #include "KeyboardLayoutsActivity.h"
@@ -72,7 +75,7 @@ constexpr size_t controlsHomeButtonCount = 4;
 constexpr size_t controlsPowerMinCount = 2;
 constexpr size_t controlsPowerMaxCount = 3;
 constexpr size_t controlsFrontButtonCount = 6;
-constexpr size_t controlsSideButtonBaseCount = 3;
+constexpr size_t controlsSideButtonBaseCount = 7;
 
 void formatFrontlightScheduleTime(const uint16_t timeOfDay, char* const buf, const size_t len) {
   const FrontlightSchedule::TimeOfDay time = FrontlightSchedule::timeOfDayFromMinutes(timeOfDay);
@@ -217,8 +220,14 @@ std::string formatSettingValue(const SettingInfo& setting) {
   return std::to_string(SETTINGS.*(setting.valuePtr));
 }
 
-fui::BitmapRef twoFingerSwipeIcon(const StrId nameId) {
+fui::BitmapRef swipeActionIcon(const StrId nameId) {
   switch (nameId) {
+    case StrId::STR_LEFT_EDGE_UP:
+    case StrId::STR_RIGHT_EDGE_UP:
+      return fui::bitmapFromIcon(icon_arrow_up_24);
+    case StrId::STR_LEFT_EDGE_DOWN:
+    case StrId::STR_RIGHT_EDGE_DOWN:
+      return fui::bitmapFromIcon(icon_arrow_down_24);
     case StrId::STR_TWO_FINGER_SWIPE_UP:
       return fui::bitmapFromIcon(icon_arrows_up_24);
     case StrId::STR_TWO_FINGER_SWIPE_DOWN:
@@ -284,6 +293,7 @@ void SettingsActivity::rebuildSettingsLists() {
   controlsSideButtonSettings.clear();
   controlsTapsGesturesSettings.clear();
   controlsTwoFingerSwipeSettings.clear();
+  controlsEdgeGestureSettings.clear();
   systemSettings.clear();
   systemDeviceSettings.clear();
   systemFilesCacheSettings.clear();
@@ -302,10 +312,11 @@ void SettingsActivity::rebuildSettingsLists() {
 
   // Pick up any fonts uploaded/deleted over the web server since the last
   // reader activity ran — otherwise the font-family picker shows stale list.
-  sdFontSystem.refreshIfDirty();
+  const bool needsFonts = activeSubmenu == SettingAction::ReaderFontOptions;
+  if (needsFonts) sdFontSystem.refreshIfDirty();
 
   dictionaryRegistry.refreshIfDirty();
-  const auto allSettings = getSettingsList(&sdFontSystem.registry(), &dictionaryRegistry);
+  const auto allSettings = getSettingsList(needsFonts ? &sdFontSystem.registry() : nullptr, &dictionaryRegistry);
   displaySettings = buildGroupedDisplaySettingsList(allSettings);
 #ifndef SIMULATOR
   if (BoardConfig::isX4Pro() || CROSSINK_APP_DEVICE_X4CLASSIC) {
@@ -319,6 +330,15 @@ void SettingsActivity::rebuildSettingsLists() {
   displayFrontlightSettings = buildDisplayFrontlightSettingsList(allSettings);
   readerSettings = buildReaderSettingsParentList(allSettings);
   readerFontSettings = buildReaderFontSettingsList(allSettings);
+#if CROSSINK_SCALABLE_FONTS
+  if (needsFonts && sdFontSystem.isScalableFamily(SETTINGS.sdFontFamilyName)) {
+    const auto fontSize =
+        std::find_if(readerFontSettings.begin(), readerFontSettings.end(),
+                     [](const SettingInfo& setting) { return setting.nameId == StrId::STR_FONT_SIZE; });
+    const auto insertAt = fontSize == readerFontSettings.end() ? readerFontSettings.end() : std::next(fontSize);
+    readerFontSettings.insert(insertAt, SettingInfo::Action(StrId::STR_TTF_RENDERING, SettingAction::TtfRendering));
+  }
+#endif
   readerPageLayoutSettings = buildReaderPageLayoutSettingsList(allSettings);
   readerScreenMarginSettings = buildReaderScreenMarginSettingsList(allSettings);
   systemSettings = buildSystemSettingsParentList(allSettings);
@@ -333,6 +353,9 @@ void SettingsActivity::rebuildSettingsLists() {
   controlsHomeButtonSettings = buildControlsHomeButtonSettingsList(allSettings);
   controlsTapsGesturesSettings = buildControlsTapsGesturesSettingsList(allSettings);
   controlsTwoFingerSwipeSettings = buildControlsTwoFingerSwipeSettingsList(allSettings);
+  controlsEdgeGestureSettings = buildControlsEdgeGestureSettingsList(allSettings);
+  const size_t expectedSideButtonCount =
+      controlsSideButtonBaseCount + (hasSideButtonChordSetting(allSettings) ? 1u : 0u);
 #if CROSSINK_APP_CAP_TOUCH
   if (!gpio.hasTouch()) {
     controlsFrontButtonSettings = buildControlsFrontButtonSettingsList(allSettings);
@@ -346,7 +369,6 @@ void SettingsActivity::rebuildSettingsLists() {
                                        (hasSettingByName(allSettings, StrId::STR_TILT_PAGE_TURN_DIRECTION) ? 1u : 0u) +
                                        (hasSettingByName(allSettings, StrId::STR_NEXT_PAGE) ? 1u : 0u);
   const size_t expectedFrontButtonCount = hasTouch ? 0u : controlsFrontButtonCount;
-  const size_t expectedSideButtonCount = controlsSideButtonBaseCount + (hasTouch ? 1u : 0u);
 #else
   controlsFrontButtonSettings = buildControlsFrontButtonSettingsList(allSettings);
   controlsSideButtonSettings = buildControlsSideButtonSettingsList(allSettings);
@@ -356,7 +378,6 @@ void SettingsActivity::rebuildSettingsLists() {
                                        (hasSettingByName(allSettings, StrId::STR_TILT_PAGE_TURN_DIRECTION) ? 1u : 0u) +
                                        (hasSettingByName(allSettings, StrId::STR_NEXT_PAGE) ? 1u : 0u);
   constexpr size_t expectedFrontButtonCount = controlsFrontButtonCount;
-  constexpr size_t expectedSideButtonCount = controlsSideButtonBaseCount;
 #endif
   if (controlsSettings.size() != expectedControlsCount ||
       (gpio.hasHomeKey() && controlsHomeButtonSettings.size() != controlsHomeButtonCount) ||
@@ -427,6 +448,9 @@ void SettingsActivity::setCurrentSettingsForCategory() {
         case SettingAction::ControlsTwoFingerSwipe:
           currentSettings = &controlsTwoFingerSwipeSettings;
           break;
+        case SettingAction::ControlsEdgeGestures:
+          currentSettings = &controlsEdgeGestureSettings;
+          break;
         default:
           currentSettings = &controlsSettings;
           break;
@@ -493,6 +517,8 @@ StrId SettingsActivity::activeSubmenuTitleId() const {
       return StrId::STR_TAPS_AND_GESTURES;
     case SettingAction::ControlsTwoFingerSwipe:
       return StrId::STR_TWO_FINGER_SWIPE;
+    case SettingAction::ControlsEdgeGestures:
+      return StrId::STR_EDGE_GESTURES;
     case SettingAction::SystemDevice:
       return StrId::STR_SYSTEM_DEVICE;
     case SettingAction::SystemFilesCache:
@@ -511,6 +537,11 @@ StrId SettingsActivity::activeSubmenuTitleId() const {
 void SettingsActivity::openSubmenu(SettingAction action) {
   parentSubmenu = activeSubmenu;
   activeSubmenu = action;
+  if (action == SettingAction::ReaderFontOptions) {
+    RenderLock lock;
+    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP), true);
+    rebuildSettingsLists();
+  }
   setCurrentSettingsForCategory();
   selectedSettingIndex = 1;
   showSettingSelection = true;
@@ -541,7 +572,7 @@ void SettingsActivity::openEnumOptionPicker(const SettingInfo& setting) {
   std::vector<std::string> options;
   options.reserve(optionCount);
   for (uint8_t i = 0; i < optionCount; i++) {
-    options.push_back(settingEnumOptionLabel(setting, i));
+    options.push_back(sideButtonOptionLabel(setting, i));
   }
 
   uint8_t currentIndex = 0;
@@ -626,7 +657,7 @@ void SettingsActivity::openWordSpacingPicker() {
 }
 
 void SettingsActivity::openLanguagePicker() {
-  const int languageCount = static_cast<int>(getLanguageCount());
+  const int languageCount = static_cast<int>(sizeof(SORTED_LANGUAGE_INDICES) / sizeof(SORTED_LANGUAGE_INDICES[0]));
 
   std::vector<std::string> options;
   options.reserve(languageCount);
@@ -641,7 +672,7 @@ void SettingsActivity::openLanguagePicker() {
   int currentIndex = (it != end) ? static_cast<int>(std::distance(begin, it)) : 0;
 
   optionPopup.show(StrId::STR_LANGUAGE, options, currentIndex, [this](int selectedIndex) {
-    const int languageCount = static_cast<int>(getLanguageCount());
+    const int languageCount = static_cast<int>(sizeof(SORTED_LANGUAGE_INDICES) / sizeof(SORTED_LANGUAGE_INDICES[0]));
     if (selectedIndex < 0 || selectedIndex >= languageCount) {
       requestUpdate();
       return;
@@ -788,10 +819,15 @@ void SettingsActivity::onExit() {
 void SettingsActivity::closeRootSettings() {
   SETTINGS.saveGlobalDefaults();
   if (returnToParentOnClose) {
-    finish();
+    finishToParent();
   } else {
     onGoHome();
   }
+}
+
+void SettingsActivity::finishToParent() {
+  setResult(TtfRenderOptionsResult{ttfRenderingChanged});
+  finish();
 }
 
 void SettingsActivity::applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr) {
@@ -898,7 +934,7 @@ void SettingsActivity::loop() {
   if (dismissOnUpSwipe && swipe == MappedInputManager::SwipeDir::Up) {
 #endif
     SETTINGS.saveGlobalDefaults();
-    finish();
+    finishToParent();
     return;
   }
   if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
@@ -967,6 +1003,22 @@ void SettingsActivity::loop() {
       selectedSettingIndex = nextIndex;
     }
   }
+}
+
+bool SettingsActivity::handleHomeGesture() {
+  if (optionPopup.isActive()) {
+    optionPopup.dismiss(mappedInput, [this] { requestUpdate(); });
+  } else if (!isFileBrowserView() && activeSubmenu != SettingAction::None) {
+    closeSubmenu();
+    requestUpdate();
+  } else if (!isFileBrowserView() && selectedSettingIndex > 0) {
+    selectedSettingIndex = 0;
+    showSettingSelection = true;
+    requestUpdate();
+  } else {
+    closeRootSettings();
+  }
+  return true;
 }
 
 void SettingsActivity::toggleCurrentSetting() {
@@ -1166,6 +1218,18 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::DownloadFonts:
         silentRestartToManageFonts();
         break;
+      case SettingAction::TtfRendering:
+#if CROSSINK_SCALABLE_FONTS
+        startActivityForResult(
+            std::make_unique<TtfRenderOptionsActivity>(renderer, mappedInput, SETTINGS.sdFontFamilyName, false),
+            [this](const ActivityResult& result) {
+              if (const auto* options = std::get_if<TtfRenderOptionsResult>(&result.data)) {
+                ttfRenderingChanged = ttfRenderingChanged || options->activeFamilyChanged;
+              }
+              rebuildSettingsLists();
+            });
+#endif
+        break;
       case SettingAction::Language:
         openLanguagePicker();
         break;
@@ -1183,12 +1247,11 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::ScreenMargin:
       case SettingAction::ControlsPowerButton:
       case SettingAction::ControlsHomeButton:
-        currentSettings = &controlsHomeButtonSettings;
-        break;
       case SettingAction::ControlsFrontButtons:
       case SettingAction::ControlsSideButtons:
       case SettingAction::ControlsTapsGestures:
       case SettingAction::ControlsTwoFingerSwipe:
+      case SettingAction::ControlsEdgeGestures:
       case SettingAction::SystemDevice:
       case SettingAction::SystemFilesCache:
       case SettingAction::SystemLibrary:
@@ -1323,7 +1386,7 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
   }
   if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     const uint8_t displayIndex = enumDisplayIndexForRawValue(setting, SETTINGS.*(setting.valuePtr));
-    return settingEnumOptionLabel(setting, displayIndex);
+    return sideButtonOptionLabel(setting, displayIndex);
   }
   if (setting.type == SettingType::ENUM && setting.valueGetter) {
     return settingEnumOptionLabel(setting, setting.valueGetter());
@@ -1504,6 +1567,8 @@ void SettingsActivity::buildSettingsScreen(UiApp::ScreenType& screen) {
 
   // Settings rows. Values are built per render and owned for the draw only.
   const auto& settings = *currentSettings;
+  const std::string leftUpLabel = sideButtonGroupLabel(true);
+  const std::string rightDownLabel = sideButtonGroupLabel(false);
   std::vector<std::string> values(settings.size());
   std::vector<fui::ListItem> items;
   items.reserve(settings.size());
@@ -1511,10 +1576,14 @@ void SettingsActivity::buildSettingsScreen(UiApp::ScreenType& screen) {
     values[i] = settingValueText(settings[i]);
     const bool isSectionHeader = settings[i].type == SettingType::SECTION_HEADER;
     fui::ListItem item;
-    const fui::BitmapRef directionIcon = twoFingerSwipeIcon(settings[i].nameId);
+    const fui::BitmapRef directionIcon = swipeActionIcon(settings[i].nameId);
     const fui::BitmapRef endpointIcon = frontlightScheduleEndpointIcon(settings[i]);
     const fui::BitmapRef itemIcon = directionIcon ? directionIcon : endpointIcon;
-    item.label = isSectionHeader ? uiListSectionHeaderLabel(values[i], I18N.get(settings[i].nameId))
+    const char* sectionLabel =
+        activeSubmenu == SettingAction::ControlsSideButtons
+            ? (settings[i].nameId == StrId::STR_DIR_LEFT ? leftUpLabel.c_str() : rightDownLabel.c_str())
+            : I18N.get(settings[i].nameId);
+    item.label = isSectionHeader ? uiListSectionHeaderLabel(values[i], sectionLabel)
                                  : (directionIcon ? "" : I18N.get(settings[i].nameId));
     item.icon = itemIcon;
     if (!isSectionHeader && !values[i].empty()) item.value = values[i].c_str();
@@ -1539,6 +1608,10 @@ void SettingsActivity::buildSettingsScreen(UiApp::ScreenType& screen) {
   // File Browser, reader menus, and the other list-style screens.
   props.labelText = screen.theme().bodyText;
   props.labelText.maxLines = 2;
+  if (activeSubmenu == SettingAction::ControlsSideButtons) {
+    props.headerText = screen.theme().smallText;
+    props.headerText.bold = true;
+  }
   configureUiListSectionHeaders(props, screen.theme());
   const auto rows = configureUiList(props, screen.theme(), screen.body());
   visibleRows = rows > 0 ? rows : 1;

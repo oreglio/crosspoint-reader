@@ -171,6 +171,14 @@ bool HalStorage::disconnectUsbDriveHost() {
 #endif
 }
 
+bool HalStorage::usbDriveHostSuspended() const {
+#if FREEINK_CAP_USB_MSC
+  return usbDriveContext && usbDriveContext->massStorage.hostSuspended();
+#else
+  return false;
+#endif
+}
+
 void HalStorage::endUsbDrive() {
   // The no-USB stub class carries no end(): boards without MSC have nothing
   // to tear down, so the call exists only where the capability does.
@@ -448,6 +456,14 @@ size_t HalFile::getName(char* name, size_t len) { HAL_FILE_WRAPPED_CALL(getName,
 size_t HalFile::size() { HAL_FILE_FORWARD_CALL(size, ); }              // already thread-safe, no need to wrap
 size_t HalFile::fileSize() { HAL_FILE_FORWARD_CALL(fileSize, ); }      // already thread-safe, no need to wrap
 uint64_t HalFile::fileSize64() { HAL_FILE_FORWARD_CALL(fileSize, ); }  // already thread-safe, no need to wrap
+uint32_t HalFile::creationTime() {
+  HalStorage::StorageLock lock;
+  assert(impl != nullptr);
+  uint16_t date = 0;
+  uint16_t time = 0;
+  if (!impl->file.getCreateDateTime(&date, &time) || date == 0) return 0;
+  return (static_cast<uint32_t>(date) << 16) | time;
+}
 bool HalFile::seek(size_t pos) { HAL_FILE_WRAPPED_CALL(seekSet, pos); }
 bool HalFile::seek64(uint64_t pos) { HAL_FILE_WRAPPED_CALL(seekSet, pos); }
 bool HalFile::seekCur(int64_t offset) { HAL_FILE_WRAPPED_CALL(seekCur, offset); }
@@ -461,6 +477,8 @@ size_t HalFile::write(uint8_t b) { HAL_FILE_WRAPPED_CALL(write, b); }
 bool HalFile::sync() { HAL_FILE_WRAPPED_CALL(sync, ); }
 bool HalFile::rename(const char* newPath) { HAL_FILE_WRAPPED_CALL(rename, newPath); }
 bool HalFile::isDirectory() const { HAL_FILE_FORWARD_CALL(isDirectory, ); }  // already thread-safe, no need to wrap
+// Zero when the card carries no timestamp for this entry (or the handle is
+// not open), which the library index reads as "cannot be trusted for reuse".
 uint32_t HalFile::modificationTime() {
   HalStorage::StorageLock lock;
   uint16_t date = 0;

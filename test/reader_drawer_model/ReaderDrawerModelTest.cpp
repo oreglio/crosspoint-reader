@@ -13,6 +13,50 @@ TEST(ReaderDrawerModel, TabOrderMatchesTouchDesign) {
   EXPECT_EQ(static_cast<uint8_t>(ReaderDrawerTab::Settings), 4);
 }
 
+TEST(ReaderDrawerModel, ButtonTabsWrapAtBothEnds) {
+  EXPECT_EQ(adjacentReaderDrawerTab(ReaderDrawerTab::Settings, true), ReaderDrawerTab::Font);
+  EXPECT_EQ(adjacentReaderDrawerTab(ReaderDrawerTab::Font, false), ReaderDrawerTab::Settings);
+  EXPECT_EQ(adjacentReaderDrawerTab(ReaderDrawerTab::More, true), ReaderDrawerTab::Location);
+}
+
+TEST(ReaderDrawerModel, ButtonSliderFocusEditAndBackAreExplicit) {
+  ReaderButtonSliderState state;
+  EXPECT_EQ(readerButtonSliderInput(state, ReaderButtonSliderInput::Next), ReaderButtonSliderAction::None);
+  EXPECT_EQ(state.focus, 1);
+  EXPECT_EQ(readerButtonSliderInput(state, ReaderButtonSliderInput::Confirm), ReaderButtonSliderAction::None);
+  EXPECT_TRUE(state.editing);
+  EXPECT_EQ(readerButtonSliderInput(state, ReaderButtonSliderInput::Next), ReaderButtonSliderAction::Increase);
+  EXPECT_EQ(readerButtonSliderInput(state, ReaderButtonSliderInput::Previous), ReaderButtonSliderAction::Decrease);
+  EXPECT_EQ(readerButtonSliderInput(state, ReaderButtonSliderInput::Back), ReaderButtonSliderAction::None);
+  EXPECT_FALSE(state.editing);
+  EXPECT_EQ(readerButtonSliderInput(state, ReaderButtonSliderInput::Previous), ReaderButtonSliderAction::None);
+  EXPECT_EQ(state.focus, 0);
+  EXPECT_EQ(readerButtonSliderInput(state, ReaderButtonSliderInput::Back), ReaderButtonSliderAction::LeavePane);
+}
+
+TEST(ReaderDrawerModel, FailedPreviewRestoresFontWithoutDiscardingOtherEdits) {
+  ReaderSettingsDraft draft;
+  draft.fontFamily = 2;
+  draft.readerFontPointSize = 25;
+  draft.sdFontFamilyName[0] = 'X';
+  draft.orientation = 3;
+  draft.hyphenationEnabled = 1;
+  draft.screenMarginHorizontal = 45;
+  ReaderSettingsDraft lastGood;
+  lastGood.fontFamily = 1;
+  lastGood.readerFontPointSize = 18;
+  lastGood.orientation = 0;
+  lastGood.screenMarginHorizontal = 15;
+
+  restoreReaderDraftFont(draft, lastGood);
+  EXPECT_EQ(draft.fontFamily, 1);
+  EXPECT_EQ(draft.readerFontPointSize, 18);
+  EXPECT_EQ(draft.sdFontFamilyName[0], '\0');
+  EXPECT_EQ(draft.orientation, 3);
+  EXPECT_EQ(draft.hyphenationEnabled, 1);
+  EXPECT_EQ(draft.screenMarginHorizontal, 45);
+}
+
 TEST(ReaderDrawerModel, TapSlidersSnapArbitraryValuesToTheNearestFive) {
   EXPECT_EQ(snapSliderTapValue(82, 70, 200, 5), 80);   // Line Spacing
   EXPECT_EQ(snapSliderTapValue(83, 70, 200, 5), 85);   // Line Spacing
@@ -74,19 +118,28 @@ TEST(ReaderDrawerModel, CatalogOrderAndConditionalRowsMatchTouchDesign) {
   EXPECT_EQ(minimalMore.items[0], ReaderDrawerCatalogItem::SelectChapter);
   EXPECT_EQ(minimalMore.items[2], ReaderDrawerCatalogItem::AutoPageTurn);
 
+  ReaderDrawerAvailability stableAvailable{};
+  stableAvailable.hasStablePageNumbers = true;
+  const ReaderDrawerCatalog stableCatalog = makeReaderDrawerCatalog(stableAvailable);
+  const auto& stableMore = stableCatalog[static_cast<size_t>(ReaderDrawerTab::More)];
+  EXPECT_EQ(stableMore.count, 4);
+  EXPECT_EQ(stableMore.items[1], ReaderDrawerCatalogItem::GoToPercent);
+  EXPECT_EQ(stableMore.items[2], ReaderDrawerCatalogItem::GoToStablePage);
+
   const auto& minimalLocation = minimal[static_cast<size_t>(ReaderDrawerTab::Location)];
   EXPECT_EQ(minimalLocation.count, 4);
   EXPECT_EQ(minimalLocation.items[0], ReaderDrawerCatalogItem::BookmarkToggle);
   EXPECT_EQ(minimalLocation.items[3], ReaderDrawerCatalogItem::DisplayQr);
 
-  const ReaderDrawerCatalog complete = makeReaderDrawerCatalog({true, true, true, true, true});
+  const ReaderDrawerCatalog complete = makeReaderDrawerCatalog({true, true, true, true, true, true});
   const auto& more = complete[static_cast<size_t>(ReaderDrawerTab::More)];
-  EXPECT_EQ(more.count, 6);
+  EXPECT_EQ(more.count, 7);
   EXPECT_EQ(more.items[0], ReaderDrawerCatalogItem::Lookup);
   EXPECT_EQ(more.items[1], ReaderDrawerCatalogItem::LookupHistory);
   EXPECT_EQ(more.items[2], ReaderDrawerCatalogItem::SelectChapter);
   EXPECT_EQ(more.items[3], ReaderDrawerCatalogItem::GoToPercent);
-  EXPECT_EQ(more.items[4], ReaderDrawerCatalogItem::AutoPageTurn);
+  EXPECT_EQ(more.items[4], ReaderDrawerCatalogItem::GoToStablePage);
+  EXPECT_EQ(more.items[5], ReaderDrawerCatalogItem::AutoPageTurn);
 
   const auto& location = complete[static_cast<size_t>(ReaderDrawerTab::Location)];
   EXPECT_EQ(location.count, 7);
@@ -99,10 +152,55 @@ TEST(ReaderDrawerModel, CatalogOrderAndConditionalRowsMatchTouchDesign) {
   EXPECT_EQ(location.items[6], ReaderDrawerCatalogItem::DisplayQr);
 
   const auto& settings = complete[static_cast<size_t>(ReaderDrawerTab::Settings)];
-  EXPECT_EQ(settings.count, 9);
+  EXPECT_EQ(settings.count, 11);
   EXPECT_EQ(settings.items[0], ReaderDrawerCatalogItem::StatusBar);
   EXPECT_EQ(settings.items[1], ReaderDrawerCatalogItem::Controls);
-  EXPECT_EQ(settings.items[6], ReaderDrawerCatalogItem::ResetReadingPace);
+  EXPECT_EQ(settings.items[6], ReaderDrawerCatalogItem::TrackBookStats);
+  EXPECT_EQ(settings.items[7], ReaderDrawerCatalogItem::ResetReadingPace);
+  EXPECT_EQ(settings.items[10], ReaderDrawerCatalogItem::ResetBookReaderSettings);
+}
+
+TEST(ReaderDrawerModel, StatsRowsFollowGlobalAndBookTrackingChoices) {
+  ReaderDrawerAvailability available{};
+  available.buttonDevice = true;
+  available.bookStatsEnabled = false;
+  auto catalog = makeReaderDrawerCatalog(available);
+  EXPECT_EQ(catalog[static_cast<size_t>(ReaderDrawerTab::More)].count, 3);
+  const auto& settings = catalog[static_cast<size_t>(ReaderDrawerTab::Settings)];
+  EXPECT_EQ(settings.items[6], ReaderDrawerCatalogItem::TrackBookStats);
+  EXPECT_EQ(settings.items[settings.count - 1], ReaderDrawerCatalogItem::ResetBookReaderSettings);
+
+  available.globalStatsEnabled = false;
+  catalog = makeReaderDrawerCatalog(available);
+  const auto& globalOffSettings = catalog[static_cast<size_t>(ReaderDrawerTab::Settings)];
+  for (uint8_t i = 0; i < globalOffSettings.count; ++i) {
+    EXPECT_NE(globalOffSettings.items[i], ReaderDrawerCatalogItem::TrackBookStats);
+    EXPECT_NE(globalOffSettings.items[i], ReaderDrawerCatalogItem::DeleteStats);
+  }
+}
+
+TEST(ReaderDrawerModel, ButtonDevicesRestoreStatsAndTransfersInTheirTabs) {
+  ReaderDrawerAvailability available{};
+  available.buttonDevice = true;
+  const ReaderDrawerCatalog catalog = makeReaderDrawerCatalog(available);
+  const auto& more = catalog[static_cast<size_t>(ReaderDrawerTab::More)];
+  EXPECT_EQ(more.count, 4);
+  EXPECT_EQ(more.items[3], ReaderDrawerCatalogItem::ReadingStats);
+
+  const auto& location = catalog[static_cast<size_t>(ReaderDrawerTab::Location)];
+  EXPECT_EQ(location.count, 7);
+  EXPECT_EQ(location.items[2], ReaderDrawerCatalogItem::SyncProgress);
+  EXPECT_EQ(location.items[3], ReaderDrawerCatalogItem::NearbyPositionSync);
+  EXPECT_EQ(location.items[4], ReaderDrawerCatalogItem::SendNearbyBook);
+  EXPECT_EQ(location.items[5], ReaderDrawerCatalogItem::Screenshot);
+  EXPECT_EQ(location.items[6], ReaderDrawerCatalogItem::DisplayQr);
+
+  available.hasBookmarks = true;
+  available.hasClippings = true;
+  const ReaderDrawerCatalog fullCatalog = makeReaderDrawerCatalog(available);
+  const auto& fullLocation = fullCatalog[static_cast<size_t>(ReaderDrawerTab::Location)];
+  EXPECT_EQ(fullLocation.count, 10);
+  EXPECT_EQ(fullLocation.items[5], ReaderDrawerCatalogItem::SyncProgress);
 }
 
 TEST(ReaderDrawerModel, ChangeMaskSeparatesPreviewRelayoutAndOrientation) {
@@ -142,12 +240,6 @@ TEST(FrontlightPanelModel, TouchDrawerSupportsFrontlightOrReaderDetails) {
   EXPECT_FALSE(supportsFrontlightDrawer(false, false, true));
 }
 
-TEST(ReaderDrawerModel, ReopenRequiresExplicitTouchDrawerResult) {
-  EXPECT_TRUE(shouldReopenTouchReaderDrawer(true, true));
-  EXPECT_FALSE(shouldReopenTouchReaderDrawer(false, true));
-  EXPECT_FALSE(shouldReopenTouchReaderDrawer(true, false));
-}
-
 TEST(ReaderDrawerModel, PercentStepsDoNotBecomeSettingsChanges) {
   EXPECT_TRUE(readerDrawerStepChangesSettings(ReaderDrawerPane::Spacing));
   EXPECT_TRUE(readerDrawerStepChangesSettings(ReaderDrawerPane::Margins));
@@ -156,6 +248,15 @@ TEST(ReaderDrawerModel, PercentStepsDoNotBecomeSettingsChanges) {
   EXPECT_TRUE(readerDrawerSliderPreviewsText(ReaderDrawerPane::Spacing));
   EXPECT_TRUE(readerDrawerSliderPreviewsText(ReaderDrawerPane::Margins));
   EXPECT_FALSE(readerDrawerSliderPreviewsText(ReaderDrawerPane::AutoPageTurn));
+  EXPECT_FALSE(readerDrawerSliderPreviewsText(ReaderDrawerPane::Percent));
+  EXPECT_FALSE(readerDrawerSliderPreviewsText(ReaderDrawerPane::StablePage));
+}
+
+TEST(ReaderDrawerModel, AntiAliasingOnlyRunsWhenTheReaderPreviewWasRedrawn) {
+  EXPECT_TRUE(shouldRenderReaderDrawerAntiAliasing(true, true, true));
+  EXPECT_FALSE(shouldRenderReaderDrawerAntiAliasing(false, true, true));
+  EXPECT_FALSE(shouldRenderReaderDrawerAntiAliasing(true, false, true));
+  EXPECT_FALSE(shouldRenderReaderDrawerAntiAliasing(true, true, false));
 }
 
 TEST(ReaderDrawerModel, TouchModeDoesNotRenderPhysicalButtonFocus) {
@@ -173,12 +274,20 @@ TEST(ReaderDrawerModel, LandscapeRootHeightReservesFourRealRows) {
   EXPECT_EQ(readerDrawerListHeightForRows(4, 52, 8), 232);
 }
 
-TEST(ReaderDrawerModel, OnlyDualSliderPanesUseTheTallLandscapeSheet) {
+TEST(ReaderDrawerModel, TallLandscapeSheetCoversDualSlidersAndTheKeypadPanes) {
   EXPECT_TRUE(readerDrawerNeedsTallLandscapeSheet(ReaderDrawerPane::Spacing));
   EXPECT_TRUE(readerDrawerNeedsTallLandscapeSheet(ReaderDrawerPane::Margins));
+  EXPECT_TRUE(readerDrawerNeedsTallLandscapeSheet(ReaderDrawerPane::Percent));
+  EXPECT_TRUE(readerDrawerNeedsTallLandscapeSheet(ReaderDrawerPane::StablePage));
   EXPECT_FALSE(readerDrawerNeedsTallLandscapeSheet(ReaderDrawerPane::Root));
-  EXPECT_FALSE(readerDrawerNeedsTallLandscapeSheet(ReaderDrawerPane::Percent));
   EXPECT_FALSE(readerDrawerNeedsTallLandscapeSheet(ReaderDrawerPane::AutoPageTurn));
+}
+
+TEST(ReaderDrawerModel, DirtyPreviewCanReplaceAStaleExternalBackdrop) {
+  EXPECT_FALSE(readerDrawerNeedsExternalBackdrop(true, true, false));
+  EXPECT_FALSE(readerDrawerNeedsExternalBackdrop(true, false, true));
+  EXPECT_TRUE(readerDrawerNeedsExternalBackdrop(false, true, true));
+  EXPECT_TRUE(readerDrawerNeedsExternalBackdrop(true, false, false));
 }
 
 TEST(PendingOverlayResume, ConsumptionIsOneShot) {
@@ -202,4 +311,20 @@ TEST(PendingOverlayResume, ConsumptionIsOneShot) {
 
   PendingOverlayResume second;
   EXPECT_FALSE(consumePendingOverlayResumeOnce(stored, second));
+}
+
+TEST(ReaderDrawerModel, SamplePreviewCoversLiveTextSettingsOnly) {
+  using Pane = ReaderDrawerPane;
+  using Tab = ReaderDrawerTab;
+  using Row = ReaderDrawerCatalogItem;
+  EXPECT_TRUE(readerDrawerShowsSamplePreview(Pane::Root, Tab::Font, Row::FontSize));
+  for (const auto pane : {Pane::ReaderFont, Pane::FontFamily, Pane::Spacing, Pane::Margins})
+    EXPECT_TRUE(readerDrawerShowsSamplePreview(pane, Tab::Layout, Row::FontSize));
+  for (const auto row : {Row::FontSize, Row::Alignment})
+    EXPECT_TRUE(readerDrawerShowsSamplePreview(Pane::EnumOptions, Tab::Layout, row));
+  for (const auto tab : {Tab::Layout, Tab::More, Tab::Location, Tab::Settings})
+    EXPECT_FALSE(readerDrawerShowsSamplePreview(Pane::Root, tab, Row::FontSize));
+  for (const auto row : {Row::Orientation, Row::DictionaryFontFamily, Row::DictionaryFontSize, Row::Images})
+    EXPECT_FALSE(readerDrawerShowsSamplePreview(Pane::EnumOptions, Tab::Layout, row));
+  EXPECT_FALSE(readerDrawerShowsSamplePreview(Pane::DictionaryFont, Tab::Font, Row::FontSize));
 }

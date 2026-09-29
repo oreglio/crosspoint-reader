@@ -45,12 +45,9 @@ static_assert(isNetworkBootTargetValue(static_cast<uint32_t>(NetworkBootTarget::
 
 void silentRestart();                                            // home screen
 void silentRestartToReader(bool cleanImageBaseOnEntry = false);  // currently-open EPUB (APP_STATE.openEpubPath)
-// Network activities use these after releasing Wi-Fi resources. They retain
-// the fast restart but apply the user's frontlight wake preference.
-void silentRestartAfterNetwork();
-void silentRestartToReaderAfterNetwork(bool cleanImageBaseOnEntry = false);
 // Home-target restart that lands on the task list instead of Home, so a sync
-// started from the list returns where the user asked for it.
+// started from the list returns where the user asked for it. Every silent
+// restart already preserves the frontlight (upstream c0371104c).
 void silentRestartToTaskListAfterNetwork();
 // Reboots immediately after an activity releases exclusive raw storage.
 void restartToHomeAfterStorageHandoff();

@@ -410,20 +410,24 @@ void drawBookCover(const GfxRenderer& renderer, const Rect& coverRect, const Rec
 }  // namespace
 
 void MinimalTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle,
-                              const bool readerContext) const {
+                              const bool readerContext, const bool showStatus) const {
+  (void)readerContext;
   renderer.fillRect(rect.x, rect.y, rect.width, rect.height, false);
   const bool showBatteryPercentage =
       SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS;
-  const int batteryX = rect.x + rect.width - 12 - MinimalMetrics::values.batteryWidth;
-  const int batteryY = rect.y + homeHeaderTopInset + UITheme::getTopStatusBarInset(renderer);
-  drawBatteryRight(renderer,
-                   Rect{batteryX, batteryY, MinimalMetrics::values.batteryWidth, MinimalMetrics::values.batteryHeight},
-                   showBatteryPercentage);
+  const int batteryX = rect.x + rect.width - StatusBarMetrics::sideInset - MinimalMetrics::values.batteryWidth;
+  const int batteryY = rect.y + UITheme::getTopStatusBarInset(renderer) + homeHeaderTopInset;
+  if (showStatus) {
+    drawBatteryRight(
+        renderer, Rect{batteryX, batteryY, MinimalMetrics::values.batteryWidth, MinimalMetrics::values.batteryHeight},
+        showBatteryPercentage);
+  }
 
   if (title) {
     constexpr int titleInsetX = 12;
     const int titleY = rect.y + MinimalMetrics::values.batteryBarHeight + 3;
-    int maxTitleWidth = batteryX - rect.x - titleInsetX - MinimalMetrics::values.contentSidePadding;
+    const int titleRight = showStatus ? batteryX : rect.x + rect.width - 12;
+    int maxTitleWidth = titleRight - rect.x - titleInsetX - MinimalMetrics::values.contentSidePadding;
     // Le sous-titre se range au bord droit de la ligne du titre, sous la
     // batterie, cale sur le bas du titre comme dans BaseTheme::drawHeader.
     if (subtitle != nullptr && subtitle[0] != '\0') {
@@ -438,8 +442,9 @@ void MinimalTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char
     renderer.drawLine(rect.x, rect.y + rect.height - 3, rect.x + rect.width - 1, rect.y + rect.height - 3, 3, true);
   }
 
-  drawTopStatusBarClock(renderer, rect.y, nullptr, readerContext,
-                        title == nullptr && !readerContext ? homeHeaderClockTextYOffset(renderer) : 0);
+  if (showStatus) {
+    drawTopStatusBarClock(renderer, rect.y, nullptr, false, homeHeaderClockTextYOffset(renderer));
+  }
 }
 
 void MinimalTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,

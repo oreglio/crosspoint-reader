@@ -1,0 +1,12 @@
+cmake_minimum_required(VERSION 3.16)
+project(ReaderFontSizes LANGUAGES CXX)
+enable_testing()
+foreach(scalable IN ITEMS 0 1)
+  add_executable(reader_font_sizes_${scalable} ReaderFontSizesTest.cpp)
+  # ../../lib/I18n: this fork's FontFamilyLabel.h names its families by StrId.
+  target_include_directories(reader_font_sizes_${scalable} PRIVATE ../../lib/EpdFont ../../lib/I18n)
+  target_compile_features(reader_font_sizes_${scalable} PRIVATE cxx_std_17)
+  target_compile_definitions(reader_font_sizes_${scalable} PRIVATE CROSSINK_SCALABLE_FONTS=${scalable})
+  target_compile_options(reader_font_sizes_${scalable} PRIVATE -UNDEBUG)
+  add_test(NAME reader_font_sizes_${scalable} COMMAND reader_font_sizes_${scalable})
+endforeach()

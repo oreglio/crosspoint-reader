@@ -15,15 +15,17 @@
 #include "BookReadingStats.h"
 #include "BookmarkStore.h"
 #include "EndOfBookOptions.h"
-#include "EpubReaderMenuActivity.h"
+#include "EpubReaderMenuModel.h"
+#include "FootnoteLinkTargets.h"
 #include "GlobalReadingStats.h"
 #include "ManualPageTurnQueue.h"
 #include "ReaderProgressSaveDebouncer.h"
+#include "SideButtonShortcuts.h"
 #include "activities/Activity.h"
+#include "activities/reader/TouchReaderPreviewModel.h"
 #include "components/OptionPopup.h"
 #if CROSSINK_APP_CAP_TOUCH
 #include "activities/reader/ReaderPinchGesture.h"
-#include "activities/reader/TouchReaderPreviewModel.h"
 #endif
 
 struct ToastRect {
@@ -64,6 +66,8 @@ class EpubReaderActivity final : public Activity {
     bool hasAutoPageTurnInterval = false;
     uint16_t autoPageTurnSeconds = 0;
     bool hasCustomReaderSettings = false;
+    uint32_t readerSettingsOverrideMask = 0;
+    bool hasSafeModeOverride = false;
     bool hasRenderModeOverride = false;
     bool hasDictionaryFontOverride = false;
     uint8_t renderMode = 0;
@@ -84,6 +88,8 @@ class EpubReaderActivity final : public Activity {
     bool hasAutoPageTurnInterval = false;
     uint16_t autoPageTurnSeconds = 0;
     bool hasCustomReaderSettings = false;
+    uint32_t readerSettingsOverrideMask = 0;
+    bool hasSafeModeOverride = false;
     bool hasRenderModeOverride = false;
     uint8_t renderMode = 0;
     ReaderSettingsSnapshot readerSettings;
@@ -93,6 +99,8 @@ class EpubReaderActivity final : public Activity {
         : hasAutoPageTurnInterval(source.hasAutoPageTurnInterval),
           autoPageTurnSeconds(source.autoPageTurnSeconds),
           hasCustomReaderSettings(source.hasCustomReaderSettings),
+          readerSettingsOverrideMask(source.readerSettingsOverrideMask),
+          hasSafeModeOverride(source.hasSafeModeOverride),
           hasRenderModeOverride(source.hasRenderModeOverride),
           renderMode(source.renderMode),
           readerSettings(source.readerSettings) {}
@@ -120,7 +128,6 @@ class EpubReaderActivity final : public Activity {
   int cachedSpineIndex = 0;
   int cachedChapterPageNumber = 0;
   int cachedChapterTotalPageCount = 0;
-  int cachedChapterPageWatermark = 0;
   std::optional<uint32_t> cachedVisibleTextOffset;
   struct ChapterGroupEstimateCache {
     int currentSpineIndex = -1;
@@ -149,6 +156,7 @@ class EpubReaderActivity final : public Activity {
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
   ManualPageTurnQueue pendingManualPageTurns;
+  QueuedTurnRenderingState queuedTurnRendering;
   unsigned long pageShownAtMs = 0UL;
   unsigned long lastRenderCompleteMs = 0UL;
   int idlePrewarmSpine = -1;
@@ -168,16 +176,25 @@ class EpubReaderActivity final : public Activity {
   ReaderSettingsSnapshot suspendedBookReaderSettings;
   BookReadingStats stats;
   GlobalReadingStats globalStats;
+  bool bookStatsEnabled = true;
+  bool statsTrackingActive = true;
+  bool paceDirty = false;
+  bool pendingStatsCommit = false;
   ReadingStatsDateTime sessionStartLocalDateTime;
   bool hasSessionStartLocalDateTime = false;
+  void syncStatsTrackingState();
   // Signals that the next render should reposition within the newly loaded section
   // based on a cross-book percentage jump.
   bool pendingPercentJump = false;
   // Normalized 0.0-1.0 progress within the target spine item, computed from book percentage.
   float pendingSpineProgress = 0.0f;
+  std::optional<uint32_t> pendingReferenceUnitOffset;
+  uint32_t pendingReferenceUnitCount = 0;
+  bool pendingReferenceUnitsAreCharacters = false;
+  std::optional<uint16_t> pendingResolvedReferencePage;
   uint16_t pendingParagraphIndex = UINT16_MAX;
-#if CROSSINK_APP_CAP_TOUCH
   ReaderDrawerState touchReaderDrawerState{};
+#if CROSSINK_APP_CAP_TOUCH
   std::unique_ptr<TouchReaderPreviewModel> touchReaderPreviewModel;
   bool touchReaderPreviewAllocationAttempted = false;
 #endif
@@ -192,7 +209,7 @@ class EpubReaderActivity final : public Activity {
   bool longPressBackHandled = false;
   bool longPowerButtonHandled = false;
   OptionPopup quickActionsPopup;
-  bool sideButtonLongPressHandled = false;
+  SideButtonShortcuts sideButtonShortcuts;
   bool frontButtonLongPressHandled = false;
   bool touchDictionaryLookupHandled = false;
   int pageLoadRetryCount = 0;
@@ -242,13 +259,7 @@ class EpubReaderActivity final : public Activity {
   std::vector<FootnoteEntry> currentPageFootnotes;
 #if CROSSINK_APP_CAP_TOUCH
   ReaderPinchGesture pinchFontGesture;
-  struct FootnoteTouchTarget {
-    int16_t x = 0;
-    int16_t y = 0;
-    int16_t width = 0;
-    int16_t height = 0;
-  };
-  std::array<FootnoteTouchTarget, EPUB_MAX_FOOTNOTES_PER_PAGE> currentPageFootnoteTouchTargets{};
+  FootnoteLinkTargets currentPageFootnoteTouchTargets{};
 #endif
   struct SavedPosition {
     int spineIndex;
@@ -378,7 +389,7 @@ class EpubReaderActivity final : public Activity {
   bool estimateRemainingTimeLeftPages(bool bookEstimate, float& remainingPages) const;
   bool estimateProgressTimeLeftSeconds(uint32_t& seconds) const;
   bool estimateTimeLeftSeconds(bool bookEstimate, uint32_t& seconds) const;
-  bool formatTimeLeftLabel(char* buf, size_t len) const;
+  bool formatTimeLeftLabel(char* buf, size_t len, bool bookEstimate) const;
   void refreshCachedTimeLeftEstimate();
   void applyBookStatsEditsFromDisk();
   void handleBookStatsReturn(bool returnToReaderMenu);
@@ -403,8 +414,9 @@ class EpubReaderActivity final : public Activity {
   static void saveGlobalSettingsForBookReader(void* ctx);
   static void beginGlobalSettingsEditForBookReader(void* ctx);
   static void endGlobalSettingsEditForBookReader(void* ctx);
-  // Jump to a percentage of the book (0-100), mapping it to spine and page.
-  void jumpToPercent(int percent);
+  // Jump to a percentage of the book (0.0-100.0, two decimals meaningful), mapping it to spine and page.
+  void jumpToPercent(float percent);
+  void jumpToStablePage(uint32_t page);
   void reindexCurrentSection();
   void prepareCurrentSectionForRelayout();
   void executeReaderQuickAction(CrossPointSettings::LONG_PRESS_MENU_ACTION action,
@@ -417,6 +429,7 @@ class EpubReaderActivity final : public Activity {
   bool quickActionUsesPowerRelease(CrossPointSettings::LONG_PRESS_MENU_ACTION action) const;
   void suppressConfirmShortcutRelease(CrossPointSettings::LONG_PRESS_MENU_ACTION action);
   void executeFootnoteQuickAction(bool suppressInitialPowerRelease = false);
+  void openFootnoteSelect(bool returnToReaderMenu);
 #if CROSSINK_APP_CAP_TOUCH
   bool handlePinchFontResize();
   void resetPinchFontGesture();
@@ -437,19 +450,22 @@ class EpubReaderActivity final : public Activity {
   static std::unique_ptr<Page> reloadDictionaryLookupPageCallback(void* context, int pageOffset);
   static void renderDictionaryLookupBackgroundCallback(void* context);
   // Lets the quick-toggle drawer step the font without knowing how the reader
-  // reflows: same path as the side-button gesture, current section only.
+  // reflows: same path as the side-button action, current section only.
   static void quickTogglesFontStepCallback(void* context, bool larger);
   // Set while the drawer is open; consumed on close so the book is reflowed
   // once for the whole visit rather than once per step.
   bool quickTogglesFontChanged_ = false;
-  void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action, bool returnToReaderMenu = false,
+  // Opens the quick-toggles drawer: the front long-press and the
+  // SIDE_QUICK_TOGGLES side action share it.
+  void openQuickToggles();
+  void onReaderMenuConfirm(EpubReaderMenuAction action, bool returnToReaderMenu = false,
                            const PendingOverlayResume* replacementResume = nullptr);
   // Opens the reader menu for the current position (short-press Confirm)
   void openReaderMenu();
   void applyOrientation(uint8_t orientation);
   void requestManualPageTurn(bool isForwardTurn, const char* source);
   bool drainPendingManualPageTurn();
-  void clearPendingManualPageTurns();
+  void clearPendingManualPageTurns(bool requestRecoveryRedraw = true);
   void finishManualPageTurnBrakeIfReady();
   void cancelSilentNextChapterPrefetchForForwardTurn();
   void pageTurn(bool isForwardTurn, const char* source = "unknown");
@@ -500,6 +516,7 @@ class EpubReaderActivity final : public Activity {
   // build sitting outside the lookahead window is dormant, and reporting it here would
   // pin the CPU at full clock (no power saving, yield-only loop) for the whole read.
   // Mirrors the tick condition in loop(): catch-up phase, or watermark inside the window.
+  // Caller must own RenderLock: render() can replace or finalize section.
   bool sectionBuildWantsTick() const {
     return section && section->isBuilding() &&
            (!section->activeBuildHasCaughtReadablePages() ||

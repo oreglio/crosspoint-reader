@@ -39,6 +39,12 @@ const char* libraryStatePath();
 // a rebuild. A file rather than RAM because ingesters and shelf do not always
 // share a boot — web uploads arrive in a dedicated network boot mode.
 void markShelfStaleIfBook(const char* path);
+// Unconditional form, named after upstream's LibraryBuilder API so the flows
+// it calls from (file browser delete/rename/move, USB drive, transfer screens)
+// compile against this fork's shelf unchanged. Deletions and moves change the
+// shelf as much as arrivals do; the cost is one reconciled rebuild on the next
+// Library visit.
+void invalidateLibraryIndex();
 // True exactly once per marking: reading consumes the flag.
 bool takeShelfStale();
 

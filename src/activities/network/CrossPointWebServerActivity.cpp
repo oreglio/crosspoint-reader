@@ -4,6 +4,8 @@
 #include <ESPmDNS.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <LibraryBuilder.h>
+#include <LibraryState.h>
 #include <Memory.h>
 #include <WiFi.h>
 
@@ -66,6 +68,9 @@ int barsForRssi(int rssi, int currentBars) {
 
 void CrossPointWebServerActivity::onEnter() {
   Activity::onEnter();
+  // Build or refresh the compact on-disk font index before Wi-Fi starts. The
+  // C3 has substantially more contiguous heap here than while serving HTTP.
+  sdFontSystem.ensureRegistry();
   sdFontSystem.releaseForNetwork(renderer);
 
   LOG_DBG("WEBACT", "Free heap at onEnter: %d bytes", ESP.getFreeHeap());
@@ -96,6 +101,7 @@ void CrossPointWebServerActivity::onEnter() {
 }
 
 void CrossPointWebServerActivity::onExit() {
+  library::invalidateLibraryIndex();
   Activity::onExit();
 
   state = WebServerActivityState::SHUTTING_DOWN;
@@ -107,9 +113,9 @@ void CrossPointWebServerActivity::onExit() {
   // path still needs the explicit cleanup below.
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     if (returnBookPath.empty()) {
-      silentRestartAfterNetwork();
+      silentRestart();
     } else {
-      silentRestartToReaderAfterNetwork();
+      silentRestartToReader();
     }
   }
 
@@ -338,9 +344,9 @@ void CrossPointWebServerActivity::startWebServer() {
 void CrossPointWebServerActivity::exitToOrigin() {
   if (networkBootReady) {
     if (returnBookPath.empty()) {
-      silentRestartAfterNetwork();
+      silentRestart();
     } else {
-      silentRestartToReaderAfterNetwork();
+      silentRestartToReader();
     }
     return;
   }
