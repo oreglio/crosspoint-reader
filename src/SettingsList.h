@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -598,8 +599,22 @@ inline SettingInfo buildSideButtonActionSetting(const StrId nameId, uint8_t Cros
 // test fails on any drift, in either direction.
 inline constexpr size_t BASE_SETTINGS_CAPACITY = 104 + 7 + (CROSSINK_APP_CAP_TOUCH ? 4 : 0);
 
+// Heap-held behind a unique_ptr rather than a function-local static, so a
+// minimal network boot can hand it back (releaseBaseSettingsList). Once built
+// it holds ~36 KB of the C3's heap (measured over serial, 1.6.5-rc2), and
+// there the TLS handshake and the EPUB inflate window need that headroom:
+// with the list resident both failed on allocation.
+inline std::unique_ptr<const std::vector<SettingInfo>>& baseSettingsListStorage() {
+  static std::unique_ptr<const std::vector<SettingInfo>> list;
+  return list;
+}
+
 inline const std::vector<SettingInfo>& getBaseSettingsList() {
-  static const std::vector<SettingInfo> baseList = [] {
+  auto& storage = baseSettingsListStorage();
+  if (storage) return *storage;
+  // Bare make_unique, as the former static was: the vector's own buffers
+  // already abort on OOM, so a nothrow wrapper here would change nothing.
+  storage = std::make_unique<const std::vector<SettingInfo>>([] {
     std::vector<SettingInfo> v;
     // Reserve the maximum final size. Growing this process-lifetime vector
     // would otherwise leave it holding roughly twice the memory it needs.
@@ -1059,10 +1074,14 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
       }
     }
     return v;
-  }();
-
-  return baseList;
+  }());
+  return *storage;
 }
+
+// Frees the list; the next getBaseSettingsList() rebuilds it. Only where no
+// reference into it is held: main() calls it right after the settings load of
+// a minimal network boot, whose screens never show a settings list.
+inline void releaseBaseSettingsList() { baseSettingsListStorage().reset(); }
 
 inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr,
                                                 const DictionaryRegistry* dictRegistry = nullptr) {
