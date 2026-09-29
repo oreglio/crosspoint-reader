@@ -239,7 +239,18 @@ bool mapCurrentXPathToSource(const std::shared_ptr<Epub>& epub, const int curren
 
   XPathStep steps[MAX_XPATH_DEPTH];
   const int stepCount = parseXPathSteps(xpath, steps);
-  if (entry.containerDepth >= stepCount) return false;
+  if (entry.containerDepth == stepCount) {
+    // The position names the container itself -- `/body` on a split's first
+    // page, where no child is resolved yet. That is the start of this split,
+    // which in the source is the first child it contributes.
+    const Epub::SourceChildRange* first = epub->getSourceChildRange(entry, 0);
+    if (!first || first->name[0] == '\0') return false;
+    xpath += "/";
+    xpath += first->name;
+    xpath += "[" + std::to_string(static_cast<unsigned>(first->offset) + 1) + "]";
+    return true;
+  }
+  if (entry.containerDepth > stepCount) return false;
   XPathStep& child = steps[entry.containerDepth];
   for (size_t i = 0; i < entry.rangeCount; ++i) {
     const Epub::SourceChildRange* range = epub->getSourceChildRange(entry, i);
