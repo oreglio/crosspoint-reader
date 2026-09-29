@@ -81,3 +81,48 @@ TEST(EmbeddedIdRead, EmptyWhenPayloadMalformed) {
   ZipFile::entryContent = "{\"version\":1,\"koreaderPartialMd5\":\"0123456789ABCDEF0123456789ABCDEF\"}";
   EXPECT_EQ(KOReaderEmbeddedId::read("/books/x.epub"), "");
 }
+
+// --- Quelles identités une sync lit et écrit ---------------------------------
+// Readest et KOReader identifient un livre par le contenu du fichier QU'ILS ont.
+// Un livre optimisé ici porte deux identités : l'original (embarquée) et cette
+// copie. Écrire sous les deux est ce qui permet à un appareil qui a l'original
+// comme à un appareil qui a la copie de voir la progression.
+
+#include "KOReaderSyncIdentities.h"
+
+namespace {
+constexpr const char* ORIGINAL = "15002bce62c030f58f1dede893e5d66d";
+constexpr const char* COPY = "f0772a3c7848df88067073a828695479";
+constexpr const char* BY_NAME = "538c7c4e9d910b01851bca3f1eb844a4";
+}  // namespace
+
+TEST(SyncIdentities, UploadUnderTheOriginalAlsoWritesThisCopy) {
+  EXPECT_EQ(koreaderCompanionUploadHash(ORIGINAL, ORIGINAL, COPY), COPY);
+}
+
+TEST(SyncIdentities, UploadUnderThisCopyAlsoWritesTheOriginal) {
+  EXPECT_EQ(koreaderCompanionUploadHash(COPY, ORIGINAL, COPY), ORIGINAL);
+}
+
+TEST(SyncIdentities, NoEmbeddedIdMeansASingleUpload) { EXPECT_EQ(koreaderCompanionUploadHash(COPY, "", COPY), ""); }
+
+TEST(SyncIdentities, AnUnoptimizedBookCarryingItsOwnIdIsWrittenOnce) {
+  // Livre dont l'empreinte embarquée est déjà celle de son contenu.
+  EXPECT_EQ(koreaderCompanionUploadHash(ORIGINAL, ORIGINAL, ORIGINAL), "");
+}
+
+TEST(SyncIdentities, AnUnreadableCopyAddsNothing) {
+  EXPECT_EQ(koreaderCompanionUploadHash(ORIGINAL, ORIGINAL, ""), "");
+}
+
+TEST(SyncIdentities, AFilenameUploadGetsNoCompanion) {
+  // Ni l'original ni la copie : rien à apparier.
+  EXPECT_EQ(koreaderCompanionUploadHash(BY_NAME, ORIGINAL, COPY), "");
+}
+
+TEST(SyncIdentities, AnEmbeddedIdProbesTheOtherIdentitiesInEveryMode) {
+  EXPECT_TRUE(koreaderProbeAlternateIdentities(/*smartSync=*/false, /*hasEmbeddedId=*/true));
+  EXPECT_TRUE(koreaderProbeAlternateIdentities(true, true));
+  EXPECT_TRUE(koreaderProbeAlternateIdentities(true, false));
+  EXPECT_FALSE(koreaderProbeAlternateIdentities(false, false));
+}

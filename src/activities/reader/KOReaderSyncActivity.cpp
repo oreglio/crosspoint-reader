@@ -21,6 +21,7 @@
 #include "KOReaderCredentialStore.h"
 #include "KOReaderDocumentId.h"
 #include "KOReaderEmbeddedId.h"
+#include "KOReaderSyncIdentities.h"
 #include "MappedInputManager.h"
 #include "ProgressComparison.h"
 #include "ReaderUtils.h"
@@ -302,7 +303,9 @@ void KOReaderSyncActivity::performSync() {
   DocumentMatchMethod alternateIdentity = primaryMethod;
   bool hasAlternateProgress = false;
 
-  if (smartSyncEnabled()) {
+  // A book carrying an embedded id probes in every mode: the other reader's
+  // record may sit under the original's id or under this copy's.
+  if (koreaderProbeAlternateIdentities(smartSyncEnabled(), !embeddedHash.empty())) {
     // Probe the remaining identities. With an embedded id the candidates are
     // the configured method and its alternate; without one, just the
     // alternate.
@@ -651,6 +654,26 @@ void KOReaderSyncActivity::performUpload() {
   epub.reset();
 
   const auto result = KOReaderSyncClient::updateProgress(progress);
+
+  // An optimized book has two identities, and a phone may hold either file:
+  // Readest names a book only by the content of the file it has. Write under
+  // the other one too, so a reader holding the original and one holding this
+  // card's copy both see this position. Best effort: the primary write above
+  // is the one the result reports.
+  if (result == KOReaderSyncClient::OK && !embeddedHash.empty()) {
+    const std::string companion =
+        koreaderCompanionUploadHash(documentHash, embeddedHash, KOReaderDocumentId::calculate(epubPath));
+    if (!companion.empty()) {
+      progress.document = companion;
+      const auto companionResult = KOReaderSyncClient::updateProgress(progress);
+      if (companionResult == KOReaderSyncClient::OK) {
+        LOG_DBG("KOSync", "Upload (companion): doc=%s", companion.c_str());
+      } else {
+        LOG_ERR("KOSync", "Companion upload failed: doc=%s result=%d http=%d", companion.c_str(),
+                static_cast<int>(companionResult), KOReaderSyncClient::lastHttpCode);
+      }
+    }
+  }
 
   // Drop the radio while user reads the result; full teardown happens at silent reboot.
   wifiOff();
