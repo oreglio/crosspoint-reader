@@ -290,9 +290,10 @@ void KOReaderSyncActivity::performSync() {
   // local upload when another KOReader device synced the same book with a
   // different document matching method.
   auto result = KOReaderSyncClient::getProgress(documentHash, remoteProgress);
-  LOG_DBG("KOSync", "Primary remote (%s): result=%d http=%d doc=%s remote=%.6f xpath=%s",
+  LOG_DBG("KOSync", "Primary remote (%s): result=%d http=%d doc=%s remote=%.6f xpath=%s device=%s",
           embeddedHash.empty() ? matchMethodName(primaryMethod) : "embedded", result, KOReaderSyncClient::lastHttpCode,
-          documentHash.c_str(), remoteProgress.percentage, remoteProgress.progress.c_str());
+          documentHash.c_str(), remoteProgress.percentage, remoteProgress.progress.c_str(),
+          remoteProgress.device.c_str());
 
   // A second record found under another identity is RETAINED, not judged here:
   // the two were written by different engines, so their percentages are not
@@ -328,9 +329,9 @@ void KOReaderSyncActivity::performSync() {
 
       KOReaderProgress altProgress;
       const auto altResult = KOReaderSyncClient::getProgress(candidate.hash, altProgress);
-      LOG_DBG("KOSync", "Alternate remote (%s): result=%d http=%d doc=%s remote=%.6f xpath=%s",
+      LOG_DBG("KOSync", "Alternate remote (%s): result=%d http=%d doc=%s remote=%.6f xpath=%s device=%s",
               matchMethodName(candidate.method), altResult, KOReaderSyncClient::lastHttpCode, candidate.hash.c_str(),
-              altProgress.percentage, altProgress.progress.c_str());
+              altProgress.percentage, altProgress.progress.c_str(), altProgress.device.c_str());
 
       if (altResult != KOReaderSyncClient::OK) continue;
       if (result == KOReaderSyncClient::NOT_FOUND) {

@@ -233,6 +233,7 @@ bool mapCurrentXPathToSource(const std::shared_ptr<Epub>& epub, const int curren
   if (!epub->hasSourceSpineMap()) return !epub->requiresSourceSpineMap();
   Epub::SourceSpineMapEntry entry;
   if (!epub->getSourceSpineMapEntry(currentSpineIndex, entry) || !rewriteDocFragment(xpath, entry.sourceSpineIndex)) {
+    LOG_DBG("PM", "No source map entry for spine %d (xpath %s)", currentSpineIndex, xpath.c_str());
     return false;
   }
   if (entry.rangeCount == 0) return true;
@@ -250,7 +251,11 @@ bool mapCurrentXPathToSource(const std::shared_ptr<Epub>& epub, const int curren
     xpath += "[" + std::to_string(static_cast<unsigned>(first->offset) + 1) + "]";
     return true;
   }
-  if (entry.containerDepth > stepCount) return false;
+  if (entry.containerDepth > stepCount) {
+    LOG_DBG("PM", "Source map: container depth %d below xpath %s", static_cast<int>(entry.containerDepth),
+            xpath.c_str());
+    return false;
+  }
   XPathStep& child = steps[entry.containerDepth];
   for (size_t i = 0; i < entry.rangeCount; ++i) {
     const Epub::SourceChildRange* range = epub->getSourceChildRange(entry, i);
@@ -259,6 +264,14 @@ bool mapCurrentXPathToSource(const std::shared_ptr<Epub>& epub, const int curren
       continue;
     }
     return rewriteXPathStepIndex(xpath, entry.containerDepth, child.siblingIndex + range->offset);
+  }
+  LOG_DBG("PM", "Source map: %s[%d] at depth %d is in none of %u ranges (xpath %s)", child.tag, child.siblingIndex,
+          static_cast<int>(entry.containerDepth), static_cast<unsigned>(entry.rangeCount), xpath.c_str());
+  for (size_t i = 0; i < entry.rangeCount; ++i) {
+    if (const Epub::SourceChildRange* range = epub->getSourceChildRange(entry, i)) {
+      LOG_DBG("PM", "  range %u: %s offset=%u count=%u", static_cast<unsigned>(i), range->name,
+              static_cast<unsigned>(range->offset), static_cast<unsigned>(range->count));
+    }
   }
   return false;
 }
