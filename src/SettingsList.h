@@ -598,9 +598,9 @@ inline SettingInfo buildSideButtonActionSetting(const StrId nameId, uint8_t Cros
 // can use it directly; mutable device UI lists use getSettingsList(), which
 // returns an owned copy and can add SD-card font and dictionary options.
 // Four edge gesture entries are compiled only for touch devices.
-// +7: this fork's own entries (Raindrop, Tasks, Library). The simulator smoke
-// test fails on any drift, in either direction.
-inline constexpr size_t BASE_SETTINGS_CAPACITY = 104 + 7 + (CROSSINK_APP_CAP_TOUCH ? 4 : 0);
+// +8: this fork's own entries (Raindrop, Tasks, Library, Home books). The
+// simulator smoke test fails on any drift, in either direction.
+inline constexpr size_t BASE_SETTINGS_CAPACITY = 104 + 8 + (CROSSINK_APP_CAP_TOUCH ? 4 : 0);
 
 // Builds the base list; see getBaseSettingsList() and BaseSettingsListLease
 // for who keeps it and for how long.
@@ -641,13 +641,18 @@ inline std::vector<SettingInfo> buildBaseSettingsList() {
                           StrId::STR_CAT_DISPLAY));
   add(SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme,
                         {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_MINIMAL, StrId::STR_THEME_DASHBOARD,
-                         StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED, StrId::STR_THEME_LYRA_CAROUSEL,
-                         StrId::STR_THEME_ROUNDEDRAFF, StrId::STR_THEME_COVER_GRID},
+                         StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED, StrId::STR_THEME_LYRA_MINIMALIST,
+                         StrId::STR_THEME_LYRA_CAROUSEL, StrId::STR_THEME_ROUNDEDRAFF, StrId::STR_THEME_COVER_GRID},
                         "uiTheme", StrId::STR_CAT_DISPLAY)
           .withEnumRawValues({CrossPointSettings::UI_THEME::CLASSIC, CrossPointSettings::UI_THEME::MINIMAL,
                               CrossPointSettings::UI_THEME::DASHBOARD, CrossPointSettings::UI_THEME::LYRA,
-                              CrossPointSettings::UI_THEME::LYRA_3_COVERS, CrossPointSettings::UI_THEME::LYRA_CAROUSEL,
-                              CrossPointSettings::UI_THEME::ROUNDEDRAFF, CrossPointSettings::UI_THEME::COVER_GRID}));
+                              CrossPointSettings::UI_THEME::LYRA_3_COVERS,
+                              CrossPointSettings::UI_THEME::LYRA_MINIMALIST,
+                              CrossPointSettings::UI_THEME::LYRA_CAROUSEL, CrossPointSettings::UI_THEME::ROUNDEDRAFF,
+                              CrossPointSettings::UI_THEME::COVER_GRID}));
+  add(SettingInfo::Value(StrId::STR_HOME_BOOK_COUNT, &CrossPointSettings::homeBookCount,
+                         {CrossPointSettings::MIN_HOME_BOOK_COUNT, CrossPointSettings::MAX_HOME_BOOK_COUNT, 1},
+                         "homeBookCount", StrId::STR_CAT_DISPLAY));
   add(SettingInfo::Enum(StrId::STR_UI_SCALE, &CrossPointSettings::uiScale, {StrId::STR_SMALL, StrId::STR_LARGE},
                         "uiScale", StrId::STR_CAT_DISPLAY)
           .withEnumRawValues({CrossPointSettings::UI_SCALE_SMALL, CrossPointSettings::UI_SCALE_LARGE}));
@@ -1530,7 +1535,7 @@ inline std::vector<SettingInfo> buildControlsSideButtonSettingsList(const std::v
 
 inline std::vector<SettingInfo> buildGroupedDisplaySettingsList(const std::vector<SettingInfo>& allSettings) {
   std::vector<SettingInfo> displaySettings;
-  displaySettings.reserve(9);
+  displaySettings.reserve(10);
 
   auto addDisplaySetting = [&](StrId nameId) {
     const auto it = std::find_if(allSettings.begin(), allSettings.end(),
@@ -1551,6 +1556,10 @@ inline std::vector<SettingInfo> buildGroupedDisplaySettingsList(const std::vecto
   addDisplaySetting(StrId::STR_REFRESH_FREQ);
   addDisplaySetting(StrId::STR_NIGHT_MODE);
   addDisplaySetting(StrId::STR_UI_THEME);
+  // Only Lyra Minimalist lists recent books by title, so only it has a count to set.
+  if (SETTINGS.uiTheme == CrossPointSettings::UI_THEME::LYRA_MINIMALIST) {
+    addDisplaySetting(StrId::STR_HOME_BOOK_COUNT);
+  }
   addDisplaySetting(StrId::STR_UI_SCALE);
   addDisplaySetting(StrId::STR_SUNLIGHT_FADING_FIX);
 

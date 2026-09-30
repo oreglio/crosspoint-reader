@@ -25,8 +25,9 @@ class HomeActivity final : public Activity {
   // Keep one rendered carousel frame in RAM. Additional frames remain available
   // through the SD snapshot cache and are paged in on demand.
   static constexpr int kCarouselFrameCount = 1;
-  // Must be >= LyraCarouselMetrics::values.homeRecentBooksCount (asserted in .cpp)
-  static constexpr int kMaxCachedBooks = 3;
+  // Must cover every theme's homeRecentBooksCount (asserted in .cpp); Lyra
+  // Minimalist lists up to five.
+  static constexpr int kMaxCachedBooks = 5;
 
  private:
   ButtonNavigator buttonNavigator;

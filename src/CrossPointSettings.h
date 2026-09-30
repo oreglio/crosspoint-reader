@@ -415,7 +415,12 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     MINIMAL = 5,
     DASHBOARD = 6,
     COVER_GRID = 7,
-    UI_THEME_COUNT = 8
+    UI_THEME_COUNT = 8,
+    // This fork's own theme, numbered far from upstream's next additions so a
+    // sync can never hand its persisted value to a different theme. It is past
+    // UI_THEME_COUNT on purpose: only settings JSON (never the legacy binary
+    // file that count guards) can carry it.
+    LYRA_MINIMALIST = 40,
   };
   enum RECENT_BOOKS_VIEW { RECENT_BOOKS_LIST = 0, RECENT_BOOKS_GRID = 1, RECENT_BOOKS_VIEW_COUNT };
 
@@ -676,6 +681,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t longPressButtonBehavior = OFF;
   // UI Theme
   uint8_t uiTheme = LYRA;
+  // Recent books listed at the top of Home by the Lyra Minimalist theme
+  uint8_t homeBookCount = 4;
   // Recently Opened layout in Library; keep the original raw values for older settings.
   uint8_t recentBooksView = RECENT_BOOKS_LIST;
   // UI scale (list fonts + row heights); touch boards default one step larger
@@ -795,6 +802,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   static constexpr uint8_t SCREEN_MARGIN_SMALL_STEP = 1;
   static constexpr uint8_t SCREEN_MARGIN_LARGE_STEP = 5;
   static constexpr uint8_t MAX_WORD_SPACING = 4;
+  static constexpr uint8_t MIN_HOME_BOOK_COUNT = 1;
+  static constexpr uint8_t MAX_HOME_BOOK_COUNT = 5;
   static constexpr uint16_t DEFAULT_READING_IDLE_TIME_THRESHOLD_SECONDS = 5 * 60;
   static constexpr uint16_t MIN_READING_IDLE_TIME_THRESHOLD_SECONDS = 30;
   static constexpr uint16_t MAX_READING_IDLE_TIME_THRESHOLD_SECONDS = 10 * 60;

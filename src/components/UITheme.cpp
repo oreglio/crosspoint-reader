@@ -21,6 +21,7 @@
 #include "components/themes/dashboard/DashboardTheme.h"
 #include "components/themes/lyra/Lyra3CoversTheme.h"
 #include "components/themes/lyra/LyraCarouselTheme.h"
+#include "components/themes/lyra/LyraMinimalistTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
 #include "components/themes/minimal/MinimalTheme.h"
 #include "components/themes/roundedraff/RoundedRaffTheme.h"
@@ -110,6 +111,11 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
       currentTheme = std::make_unique<Lyra3CoversTheme>();
       currentMetrics = &Lyra3CoversMetrics::values;
       break;
+    case CrossPointSettings::UI_THEME::LYRA_MINIMALIST:
+      LOG_DBG("UI", "Using Lyra Minimalist theme");
+      currentTheme = std::make_unique<LyraMinimalistTheme>();
+      currentMetrics = &LyraMinimalistMetrics::values;
+      break;
     case CrossPointSettings::UI_THEME::LYRA_CAROUSEL:
       LOG_DBG("UI", "Using Lyra Carousel theme");
       currentTheme = std::make_unique<LyraCarouselTheme>();
@@ -153,6 +159,14 @@ const ThemeMetrics& UITheme::getMetrics() const {
     metricsValid = true;
   }
 #endif
+  if (currentMetrics == &LyraMinimalistMetrics::values) {
+    // The book count is a setting, read on every call so a change applies on
+    // the next Home render without reloading the theme.
+    const int books = std::clamp<int>(SETTINGS.homeBookCount, CrossPointSettings::MIN_HOME_BOOK_COUNT,
+                                      CrossPointSettings::MAX_HOME_BOOK_COUNT);
+    adjustedMetrics.homeRecentBooksCount = books;
+    adjustedMetrics.homeCoverTileHeight = LyraMinimalistMetrics::topAreaHeight(books);
+  }
   return adjustedMetrics;
 }
 

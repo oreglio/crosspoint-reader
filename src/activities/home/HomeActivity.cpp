@@ -46,6 +46,7 @@
 #include "components/UITheme.h"
 #include "components/themes/dashboard/DashboardTheme.h"
 #include "components/themes/lyra/LyraCarouselTheme.h"
+#include "components/themes/lyra/LyraMinimalistTheme.h"
 #include "components/themes/minimal/MinimalTheme.h"
 #include "fontIds.h"
 
@@ -383,6 +384,10 @@ bool isDashboardTheme() {
   return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::DASHBOARD;
 }
 
+bool isLyraMinimalistTheme() {
+  return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::LYRA_MINIMALIST;
+}
+
 bool usesMinimalHomeInteraction() { return isMinimalTheme() || isDashboardTheme(); }
 
 bool showMinimalHomeButtonHints(const MappedInputManager& mappedInput) { return !mappedInput.hasTouch(); }
@@ -636,6 +641,8 @@ CarouselCache gCarouselCache;
 
 static_assert(HomeActivity::kMaxCachedBooks >= LyraCarouselMetrics::values.homeRecentBooksCount,
               "kMaxCachedBooks must cover all carousel slots");
+static_assert(HomeActivity::kMaxCachedBooks >= LyraMinimalistMetrics::kMaxBooks,
+              "kMaxCachedBooks must cover every book Lyra Minimalist lists");
 
 int HomeActivity::getMenuItemCount() const {
   if (coverGridUi) return static_cast<int>(recentBooks.size()) + (hasOpdsServers ? 5 : 4);
@@ -790,6 +797,14 @@ void HomeActivity::loadAllBookStats() {
 }
 
 void HomeActivity::loadRecentCovers(int coverHeight) {
+  // Lyra Minimalist shows titles only: thumbnails would cost SD reads and a
+  // 32 KB inflate window for pictures nobody sees.
+  if (isLyraMinimalistTheme()) {
+    recentsLoaded = true;
+    recentsLoading = false;
+    return;
+  }
+
   // Thumbnail generation may need a 32 KB contiguous inflate buffer. The Home
   // cover snapshot is only a redraw cache, so release it before ZIP work.
   if (coverBuffer) {
