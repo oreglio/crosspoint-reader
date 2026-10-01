@@ -1668,9 +1668,10 @@ inline std::vector<SettingInfo> buildSystemLibrarySettingsList(const std::vector
 // restent sur la carte Tasks du portail web, ou se tape une URL.
 inline std::vector<SettingInfo> buildSystemTasksSettingsList(const std::vector<SettingInfo>& allSettings) {
   std::vector<SettingInfo> settings;
-  settings.reserve(4);
+  settings.reserve(5);
   addSettingByName(settings, allSettings, StrId::STR_TASK_FONT_SIZE);
   addSettingByName(settings, allSettings, StrId::STR_TASK_SPACING);
+  addSettingByName(settings, allSettings, StrId::STR_TASK_SERVER_URL);
   settings.push_back(SettingInfo::Action(StrId::STR_TASK_PAIR, SettingAction::TaskPair));
   settings.push_back(SettingInfo::Action(StrId::STR_TASK_SYNC, SettingAction::TaskSync));
   return settings;

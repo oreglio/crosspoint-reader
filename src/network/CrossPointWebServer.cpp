@@ -1636,7 +1636,13 @@ void CrossPointWebServer::handleGetSettings() const {
   // The web API only reads it, so iterate the static base list directly rather
   // than copying its nested vectors and callbacks while WiFi is using the heap.
   sdFontSystem.refreshIfDirty();
-  const BaseSettingsListLease settingsLease(/*mustBuild=*/true);
+  // A checked build: on a short heap the page gets an error instead of the
+  // device aborting on the list's allocation.
+  const BaseSettingsListLease settingsLease(/*mustBuild=*/false);
+  if (!settingsLease.ok()) {
+    server->send(503, "text/plain", "Not enough memory to list settings, try again");
+    return;
+  }
   const auto& settings = settingsLease.list();
   const auto& fontFamilies = sdFontSystem.registry().getFamilies();
   const SdCardFontFamilyInfo* selectedSdFamily =
@@ -1796,13 +1802,33 @@ void CrossPointWebServer::handlePostSettings() {
   }
 
   sdFontSystem.refreshIfDirty();
-  const auto& settings = getSettingsList(&sdFontSystem.registry());
+  // Walk the base list in place, as handleGetSettings does: the indices the
+  // page posts come from that list. Copying it through getSettingsList() put a
+  // second ~36 KB list on the C3 heap beside WiFi and the web server, and the
+  // copy's allocation aborted the device. Only the two entries the SD font
+  // registry rewrites are built on their own, one at a time.
+  const BaseSettingsListLease settingsLease(/*mustBuild=*/false);
+  if (!settingsLease.ok()) {
+    server->send(503, "text/plain", "Not enough memory to apply settings, try again");
+    sdFontSystem.releaseRegistry();
+    return;
+  }
+  const SdCardFontRegistry& fontRegistry = sdFontSystem.registry();
+  const bool hasSdFonts = fontRegistry.getFamilyCount() > 0;
   int applied = 0;
   uint8_t CrossPointSettings::* twoFingerSwipeEdited = nullptr;
 
-  for (const auto& s : settings) {
-    if (!s.key || !isWebSettingAvailable(s)) continue;
-    if (!doc[s.key].is<JsonVariant>()) continue;
+  for (const auto& baseSetting : settingsLease.list()) {
+    if (!baseSetting.key || !isWebSettingAvailable(baseSetting)) continue;
+    if (!doc[baseSetting.key].is<JsonVariant>()) continue;
+
+    SettingInfo sdFontSetting;
+    if (hasSdFonts && baseSetting.nameId == StrId::STR_FONT_FAMILY) {
+      sdFontSetting = buildFontFamilySetting(&fontRegistry);
+    } else if (hasSdFonts && baseSetting.nameId == StrId::STR_FONT_SIZE) {
+      sdFontSetting = buildFontSizeSetting(&fontRegistry);
+    }
+    const SettingInfo& s = sdFontSetting.key ? sdFontSetting : baseSetting;
 
     switch (s.type) {
       case SettingType::TOGGLE: {
