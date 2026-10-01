@@ -23,6 +23,7 @@
 #include "KOReaderCredentialStore.h"
 #include "QuickActions.h"
 #include "activities/settings/SettingsActivity.h"
+#include "activities/tasks/TaskFontSizes.h"
 #include "components/UITheme.h"
 #include "util/Dictionary.h"
 #include "util/DictionaryRegistry.h"
@@ -920,7 +921,7 @@ inline std::vector<SettingInfo> buildBaseSettingsList() {
       {StrId::STR_TASK_SPACING_COMPACT, StrId::STR_TASK_SPACING_COMFORTABLE, StrId::STR_TASK_SPACING_SPACIOUS},
       "taskRowSpacing", StrId::STR_TASK_TITLE));
   add(SettingInfo::Enum(StrId::STR_TASK_FONT_SIZE, &CrossPointSettings::taskFontSize,
-                        {StrId::STR_TASK_FONT_10, StrId::STR_TASK_FONT_12, StrId::STR_TASK_FONT_14}, "taskFontSize",
+                        {StrId::STR_TASK_FONT_10, StrId::STR_TASK_FONT_12, kLargeTaskFontLabel}, "taskFontSize",
                         StrId::STR_TASK_TITLE));
 
   // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---

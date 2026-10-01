@@ -15,6 +15,7 @@
 #include "TaskStore.h"
 #include "activities/home/BookActions.h"
 #include "activities/tasks/TaskDetailActivity.h"
+#include "activities/tasks/TaskFontSizes.h"
 #include "activities/tasks/TaskPriorityChoices.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
@@ -104,14 +105,14 @@ fui::BitmapRef taskBox(const bool picked) { return taskBitmap(picked ? TASK_BOX_
 }  // namespace
 
 int TaskListActivity::taskListFontId() {
-  // Tailles fixes 10 / 12 / 14. Les polices d'interface s'arretent a l'Inter
-  // 12 : la 14 est la Lexend Deca integree, celle des notes de l'ecran de
-  // detail, avec son gras (taches prioritaires).
+  // Tailles fixes 10 / 12 / grande. Les polices d'interface s'arretent a
+  // l'Inter 12 : la grande est la Lexend Deca integree, avec son gras (taches
+  // prioritaires) -- 14 ou 16 selon le build, voir TaskFontSizes.h.
   switch (SETTINGS.taskFontSize) {
     case 1:
       return UI_12_FONT_ID;
     case 2:
-      return LEXENDDECA_14_FONT_ID;
+      return kLargeTaskFontId;
     default:
       return UI_10_FONT_ID;
   }
@@ -543,7 +544,7 @@ void TaskListActivity::openTaskMenu(const int index) {
 void TaskListActivity::chooseTextSize() {
   // Le meme reglage que Parametres > Systeme > Taches, choisi sans quitter la
   // liste : il s'applique au retour et s'enregistre comme depuis les Parametres.
-  std::vector<std::string> labels{tr(STR_TASK_FONT_10), tr(STR_TASK_FONT_12), tr(STR_TASK_FONT_14)};
+  std::vector<std::string> labels{tr(STR_TASK_FONT_10), tr(STR_TASK_FONT_12), I18N.get(kLargeTaskFontLabel)};
   const int current = SETTINGS.taskFontSize < labels.size() ? SETTINGS.taskFontSize : 0;
   startActivityForResult(
       std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "TaskFontSize", StrId::STR_TASK_FONT_SIZE,
