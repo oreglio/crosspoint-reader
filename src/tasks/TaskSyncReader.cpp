@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 
 #include "StreamingJsonParser.h"
 
@@ -251,11 +252,13 @@ JsonCallbacks fieldCallbacks(FieldSink& sink) {
 // StreamingJsonParser ne signale pas une entrée tronquée : il s'arrête au
 // dernier octet reçu sans erreur. On exige donc un objet ouvert puis refermé,
 // sinon une ligne coupée passerait pour une ligne complète aux champs absents.
-bool parseFlatObject(const char* line, size_t len, FieldSink& sink) {
-  StreamingJsonParser parser(fieldCallbacks(sink));
-  parser.feed(line, len);
-  return !parser.hasError() && sink.sawTopObject && !sink.structureBroken && !sink.badValue && sink.objDepth == 0 &&
-         sink.arrayDepth == 0;
+bool parseFlatObject(void* parserStorage, const char* line, size_t len, FieldSink& sink) {
+  auto* parser = new (parserStorage) StreamingJsonParser(fieldCallbacks(sink));
+  parser->feed(line, len);
+  const bool ok = !parser->hasError() && sink.sawTopObject && !sink.structureBroken && !sink.badValue &&
+                  sink.objDepth == 0 && sink.arrayDepth == 0;
+  parser->~StreamingJsonParser();
+  return ok;
 }
 
 }  // namespace
@@ -326,7 +329,7 @@ void TaskSyncReader::consumeLine(size_t len, bool dropped) {
 void TaskSyncReader::parseHeaderLine(size_t len) {
   FieldSink sink;
   sink.cb = &cb_;
-  if (!parseFlatObject(line_, len, sink)) {
+  if (!parseFlatObject(parserStorage_, line_, len, sink)) {
     TASK_LOG_ERR("sync: unreadable header line");
     error_ = true;
     return;
@@ -354,7 +357,7 @@ void TaskSyncReader::parseHeaderLine(size_t len) {
 
 void TaskSyncReader::parseTaskLine(size_t len) {
   FieldSink sink;
-  if (!parseFlatObject(line_, len, sink)) {
+  if (!parseFlatObject(parserStorage_, line_, len, sink)) {
     // Ligne illisible : noteBytes n'est pas fiable, donc on ne sait plus si des
     // octets bruts suivent. Continuer, ce serait relire une note comme du JSON.
     TASK_LOG_ERR("sync: unreadable task line");

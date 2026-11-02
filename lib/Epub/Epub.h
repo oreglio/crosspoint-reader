@@ -1,4 +1,5 @@
 #pragma once
+#include <ContentProtection.h>
 #include <Print.h>
 
 #include <cstdint>
@@ -16,7 +17,16 @@ class ZipFileStreamReader;
 class GfxRenderer;
 
 class Epub {
+ public:
+  struct SyncMetadata {
+    std::string isbn, asin, series, seriesIndex;
+  };
+  bool loadSyncMetadata(SyncMetadata& metadata);
+
  private:
+  mutable std::unique_ptr<freeink::content::ContentDecryptor> decryptor;
+  bool openProtection() const;
+  mutable std::string protectionError;
   // the ncx file (EPUB 2)
   std::string tocNcxItem;
   // the nav file (EPUB 3)
@@ -54,6 +64,9 @@ class Epub {
     None,
     OutOfMemory,
     InvalidOrUnreadable,
+    ProtectedUnavailable,
+    LoanExpired,
+    LoanClockUnavailable,
   };
 
   struct SourceChildRange {
@@ -75,6 +88,7 @@ class Epub {
   mutable std::unique_ptr<PxcV2Workspace> optimizerWorkspace;
   uint16_t optimizerIndexCount = 0;
   bool optimizerIndexReady = false;
+  bool optimizerManifestAbsent = false;
   bool findOptimizerImage(const std::string& itemHref) const;
   std::unique_ptr<LocationChapterGroupEntry[]> locationChapterGroups;
   size_t locationChapterGroupCount = 0;
@@ -99,7 +113,8 @@ class Epub {
 
   bool findContentOpfFile(std::string* contentOpfFile) const;
   bool parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, bool writeSpineEntries = true,
-                       bool collectCssFiles = true, bool metadataOnly = false, std::string* seriesIndex = nullptr);
+                       bool collectCssFiles = true, bool metadataOnly = false, std::string* seriesIndex = nullptr,
+                       SyncMetadata* syncMetadata = nullptr);
 
  public:
   // Title and author only, for the library index build. Reads the book's own
@@ -148,8 +163,8 @@ class Epub {
   // This fork: allowCachedMetadata has no default, so a two-argument call
   // resolves to the loadMetadata(title, author) above -- the one this fork's
   // index core uses, with EpubQuickMetadata's measured 8 KB inflate bound.
-  bool loadMetadata(std::string& title, std::string& author, bool allowCachedMetadata,
-                    std::string* series = nullptr, std::string* genre = nullptr, std::string* seriesIndex = nullptr);
+  bool loadMetadata(std::string& title, std::string& author, bool allowCachedMetadata, std::string* series = nullptr,
+                    std::string* genre = nullptr, std::string* seriesIndex = nullptr);
   // Loads optional stable-page and source-spine metadata after a Skip-mode open.
   // Failure leaves normal size-based progress available.
   bool loadXLocations();
@@ -187,6 +202,7 @@ class Epub {
   bool generateThumbBmp(int width, int height, const GfxRenderer* renderer = nullptr, int readerFontId = 0) const;
   // Generate a Home thumbnail from the EPUB cover without building reader pages or indexes.
   bool generateThumbBmpFromSource(int height, const GfxRenderer* renderer = nullptr, int readerFontId = 0);
+  bool generateThumbBmpFromSource(int width, int height, const GfxRenderer* renderer = nullptr, int readerFontId = 0);
   // Writes a thumbnail that can either crop-to-fill or contain unusual cover
   // ratios, depending on the source image dimensions.
   bool generateAdaptiveThumbBmp(int width, int height, const GfxRenderer* renderer = nullptr,
@@ -195,6 +211,8 @@ class Epub {
                                    bool trailingNullByte = false) const;
   bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize,
                                 bool allowEarlyStop = false) const;
+  // Publisher-font access also reverses declared Adobe font obfuscation.
+  bool readFontContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize) const;
   bool extractItemToFile(const std::string& itemHref, const std::string& destPath, size_t chunkSize = 4096) const;
   bool getItemSize(const std::string& itemHref, size_t* size) const;
   bool getOptimizerImageDimensions(const std::string& itemHref, uint16_t& width, uint16_t& height) const;
@@ -215,6 +233,8 @@ class Epub {
   size_t getBookSize() const;
   bool hasXLocations() const { return xLocationsLoaded; }
   bool hasStablePageNumbers() const;
+  bool resolveReferenceTextProgress(int spineIndex, uint32_t textOffset, uint32_t sectionTextLength,
+                                    double& completedUnits, double& totalUnits) const;
   uint32_t getReferencePageCount() const { return hasStablePageNumbers() ? totalReferencePages : 0; }
   float calculateSizeProgress(int currentSpineIndex, float currentSpineRead) const;
   float calculateProgress(int currentSpineIndex, float currentSpineRead) const;

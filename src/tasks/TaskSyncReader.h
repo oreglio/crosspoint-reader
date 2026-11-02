@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "StreamingJsonParser.h"
 #include "TaskRecord.h"
 
 // Version de cadrage que ce lecteur sait lire. Un en-tête qui annonce autre
@@ -53,15 +54,13 @@ class TaskSyncReader {
 
   explicit TaskSyncReader(const TaskSyncCallbacks& callbacks) : cb_(callbacks) {}
 
-  // Chaque fin de ligne coûte une pointe de pile transitoire, mesurée à
-  // ~1424 octets sur le chemin d'une ligne de tâche (~1200 pour l'en-tête) avec
-  // la chaîne du dépôt : riscv32-esp-elf-g++ -Os -fno-exceptions -fstack-usage.
-  // L'essentiel vient de deux cadres locaux à l'analyse d'une ligne, le
-  // collecteur de champs (576 avec TaskRecord) et StreamingJsonParser (672).
-  // Les deux sont de taille fixe et aucune récursion n'est possible ici : une
-  // entrée pathologique ne peut donc pas creuser plus. La tâche qui alimente
-  // feed() doit prévoir au moins 4 Ko, la taille retenue pour le travail
-  // réseau — et la pointe survient dans le rappel de réception TLS.
+  // Chaque fin de ligne coûte une pointe de pile transitoire : le collecteur
+  // de champs (576 octets avec TaskRecord), plus les cadres d'appel. Mesurée à
+  // ~1424 octets quand le parseur était lui aussi local (672) ; il vit
+  // désormais dans parserStorage_, cet objet étant alloué sur le tas, car son
+  // tampon de jeton est passé à 2048 octets dans le SDK (~2,2 Ko au total).
+  // Aucune récursion n'est possible ici. La tâche qui alimente feed() doit
+  // prévoir au moins 4 Ko — la pointe survient dans le rappel de réception TLS.
   void feed(const char* data, size_t len);
   bool hasError() const { return error_; }
   bool sawHeader() const { return sawHeader_; }
@@ -80,6 +79,10 @@ class TaskSyncReader {
   void beginNoteBlock(const char* id, size_t bytes);
 
   TaskSyncCallbacks cb_;
+  // Place du parseur JSON, reconstruit en place à chaque ligne (ses rappels
+  // visent le collecteur de cette ligne). Ici plutôt que sur la pile : voir
+  // feed().
+  alignas(StreamingJsonParser) unsigned char parserStorage_[sizeof(StreamingJsonParser)];
   Mode mode_ = Mode::Line;
   char line_[LINE_BUF_SIZE] = {};
   size_t lineLen_ = 0;

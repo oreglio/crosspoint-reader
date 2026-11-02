@@ -30,6 +30,9 @@ class HalDisplay {
   // (~770ms each on X3).
   void begin(bool seamless = false);
 
+  // Selected SDK driver identity; nullptr before display initialization.
+  const char* getControllerName() const;
+
   // Display dimensions
   static constexpr uint16_t DISPLAY_WIDTH = EInkDisplay::DISPLAY_WIDTH;
   static constexpr uint16_t DISPLAY_HEIGHT = EInkDisplay::DISPLAY_HEIGHT;
@@ -47,6 +50,9 @@ class HalDisplay {
   // Persistently invert panel output while leaving framebuffer drawing in its
   // normal logical colors.
   void setInverted(bool inverted);
+  // Restore the controller's old-image plane from the saved Quick Resume frame.
+  // Returns false when the SDK or panel cannot support a differential first paint.
+  bool restoreVisibleFrame();
   // Non-blocking refresh (shadow-free): starts the panel waveform and returns
   // while the panel refreshes on its own. The framebuffer must stay untouched
   // until waitRefreshComplete(), and the caller must rebuild the differential

@@ -168,13 +168,16 @@ void applyRequestedTheme() {
 
 // Le francais est la langue ou les libelles debordent : c'est lui qu'il faut
 // voir, pas seulement l'anglais par defaut du simulateur.
+// CROSSINK_SIMULATOR_TASKS_LANG prend un code de langue ("FR"). La langue se
+// choisit une fois par demarrage (I18n::begin) : elle est enregistree ici et
+// s'applique au demarrage suivant du simulateur.
 void applyRequestedLanguage() {
-  const char* raw = std::getenv("CROSSINK_SIMULATOR_TASKS_LANG");
-  if (raw == nullptr || raw[0] == '\0') return;
-  const int lang = std::atoi(raw);
-  SETTINGS.language = static_cast<uint8_t>(lang);
-  I18N.setLanguage(static_cast<Language>(lang));
-  LOG_INF("TOUR", "language %d", lang);
+  const char* code = std::getenv("CROSSINK_SIMULATOR_TASKS_LANG");
+  if (code == nullptr || code[0] == '\0') return;
+  std::snprintf(SETTINGS.languageCode, sizeof(SETTINGS.languageCode), "%s", code);
+  if (!SETTINGS.saveGlobalDefaults()) LOG_ERR("TOUR", "Cannot save language %s", code);
+  I18N.begin(SETTINGS.languageCode);
+  LOG_INF("TOUR", "language %s (applies from the next boot if already started)", code);
 }
 
 TaskRecord makeRecord(const char* id, const char* title, uint8_t priority, bool done) {

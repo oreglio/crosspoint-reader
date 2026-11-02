@@ -3,6 +3,7 @@
 #include <HalGPIO.h>
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 
 #include "util/EdgeSlide.h"
@@ -20,6 +21,7 @@ class MappedInputManager {
     EdgeSlide direction = EdgeSlide::None;
     int distance = 0;
     bool finished = false;
+    bool leftEdgeBand = false;
   };
 
   struct CompletedSwipe {
@@ -74,6 +76,10 @@ class MappedInputManager {
   // Enable/disable reader-specific front button mapping.
   // Call with true in reader activity onEnter(), false in onExit().
   void setReaderMode(bool enabled) { readerMode = enabled; }
+  // Menus follow the screen rotation independently of reader page-turn preferences.
+  // Publish while holding RenderLock, before drawing can temporarily rotate the renderer.
+  void setMenuMode(bool enabled);
+  bool isMenuMode() const { return navigationContext.load(std::memory_order_relaxed) & MENU_MODE; }
   void setPowerAsConfirmInReaderMode(bool enabled) { powerAsConfirmInReaderMode = enabled; }
 #if CROSSINK_APP_CAP_TOUCH
   void setReaderTouchscreenOverride(bool enabled) { readerTouchscreenOverride = enabled; }
@@ -86,6 +92,7 @@ class MappedInputManager {
   void suppressNextConfirmRelease() { releaseSuppression.suppressConfirm(); }
   void suppressNextPowerRelease() { releaseSuppression.suppressPower(); }
   void suppressNextSideRelease(Button button);
+  void suppressNextFrontRelease(Button button);
   void suppressNextPowerConfirmRelease() { releaseSuppression.suppressPowerConfirm(); }
   bool isPowerReleaseSuppressed() const { return releaseSuppression.isPowerReleaseSuppressed(); }
   bool wasPressed(Button button) const;
@@ -135,7 +142,7 @@ class MappedInputManager {
     suppressNextTouchTap();
     gpio.suppressTouchContact();
 #ifdef SIMULATOR
-    suppressSimulatedTouchContact = true;
+    suppressSimulatedTouchContact = simulatorTouch.pressed || simulatorTouch.releasedThisFrame;
 #endif
   }
   bool wasItemTapped(int& id) const;
@@ -236,10 +243,18 @@ class MappedInputManager {
   constexpr bool wasReaderLightPanelGesture() const { return false; }
   constexpr bool wasReaderMenuHold() const { return false; }
 #endif
+  // Directions for tabbed menus, derived from the physical button layout.
+  Button menuButton(Button direction) const;
+  // Upper increases on vertical layouts; right increases on horizontal layouts.
+  Button sliderIncreaseButton() const;
+  Button sliderDecreaseButton() const { return sliderIncreaseButton() == Button::Up ? Button::Down : Button::Up; }
+  // Non-consuming: queued edges, held keys/fingers, or input in this frame.
+  bool hasPendingActivity() const;
   bool wasAnyPressed() const;
   bool wasAnyReleased() const;
   unsigned long getHeldTime() const;
-  // True when reader-mode orientation handling swaps the logical front navigation buttons.
+  uint32_t buttonSampleTime() const;
+  // True when the current navigation context swaps the logical front navigation buttons.
   bool isFrontNavButtonSwapActive() const;
   Label withBackArrow(const char* text) const;
   Label withPreviousPageArrow(const char* text) const;
@@ -267,6 +282,10 @@ class MappedInputManager {
   HalGPIO& gpio;
   const GfxRenderer& renderer;
   bool readerMode = false;
+  static constexpr uint8_t MENU_MODE = 4;
+  // One atomic snapshot keeps the input context and its stable screen rotation together.
+  std::atomic<uint8_t> navigationContext{0};
+  uint8_t menuOrientation() const { return navigationContext.load(std::memory_order_relaxed) & (MENU_MODE - 1); }
   bool powerAsConfirmInReaderMode = false;
 #if CROSSINK_APP_CAP_TOUCH
   bool readerTouchscreenOverride = false;
@@ -278,6 +297,10 @@ class MappedInputManager {
   bool edgeSlideQualified = false;
 #endif
   mutable ReleaseSuppression releaseSuppression;
+  mutable uint8_t suppressedFrontReleases = 0;
+#ifdef SIMULATOR
+  mutable uint8_t suppressedSimulatedFrontReleases = 0;
+#endif
   mutable bool suppressPhysicalUpRelease = false;
   mutable bool suppressPhysicalDownRelease = false;
   static constexpr size_t LABEL_BUFFER_SIZE = 128;
@@ -294,10 +317,7 @@ class MappedInputManager {
   std::array<bool, BUTTON_COUNT> simulatorReleased{};
   std::array<bool, BUTTON_COUNT> simulatorHeld{};
   std::array<unsigned long, BUTTON_COUNT> simulatorPressStart{};
-  // Duree de l'appui qu'une relache injectee termine : sans elle, une action
-  // dispatchee a la relache selon getHeldTime() (menus par appui long) ne
-  // verrait jamais qu'un appui nul, simulatorHeld etant deja retombe.
-  std::array<unsigned long, BUTTON_COUNT> simulatorReleaseHeldMs{};
+  std::array<unsigned long, BUTTON_COUNT> simulatorReleasedHeldTime{};
 #if CROSSINK_APP_CAP_TOUCH
   struct SimulatorTouch {
     bool pressed = false;
@@ -318,6 +338,7 @@ class MappedInputManager {
   bool mapButton(Button button, bool (HalGPIO::*fn)(uint8_t) const) const;
   bool wasPhysicallyReleased(Button button) const;
   void expireReleaseSuppressions() const;
+  uint8_t mappedSideButtonFor(Button button) const;
   uint8_t mappedFrontButtonFor(Button button) const;
   bool shouldUsePowerAsConfirmFallback() const;
   bool shouldMirrorPowerAsConfirmHold() const;

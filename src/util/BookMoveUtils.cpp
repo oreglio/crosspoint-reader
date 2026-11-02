@@ -1,22 +1,34 @@
 #include "BookMoveUtils.h"
 
 #include <Epub.h>
+#include <FsHelpers.h>
 #include <HalStorage.h>
 #include <LibraryBuilder.h>
 #include <LibraryState.h>
 #include <Logging.h>
 #include <Txt.h>
+#include <Utf8.h>
 #include <Xtc.h>
 
+#include <algorithm>
 #include <cstring>
 
 #include "BookmarkStore.h"
 #include "ClippingStore.h"
 #include "CrossPointState.h"
 #include "RecentBooksStore.h"
+#include "sync/BookSyncFile.h"
+#include "sync/SyncPending.h"
 
 namespace {
 constexpr char READ_FOLDER[] = "/Read";
+
+const char* bookTypeForPath(const std::string& path) {
+  if (FsHelpers::hasEpubExtension(path)) return "epub";
+  if (FsHelpers::hasXtcExtension(path)) return "xtc";
+  if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) return "txt";
+  return nullptr;
+}
 
 bool getCachePath(const std::string& bookPath, const char* bookType, std::string& cachePath) {
   if (strcmp(bookType, "epub") == 0) {
@@ -34,6 +46,56 @@ bool getCachePath(const std::string& bookPath, const char* bookType, std::string
 }  // namespace
 
 namespace BookMoveUtils {
+
+RenameMigrationResult renameFilePreservingBookState(const std::string& oldPath, const std::string& newPath) {
+  const char* bookType = bookTypeForPath(oldPath);
+  if (!bookType) {
+    if (!Storage.rename(oldPath.c_str(), newPath.c_str())) {
+      LOG_ERR("BookMove", "Failed to rename file: %s -> %s", oldPath.c_str(), newPath.c_str());
+      return RenameMigrationResult::RolledBack;
+    }
+    const bool moveSleepImage = APP_STATE.favoriteSleepImagePath == oldPath;
+    const bool moveBootImage = APP_STATE.favoriteBootImagePath == oldPath;
+    if (!moveSleepImage && !moveBootImage) return RenameMigrationResult::Success;
+    if (moveSleepImage) APP_STATE.favoriteSleepImagePath = newPath;
+    if (moveBootImage) APP_STATE.favoriteBootImagePath = newPath;
+    if (APP_STATE.saveToFile()) return RenameMigrationResult::Success;
+    LOG_ERR("BookMove", "Failed to save renamed favorite image path: %s", newPath.c_str());
+    if (!Storage.rename(newPath.c_str(), oldPath.c_str())) {
+      LOG_ERR("BookMove", "Failed to restore original favorite image filename: %s", oldPath.c_str());
+      return RenameMigrationResult::KeepRenamed;
+    }
+    if (moveSleepImage) APP_STATE.favoriteSleepImagePath = oldPath;
+    if (moveBootImage) APP_STATE.favoriteBootImagePath = oldPath;
+    if (!APP_STATE.saveToFile())
+      LOG_ERR("BookMove", "Failed to restore favorite image references: %s", oldPath.c_str());
+    return RenameMigrationResult::RolledBack;
+  }
+
+  const char* newBookType = bookTypeForPath(newPath);
+  if (!newBookType || strcmp(bookType, newBookType) != 0) {
+    LOG_ERR("BookMove", "Rename would change book format: %s -> %s", oldPath.c_str(), newPath.c_str());
+    return RenameMigrationResult::InvalidBookType;
+  }
+
+  std::string oldCachePath;
+  if (!getCachePath(oldPath, bookType, oldCachePath)) return RenameMigrationResult::RolledBack;
+
+  std::string title = oldPath.substr(oldPath.find_last_of('/') + 1);
+  const auto extension = title.rfind('.');
+  if (extension != std::string::npos) title.resize(extension);
+  utf8ComposeNfcInPlace(title.data());
+  title.resize(strlen(title.c_str()));
+  std::string author;
+  const auto& recentBooks = RECENT_BOOKS.getBooks();
+  const auto recent = std::find_if(recentBooks.begin(), recentBooks.end(),
+                                   [&oldPath](const RecentBook& book) { return book.path == oldPath; });
+  if (recent != recentBooks.end()) {
+    if (!recent->title.empty()) title = recent->title;
+    author = recent->author;
+  }
+  return migrateRenamedBookState(oldPath, newPath, oldCachePath, title, author, bookType);
+}
 
 std::string buildReadFolderDestination(const std::string& srcPath) {
   const size_t lastSlash = srcPath.rfind('/');
@@ -66,6 +128,17 @@ RenameMigrationResult migrateRenamedBookState(const std::string& oldPath, const 
 
   std::string newCachePath;
   if (!getCachePath(newPath, bookType, newCachePath)) return RenameMigrationResult::RolledBack;
+
+  // A deleted book may leave saved data at this filename. Reject it before
+  // staging anything, even if the source book has never created a cache.
+  const auto& recentBooks = RECENT_BOOKS.getBooks();
+  if (Storage.exists(newCachePath.c_str()) || BookmarkStore::hasStoredStateForFilePath(newPath, bookType) ||
+      (strcmp(bookType, "epub") == 0 && ClippingStore::hasStoredStateForFilePath(newPath, bookType)) ||
+      std::any_of(recentBooks.begin(), recentBooks.end(),
+                  [&newPath](const RecentBook& book) { return book.path == newPath; })) {
+    LOG_ERR("BookMove", "Rename target already has saved reader state: %s", newPath.c_str());
+    return RenameMigrationResult::DestinationStateExists;
+  }
 
   bool cacheMoved = false;
   bool bookRenamed = false;
@@ -137,6 +210,8 @@ RenameMigrationResult migrateRenamedBookState(const std::string& oldPath, const 
       }
     }
     commitMetadata();
+    if (!SyncPending::renamePath(oldPath, newPath)) LOG_ERR("BookMove", "Pending sync entry not renamed (non-fatal)");
+    BookSyncFile::onRenamed(oldPath, newPath);
     return RenameMigrationResult::KeepRenamed;
   };
 
@@ -208,6 +283,9 @@ RenameMigrationResult migrateRenamedBookState(const std::string& oldPath, const 
   }
 
   commitMetadata();
+  // A not-yet-uploaded book keeps its place in the next sync's push.
+  if (!SyncPending::renamePath(oldPath, newPath)) LOG_ERR("BookMove", "Pending sync entry not renamed (non-fatal)");
+  BookSyncFile::onRenamed(oldPath, newPath);
 
   return RenameMigrationResult::Success;
 }
@@ -247,6 +325,12 @@ bool migrateMovedEpubState(const std::string& oldPath, const std::string& newPat
     APP_STATE.openEpubPath = newPath;
     APP_STATE.saveToFile();
   }
+
+  if (!SyncPending::renamePath(oldPath, newPath)) {
+    LOG_ERR("BookMove", "Failed to move pending sync entry %s -> %s", oldPath.c_str(), newPath.c_str());
+    ok = false;
+  }
+  BookSyncFile::onRenamed(oldPath, newPath);
 
   return ok;
 }

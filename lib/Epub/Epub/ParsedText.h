@@ -18,6 +18,15 @@ template <typename T>
 class ArenaVector;
 
 class ParsedText {
+ public:
+  void setInitialLetter(const char* prefix);
+  struct InlineImagePlacement {
+    uint16_t id;
+    int16_t x;
+    uint16_t height;
+  };
+
+ private:
   // words/rubyTexts are std::deque, not std::vector: a paragraph can hold thousands
   // of tokens (CJK splits every character), and a vector grows by reallocating its
   // whole element array into one contiguous block (32 B/std::string -> 64-128 KB at
@@ -27,8 +36,12 @@ class ParsedText {
   // (largest contiguous alloc stays ~2 KB regardless of token count), so it never
   // triggers that. The per-token parallel arrays below stay vectors: 1 byte / 1 bit
   // each, they never approach the contiguous-block ceiling.
+  char initialLetter[13] = {};
   std::deque<std::string> words;
   std::vector<EpdFontFamily::Style> wordStyles;
+  std::vector<uint32_t> wordFontFamilies;  // allocated only for publisher fonts
+  std::vector<uint8_t> wordFontSizes;      // empty for ordinary paragraphs; one byte per token otherwise
+  int wordFontId(const GfxRenderer& renderer, int base, size_t index) const;
   std::vector<bool> wordContinues;         // true = word attaches to previous (no space before it)
   std::vector<bool> wordNoSpaceBefore;     // true = may break before token, but no synthetic space when joined
   std::vector<uint8_t> wordFocusBoundary;  // UTF-8 byte offset where the regular suffix starts; 0 = no split
@@ -60,6 +73,7 @@ class ParsedText {
   bool focusReadingEnabled;
   bool guideReadingEnabled;
   uint8_t wordSpacing;
+  int8_t characterSpacing;
   BlockStyle blockStyle;
   bool hasRtlWord;
   bool trackReferenceOffsets;
@@ -84,6 +98,7 @@ class ParsedText {
   std::vector<uint8_t> lineBackgroundBlackScratch;
   std::vector<int16_t> lineLeadingPaddingScratch;
   std::vector<uint16_t> visualOrderScratch;
+  std::vector<InlineImagePlacement> lineImagesScratch;
 
   void reserveTokenCapacity(size_t additionalTokens);
   int resolveFirstLineIndent(bool isFirstLine, const GfxRenderer& renderer, int fontId) const;
@@ -95,7 +110,8 @@ class ParsedText {
                          ArenaVector<uint8_t>& gapSlots, ArenaVector<size_t>& lineBreakIndices);
   bool computeHyphenatedLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
                                    ArenaVector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
-                                   std::vector<bool>& noSpaceBeforeVec, ArenaVector<size_t>& lineBreakIndices);
+                                   std::vector<bool>& noSpaceBeforeVec, ArenaVector<size_t>& lineBreakIndices,
+                                   size_t maxLines);
   bool hyphenateWordAtIndex(size_t wordIndex, int availableWidth, const GfxRenderer& renderer, int fontId,
                             ArenaVector<uint16_t>& wordWidths, bool allowFallbackBreaks);
   bool splitTokenAtCodepointBoundary(size_t wordIndex, int availableWidth, const GfxRenderer& renderer, int fontId,
@@ -123,13 +139,15 @@ class ParsedText {
   explicit ParsedText(const bool extraParagraphSpacing, const bool forceParagraphIndents = false,
                       const bool hyphenationEnabled = false, const bool focusReadingEnabled = false,
                       const bool guideReadingEnabled = false, const uint8_t wordSpacing = 0,
-                      const BlockStyle& blockStyle = BlockStyle(), const bool trackReferenceOffsets = false)
+                      const BlockStyle& blockStyle = BlockStyle(), const bool trackReferenceOffsets = false,
+                      const int8_t characterSpacing = 0)
       : extraParagraphSpacing(extraParagraphSpacing),
         forceParagraphIndents(forceParagraphIndents),
         hyphenationEnabled(hyphenationEnabled),
         focusReadingEnabled(focusReadingEnabled),
         guideReadingEnabled(guideReadingEnabled),
         wordSpacing(wordSpacing),
+        characterSpacing(characterSpacing),
         blockStyle(blockStyle),
         hasRtlWord(false),
         trackReferenceOffsets(trackReferenceOffsets) {}
@@ -137,7 +155,11 @@ class ParsedText {
 
   void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false,
                bool backgroundBlack = false, uint8_t linkId = 0, uint32_t visibleTextOffset = 0,
-               uint32_t referenceTextOffset = 0, int16_t leadingPadding = 0);
+               uint32_t referenceTextOffset = 0, int16_t leadingPadding = 0, bool noSpaceBefore = false,
+               uint8_t pointSize = 0, uint32_t fontFamily = 0);
+  void addInlineImage(uint16_t id, uint16_t width, uint16_t height, bool attachToPrevious, uint32_t visibleTextOffset,
+                      uint32_t referenceTextOffset);
+  const std::vector<InlineImagePlacement>& currentLineImages() const { return lineImagesScratch; }
   void setRubyForWordAt(size_t index, const std::string& ruby);
   void setRubyGroupAt(size_t startIndex, size_t count, const std::string& ruby);
   EpdFontFamily::Style getWordStyleAt(size_t index) const {
@@ -150,9 +172,10 @@ class ParsedText {
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }
   bool isContinuation() const { return isContinuation_; }
+  void setContinuation(bool continuation) { isContinuation_ = continuation; }
   bool layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>, uint32_t, uint32_t)>& processLine,
-                             bool includeLastLine = true);
+                             bool includeLastLine = true, size_t maxLines = SIZE_MAX);
   bool layoutAndExtractLinesPreservingSource(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                                              const std::function<void(std::shared_ptr<TextBlock>)>& processLine,
                                              bool allowCharacterBreaks = false) const;

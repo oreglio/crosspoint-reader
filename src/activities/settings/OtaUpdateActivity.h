@@ -6,6 +6,9 @@
 #include "network/OtaUpdater.h"
 
 class OtaUpdateActivity : public Activity {
+#ifdef SIMULATOR
+  friend struct ScreenCalibrationSmokeTest;
+#endif
   enum State {
     CHANNEL_SELECTION,
     WIFI_SELECTION,

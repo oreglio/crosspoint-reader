@@ -120,14 +120,15 @@ void KeyboardLayoutsActivity::listScreen(UiApp::ScreenType& screen, void* user) 
 
 void KeyboardLayoutsActivity::buildListScreen(UiApp::ScreenType& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  screen.setContentMargin(
-      fui::Insets{static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput)), 0,
-                  static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  setUiContentMargin(screen, renderer,
+                     fui::Insets{static_cast<int16_t>(TouchHeaderBackButton::contentTop(renderer, mappedInput)), 0,
+                                 static_cast<int16_t>(UITheme::getButtonHintsReserve(renderer)), 0});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   for (uint8_t i = 0; i < keyboard_layouts::COUNT; ++i) {
-    rowItems[i].value = isLocked(i) ? tr(STR_DEFAULT_VALUE)
-                                    : (workingMask & keyboard_layouts::bitAt(i) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF));
+    rowItems[i].toggle = !isLocked(i);
+    rowItems[i].toggleChecked = (workingMask & keyboard_layouts::bitAt(i)) != 0;
+    rowItems[i].value = isLocked(i) ? tr(STR_DEFAULT_VALUE) : nullptr;
   }
 
   fui::ListProps props;
@@ -155,7 +156,7 @@ void KeyboardLayoutsActivity::render(RenderLock&&) {
     GUI.drawHeader(renderer, header, tr(STR_KEYBOARD_LAYOUTS));
   }
   uiReady = false;
-  app.render();
+  renderUiApp(app, uiTarget);
   uiReady = true;
   const auto labels =
       mappedInput.mapLabels(mappedInput.withBackArrow(tr(STR_BACK)), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));

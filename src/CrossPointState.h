@@ -49,6 +49,9 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   // True only when Quick Lock turned an active frontlight off. It survives a
   // normal Quick Lock session so its matching unlock can restore the light.
   bool quickLockRestoreFrontlight = false;
+  // Release notes revision the user has dismissed / last auto-tried a language pack update for (0 = never).
+  uint16_t releaseNotesSeen = 0;
+  uint16_t releaseNotesUpdateTried = 0;
   PendingOverlayResume pendingOverlayResume{};
 
   void setPendingOverlayResume(PendingOverlayResume value);
@@ -84,6 +87,9 @@ class CrossPointState : public PersistableStore<CrossPointState> {
 
  private:
   bool loadFromBinaryFile();
+  // Last successfully written snapshot; guarded by storeMutex.
+  mutable uint32_t lastSavedCrc = 0;
+  mutable bool lastSavedCrcValid = false;
 };
 
 // Helper macro to access settings

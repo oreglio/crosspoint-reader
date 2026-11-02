@@ -10,6 +10,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "ScalableFontSizing.h"
+
 // Borrows the app's render mutex when already held; otherwise owns it for
 // this scope. A whole draw retains the outer RenderLock and borrowed pixels.
 class ScalableFontAccess {
@@ -29,15 +31,17 @@ class ScalableFontAccess {
 class HalScalableFont {
  public:
   static constexpr size_t MaxFileBytes = 2 * 1024 * 1024;
+  static constexpr size_t MaxFilenameFileBytes = 32 * 1024 * 1024;
   static constexpr size_t MaxFamilyBytes = 6 * 1024 * 1024;
   static constexpr size_t ReaderReserveBytes = 1024 * 1024;
   struct Info {
     char family[64] = {};
     uint8_t style = 0;
+    bool variable = false;
   };
   // Temporary uses a per-open identity and streams large faces; never persist
   // its layouts. Auto and Stream retain content-based reader cache identities.
-  enum class FileMode { Auto, Stream, Temporary };
+  enum class FileMode { Auto, Stream, Temporary, Filename };
   HalScalableFont() = default;
   ~HalScalableFont();
   HalScalableFont(const HalScalableFont&) = delete;
@@ -50,7 +54,7 @@ class HalScalableFont {
   // The caller must unregister every EpdFont returned by atSize() before
   // changing options because their cached metrics are rebuilt in place.
   bool setRenderOptions(const freeink::font::FtFont::RenderOptions& options);
-  static bool fileSize(const char* path, size_t& size);
+  static bool fileSize(const char* path, size_t& size, size_t limit = MaxFileBytes);
   static bool prepareFamily(size_t bytes, size_t faces);
   size_t fileBytes() const { return fileBytes_; }
   // OpenType's whole-file checksum is advisory: some usable fonts ship with
@@ -59,7 +63,7 @@ class HalScalableFont {
   bool lastFailureLooksLikeFontData() const { return fontDataFailure_; }
   bool hasCodepoint(uint32_t cp);
   bool probeGlyph(uint32_t cp, uint8_t points);
-  static bool inspectFile(const char* path, Info& info, bool* unavailable = nullptr);
+  static bool inspectFile(const char* path, Info& info, bool* unavailable = nullptr, size_t limit = MaxFileBytes);
   static uint32_t renderingRevision();
   uint32_t fingerprint() const { return hash_; }
   const EpdFont* atSize(uint8_t points);
@@ -85,8 +89,8 @@ class HalScalableFont {
   static constexpr size_t StreamBufferBytes = StreamWindowBytes * StreamWindowCount;
   bool openSource(const uint8_t* bytes, size_t size, bool streamed, const freeink::font::FtFont::RenderOptions& options,
                   uint32_t contentHash, bool temporary = false);
-  static constexpr uint8_t MinPointSize = 8;
-  static constexpr uint8_t MaxPointSize = 22;
+  static constexpr uint8_t MinPointSize = ScalableContentMinPointSize;
+  static constexpr uint8_t MaxPointSize = ScalableContentMaxPointSize;
   static constexpr size_t SizeCount = MaxPointSize - MinPointSize + 1;
   uint32_t cacheId_ = 0;
   bool metricFailureLogged_ = false;

@@ -30,7 +30,6 @@ constexpr int kTabHorizontalInset = 2;
 constexpr int kTitleFontId = UI_12_FONT_ID;     // Requested main title size: 12px
 constexpr int kSubtitleFontId = SMALL_FONT_ID;  // Requested subtitle size: 8px
 constexpr int kGuideFontId = SMALL_FONT_ID;     // Closest available to requested 6px
-constexpr int kHeaderClockYOffset = 3;
 
 void drawScrollBar(const GfxRenderer& renderer, Rect rect, int itemCount, int pageStartIndex, int pageItems) {
   if (itemCount <= 0 || pageItems <= 0 || itemCount <= pageItems) {
@@ -55,14 +54,13 @@ void drawScrollBar(const GfxRenderer& renderer, Rect rect, int itemCount, int pa
 int coverWidth = 0;
 
 void RoundedRaffTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle,
-                                  const bool readerContext, const bool showStatus) const {
+                                  const bool readerContext, const bool showStatus, const bool filenameTitle) const {
   // Home screen header is custom-rendered in drawRecentBookCover.
   if (title == nullptr) {
-    const int clockYOffset = readerContext ? 0 : kHeaderClockYOffset;
-    if (showStatus) drawTopStatusBarClock(renderer, rect.y, nullptr, readerContext, clockYOffset);
+    if (showStatus) drawDisplayStatusBar(renderer, rect.y);
     return;
   }
-  BaseTheme::drawHeader(renderer, rect, title, subtitle, readerContext, showStatus);
+  BaseTheme::drawHeader(renderer, rect, title, subtitle, readerContext, showStatus, filenameTitle);
 }
 
 void RoundedRaffTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
@@ -131,7 +129,7 @@ void RoundedRaffTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
     coverWidth = RoundedRaffMetrics::values.homeCoverHeight * 2 / 3;
   }
   const int imgY = tileY + (tileHeight - RoundedRaffMetrics::values.homeCoverHeight) / 2;
-  const int tileX = RoundedRaffMetrics::values.contentSidePadding;
+  const int tileX = rect.x + RoundedRaffMetrics::values.contentSidePadding;
   // Draw book card regardless, fill with message based on `hasContinueReading`
   // Draw cover image as background if available (inside the box)
   // Only load from SD on first render, then use stored buffer
@@ -411,9 +409,10 @@ void RoundedRaffTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, 
 
   const int pageWidth = renderer.getScreenWidth();
   const int pageHeight = renderer.getScreenHeight();
-  const int sidePadding = 20;
+  const int sidePadding = std::max(
+      20, static_cast<int>(std::max(renderer.getViewableInsets().edges[1], renderer.getViewableInsets().edges[3])));
   const int groupGap = 10;
-  const int bottomMargin = 10;
+  const int bottomMargin = 10 + UITheme::getButtonHintsBottomInset(renderer);
   const int hintHeight = RoundedRaffMetrics::values.buttonHintsHeight - 10;  // 30px total guide height
   const int groupWidth = (pageWidth - sidePadding * 2 - groupGap) / 2;
   const int outlineY = pageHeight - hintHeight - bottomMargin;

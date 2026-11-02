@@ -17,8 +17,11 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 
+#include "CrossPointState.h"
+#include "FilenameFontSystem.h"
 #include "activities/home/BookActions.h"
 #include "activities/home/FileBrowserActionActivity.h"
 #include "activities/home/RecentBookProgress.h"
@@ -33,11 +36,14 @@
 #include "components/UiAppHelpers.h"
 #include "components/icons/libraryIcons.h"
 #include "components/icons/listIcons.h"
+#include "sync/BookSyncFile.h"
+#include "sync/SyncPending.h"
 
 namespace fui = freeink::ui;
 
 namespace {
 constexpr fui::ActionId ACTION_ROW = 1;
+constexpr fui::ActionId ACTION_DELETE = 3;
 constexpr fui::ActionId ACTION_CONTROL = 2;
 constexpr unsigned long LONG_PRESS_MS = 1000;
 constexpr unsigned long ACTION_FEEDBACK_MS = 1000;
@@ -51,6 +57,11 @@ constexpr int GRID_SELECTION_PADDING = 4;
 constexpr int GRID_SELECTION_OUTLINE_GAP = 2;
 constexpr int GRID_SELECTION_OUTER_INSET = GRID_SELECTION_PADDING + GRID_SELECTION_OUTLINE_GAP;
 constexpr int GRID_COVER_CORNER_RADIUS = 2;
+
+uint8_t visibleLibraryFileTypes() {
+  return (SETTINGS.libraryShowEpub ? library::FileEpub : 0) | (SETTINGS.libraryShowXtc ? library::FileXtc : 0) |
+         (SETTINGS.libraryShowTxt ? library::FileTxt : 0) | (SETTINGS.libraryShowMarkdown ? library::FileMarkdown : 0);
+}
 
 const RecentBook* recentBookForPath(const std::string& path) {
   const auto& books = RECENT_BOOKS.getBooks();
@@ -83,6 +94,18 @@ LibraryActivity::LibraryActivity(GfxRenderer& renderer, MappedInputManager& mapp
 
 void LibraryActivity::onEnter() {
   {
+    RenderLock lock(*this);
+    filenameFontSystem.ensureLoaded(renderer);
+  }
+
+  pendingInput.clear();
+  inputOverflow = false;
+  touchTracking = false;
+  confirmLongPressCaptured = false;
+  PendingOverlayResume resume;
+  const bool restoreSyncReturn = APP_STATE.pendingOverlayResume.origin == PendingOverlayOrigin::Library &&
+                                 APP_STATE.consumePendingOverlayResume(resume);
+  {
     RenderLock lock;
     Activity::onEnter();
     renderer.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -98,20 +121,27 @@ void LibraryActivity::onEnter() {
                ? static_cast<Sort>(SETTINGS.librarySortMethod)
                : Sort::RecentlyRead;
     descending = SETTINGS.librarySortDescending != 0;
+    if (restoreSyncReturn) {
+      if (resume.tab <= static_cast<uint8_t>(Sort::Genre)) sort = static_cast<Sort>(resume.tab);
+      descending = resume.pane != 0;
+      query = std::move(resume.libraryQuery);
+    }
     app.on(ACTION_ROW, &LibraryActivity::onRowEvent, this);
+    app.on(ACTION_DELETE, &LibraryActivity::onDeleteEvent, this);
     app.on(ACTION_CONTROL, &LibraryActivity::onControlEvent, this);
     app.setScreen(&LibraryActivity::listScreen, this);
     // The index survives a firmware reflash, but its first boot reconciliation
     // can still take time. Show feedback whenever that scan is due.
-    initialScanPending = library::libraryIndexNeedsRefresh() || !Storage.exists(library::libraryIndexPath());
+    scanCancelledThisVisit = false;
+    initialScanPending = sort != Sort::RecentlyRead &&
+                         (library::libraryIndexNeedsRefresh() || !Storage.exists(library::libraryIndexPath()));
   }
 
   // Paint the scan message before the main task starts reading the card.
   // The render task normally paints only after onEnter() returns.
   if (initialScanPending && requestUpdateAndWait() != RequestUpdateResult::Rendered) {
     RenderLock lock;
-    renderer.clearScreen();
-    GUI.drawPopup(renderer, tr(STR_LIBRARY_SCANNING));
+    drawScanScreen(tr(STR_LIBRARY_SCANNING));
   }
 
   {
@@ -119,43 +149,91 @@ void LibraryActivity::onEnter() {
     refreshIndexIfNeeded();
     initialScanPending = false;
     resetViewport();
+    if (restoreSyncReturn && rowCount() > 0) {
+      selection = std::clamp<int>(resume.selectedIndex, CONTROL_COUNT, CONTROL_COUNT + rowCount() - 1);
+      topIndex = std::clamp<int>(resume.scrollPosition, 0, rowCount() - 1);
+      listNav.selected = selection - CONTROL_COUNT;
+      listNav.top = topIndex;
+      // Touch lists hide selection, so reset()'s first-build follow would
+      // otherwise discard the restored scroll position.
+      listNav.followOnBuild = false;
+      gridPageStart = ((selection - CONTROL_COUNT) / GRID_PAGE_SIZE) * GRID_PAGE_SIZE;
+      loadGridProgress();
+    }
     ignoreConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
     requestUpdate();
   }
 }
 
 void LibraryActivity::onExit() {
+  pendingInput.clear();
   index.close();
-  filtered.reset();
+  filterBits.reset();
+  filterRanks.reset();
   Activity::onExit();
 }
 
-void LibraryActivity::refreshIndexIfNeeded() {
-  // Reuse the index across ordinary visits; still reconcile once per boot, after
+void LibraryActivity::refreshIndexIfNeeded(const bool showScanning) {
+  if (sort == Sort::RecentlyRead) {
+    index.close();
+    scanFailed = false;
+    uiReady = false;
+    applyFilter();
+    return;
+  }
+  if (scanCancelledThisVisit) {
+    // Respect the cancel until the user asks for a refresh; keep showing
+    // whatever index is already on the card.
+    if (!index.isOpen() && !index.open(library::libraryIndexPath()))
+      index.openForReconciliation(library::libraryIndexPath());
+    uiReady = false;
+    applyFilter();
+    return;
+  }
+  // Reuse the index across ordinary visits; still reconcile after cold boots, after
   // file changes, and when the format or metadata setting no longer matches.
   if (library::libraryIndexNeedsRefresh() || (!index.isOpen() && !index.open(library::libraryIndexPath())) ||
       index.header().metadataEnabled != static_cast<uint8_t>(SETTINGS.libraryUseMetadata != 0)) {
-    rebuildIndex(false);
+    rebuildIndex(showScanning);
     return;
   }
   scanFailed = false;
   uiReady = false;
-  resolveRecents();
   applyFilter();
 }
 
 bool LibraryActivity::rebuildIndex(const bool showScanning) {
+  if (sort == Sort::RecentlyRead) {
+    library::invalidateLibraryIndex();
+    if (RECENT_BOOKS.pruneMissing()) RECENT_BOOKS.saveToFile();
+    refreshIndexIfNeeded();
+    return true;
+  }
   uiReady = false;
   index.close();
-  if (showScanning) GUI.drawPopup(renderer, tr(STR_LIBRARY_SCANNING));
+  if (showScanning) drawScanScreen(tr(STR_LIBRARY_SCANNING));
   library::BuildStats stats;
-  scanFailed = !library::buildLibraryIndex("/", stats, SETTINGS.libraryUseMetadata != 0);
+  library::BuildCallbacks callbacks;
+  callbacks.context = this;
+  callbacks.cancelRequested = &LibraryActivity::scanCancelRequested;
+  callbacks.progress = &LibraryActivity::onScanProgress;
+  scanCancelledThisVisit = false;
+  scanBackHeldAtStart = mappedInput.isPressed(MappedInputManager::Button::Back);
+  scanFailed = !library::buildLibraryIndex("/", stats, SETTINGS.libraryUseMetadata != 0, &callbacks);
+  scanFailureText = stats.failure == library::BuildFailure::Cancelled      ? StrId::STR_LIBRARY_SCAN_CANCELLED
+                    : stats.failure == library::BuildFailure::TooManyBooks ? StrId::STR_LIBRARY_TOO_MANY_BOOKS
+                                                                           : StrId::STR_LIBRARY_SCAN_FAILED;
+  if (stats.failure == library::BuildFailure::Cancelled) {
+    scanCancelledThisVisit = true;
+    ignoreBackRelease = mappedInput.isPressed(MappedInputManager::Button::Back);
+  }
   if (scanFailed) LOG_ERR("LIB", "Library scan failed; retaining the previous index");
   if (!index.open(library::libraryIndexPath())) {
     // A failed one-time upgrade leaves the previous index on the card. Keep
     // its books readable while the next visit retries the rebuild.
     if (!scanFailed || !index.openForReconciliation(library::libraryIndexPath())) {
       LOG_ERR("LIB", "Cannot open library index");
+      if (!scanFailed) scanFailureText = StrId::STR_LIBRARY_SCAN_FAILED;
       scanFailed = true;
     } else {
       LOG_INF("LIB", "Using previous Library index until rebuild succeeds");
@@ -165,37 +243,96 @@ bool LibraryActivity::rebuildIndex(const bool showScanning) {
       }
     }
   }
-  resolveRecents();
   applyFilter();
   return !scanFailed;
 }
 
+bool LibraryActivity::scanTouchEnabled() const {
+  // hasTouch() also honours the Disable Touchscreen setting.
+  return mappedInput.hasTouch();
+}
+
+void LibraryActivity::drawScanScreen(const char* message) const {
+  renderer.clearScreen();
+  if (scanTouchEnabled()) {
+    int bounds[4]{};
+    renderer.getOrientedViewableTRBL(&bounds[0], &bounds[1], &bounds[2], &bounds[3]);
+    renderer.drawCenteredText(UI_10_FONT_ID,
+                              renderer.getScreenHeight() - bounds[2] - renderer.getLineHeight(UI_10_FONT_ID) * 2,
+                              tr(STR_TAP_TO_CANCEL));
+  } else {
+    const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
+  // drawPopup() pushes the whole buffer, including the hint above.
+  GUI.drawPopup(renderer, message);
+}
+
+bool LibraryActivity::scanCancelRequested(void* context) {
+  auto* self = static_cast<LibraryActivity*>(context);
+  auto& input = self->mappedInput;
+  // The build blocks the main loop, so poll here as web uploads do.
+  input.update();
+  int x = 0;
+  int y = 0;
+  if (self->scanTouchEnabled() && input.wasScreenTouchDown(x, y)) {
+    // The release must not reach the list as a tap once the scan unwinds.
+    input.suppressCurrentTouchContact();
+    return true;
+  }
+  if (input.wasHomeGesture()) return true;
+  const bool backHeld = input.isPressed(MappedInputManager::Button::Back);
+  if (self->scanBackHeldAtStart) {
+    if (!backHeld) self->scanBackHeldAtStart = false;
+    return false;
+  }
+  // Polls stall during an EPUB parse, so a held button counts as well as a
+  // press edge.
+  return backHeld || input.wasPressed(MappedInputManager::Button::Back);
+}
+
+void LibraryActivity::onScanProgress(void* context, const library::BuildProgress& progress) {
+  const auto* self = static_cast<const LibraryActivity*>(context);
+  if (progress.phase == library::BuildPhase::Organizing) {
+    self->drawScanScreen(tr(STR_LIBRARY_ORGANIZING));
+    return;
+  }
+  char message[96];
+  snprintf(message, sizeof(message), tr(STR_LIBRARY_SCAN_COUNT), static_cast<unsigned>(progress.books));
+  self->drawScanScreen(message);
+}
+
+void LibraryActivity::readRecentBook(const size_t historyRow, RecentBook& book) const {
+  book = RECENT_BOOKS.getBooks()[historyRow];
+  if (!SETTINGS.libraryUseMetadata || book.title.empty()) {
+    const auto slash = book.path.find_last_of('/');
+    book.title = book.path.substr(slash == std::string::npos ? 0 : slash + 1);
+    const auto dot = book.title.find_last_of('.');
+    if (dot != std::string::npos && dot != 0) book.title.resize(dot);
+  }
+  if (!SETTINGS.libraryUseMetadata) book.author.clear();
+}
+
 void LibraryActivity::resolveRecents() {
   recentCount = 0;
-  if (!index.isOpen()) return;
   const auto& books = RECENT_BOOKS.getBooks();
-  // Index lookup accepts up to 16 entries per pass; the history holds 18.
-  // Two small batches keep stack use below 256 bytes.
-  constexpr size_t BATCH = 8;
-  library::BookIdentity identities[BATCH]{};
-  uint16_t rows[BATCH]{};
-  for (size_t offset = 0; offset < books.size(); offset += BATCH) {
-    const size_t count = std::min(BATCH, books.size() - offset);
-    for (size_t i = 0; i < count; ++i) {
-      const auto& path = books[offset + i].path;
-      identities[i] = {library::clixPathHash(path.data(), path.size()), 0};
+  const std::string needle = library::fold(query);
+  const uint8_t visibleTypes = visibleLibraryFileTypes();
+  std::string combined;
+  std::string folded;
+  for (size_t row = 0; row < books.size() && recentCount < RecentBooksStore::MAX_RECENT_BOOKS; ++row) {
+    const auto& book = books[row];
+    if ((library::fileTypeFor(book.path) & visibleTypes) == 0) continue;
+    if (!needle.empty()) {
+      readRecentBook(row, rowScratch);
+      combined.assign(rowScratch.title);
+      combined.push_back(' ');
+      combined.append(rowScratch.author);
+      library::foldInto(combined, folded);
+      if (!library::matchesQuery(folded, needle)) continue;
     }
-    if (!index.recentRowsFor(identities, count, rows)) {
-      LOG_ERR("LIB", "Cannot match reading history to the index");
-      recentCount = 0;
-      scanFailed = true;
-      return;
-    }
-    for (size_t i = 0; i < count && recentCount < RecentBooksStore::MAX_RECENT_BOOKS; ++i) {
-      if (rows[i] == UINT16_MAX || std::find(recentRows, recentRows + recentCount, rows[i]) != recentRows + recentCount)
-        continue;
-      recentRows[recentCount++] = rows[i];
-    }
+    if (SETTINGS.libraryHideFinishedBooks && BookActions::isBookCompleted(book.path)) continue;
+    recentRows[recentCount++] = static_cast<uint16_t>(row);
   }
 }
 
@@ -222,7 +359,7 @@ library::SortOrder LibraryActivity::indexOrder() const {
 const char* LibraryActivity::sortLabel() const {
   switch (sort) {
     case Sort::Title:
-      return tr(STR_LIBRARY_TITLE);
+      return tr(STR_TITLE);
     case Sort::AuthorLast:
       return tr(STR_LIBRARY_AUTHOR_LAST_NAME);
     case Sort::AuthorFirst:
@@ -245,8 +382,8 @@ bool LibraryActivity::hasActiveFilter() const {
 }
 
 int LibraryActivity::rowCount() const {
-  if (hasActiveFilter()) return filteredCount;
   if (sort == Sort::RecentlyRead) return static_cast<int>(recentCount);
+  if (hasActiveFilter()) return filteredCount;
   return index.bookCount();
 }
 
@@ -272,16 +409,42 @@ void LibraryActivity::loadGridProgress() {
 }
 
 uint16_t LibraryActivity::ordinalForRow(const int row) {
-  if (row < 0 || row >= rowCount()) return UINT16_MAX;
-  if (hasActiveFilter()) return filtered ? filtered[row] : UINT16_MAX;
-  uint16_t indexRow = static_cast<uint16_t>(row);
-  if (sort == Sort::RecentlyRead) {
-    indexRow = library::recentHistoryRow(indexRow, index.bookCount(), recentRows, recentCount, descending);
+  if (sort == Sort::RecentlyRead || row < 0 || row >= rowCount()) return UINT16_MAX;
+  if (hasActiveFilter()) {
+    const uint16_t sourceRow = filteredSourceRow(static_cast<uint16_t>(row));
+    return sourceRow == UINT16_MAX ? UINT16_MAX : index.ordinalForRow(filterOrder, sourceRow);
   }
-  return index.ordinalForRow(indexOrder(), indexRow);
+  return index.ordinalForRow(indexOrder(), static_cast<uint16_t>(row));
+}
+
+// Position in filterOrder of the row-th match: find its block by the running
+// counts, then count bits within that block.
+uint16_t LibraryActivity::filteredSourceRow(const uint16_t row) const {
+  // Sized when the filter ran: the index may be closed (count 0) while a row
+  // is still drawn before the activity swaps out.
+  if (!filterBits || !filterRanks || row >= filteredCount || filterSourceCount == 0) return UINT16_MAX;
+  const uint16_t blocks = (filterSourceCount + FILTER_BLOCK_ROWS - 1) / FILTER_BLOCK_ROWS;
+  const uint16_t* ranks = filterRanks.get();
+  uint16_t block = static_cast<uint16_t>(std::upper_bound(ranks, ranks + blocks, row) - ranks - 1);
+  uint16_t seen = filterRanks[block];
+  for (uint32_t source = static_cast<uint32_t>(block) * FILTER_BLOCK_ROWS; source < filterSourceCount; source++) {
+    if ((filterBits[source / 8] & (1u << (source % 8))) == 0) continue;
+    if (seen++ == row) return static_cast<uint16_t>(source);
+  }
+  return UINT16_MAX;
 }
 
 bool LibraryActivity::readBook(const int row, RecentBook& book, const bool fullPath) {
+  if (sort == Sort::RecentlyRead) {
+    const uint16_t historyRow =
+        library::recentHistoryRow(row, RECENT_BOOKS.getCount(), recentRows, recentCount, descending);
+    if (historyRow == UINT16_MAX) {
+      LOG_ERR("LIB", "Cannot read recent book row %d", row);
+      return false;
+    }
+    readRecentBook(historyRow, book);
+    return true;
+  }
   library::ClixRecord record{};
   const auto ordinal = ordinalForRow(row);
   if (ordinal == UINT16_MAX || !index.readRecord(ordinal, record) ||
@@ -296,20 +459,28 @@ bool LibraryActivity::readBook(const int row, RecentBook& book, const bool fullP
 void LibraryActivity::applyFilter() {
   filteredCount = 0;
   filterFailed = false;
-  filtered.reset();
+  filterBits.reset();
+  filterRanks.reset();
+  filterSourceCount = 0;
+  if (sort == Sort::RecentlyRead) {
+    resolveRecents();
+    return;
+  }
   if (!hasActiveFilter() || !index.isOpen() || index.bookCount() == 0) return;
-  const uint16_t sourceCount = sort == Sort::RecentlyRead ? static_cast<uint16_t>(recentCount) : index.bookCount();
-  if (sourceCount == 0) return;
-  filtered = makeUniqueNoThrow<uint16_t[]>(sourceCount);
-  if (!filtered) {
+  const uint16_t sourceCount = index.bookCount();
+  filterOrder = indexOrder();
+  filterSourceCount = sourceCount;
+  filterBits = makeUniqueNoThrow<uint8_t[]>((sourceCount + 7u) / 8u);
+  filterRanks = makeUniqueNoThrow<uint16_t[]>((sourceCount + FILTER_BLOCK_ROWS - 1u) / FILTER_BLOCK_ROWS);
+  if (!filterBits || !filterRanks) {
     LOG_ERR("LIB", "Cannot allocate Library search results");
+    filterBits.reset();
+    filterRanks.reset();
     filterFailed = true;
     return;
   }
   const std::string needle = library::fold(query);
-  const uint8_t visibleTypes =
-      (SETTINGS.libraryShowEpub ? library::FileEpub : 0) | (SETTINGS.libraryShowXtc ? library::FileXtc : 0) |
-      (SETTINGS.libraryShowTxt ? library::FileTxt : 0) | (SETTINGS.libraryShowMarkdown ? library::FileMarkdown : 0);
+  const uint8_t visibleTypes = visibleLibraryFileTypes();
   std::unique_ptr<uint32_t[]> folderOffsets;
   uint16_t folderStride = 0;
   std::string title;
@@ -320,7 +491,7 @@ void LibraryActivity::applyFilter() {
   std::string combined;
   std::string folded;
   // Blob fields are byte-length-prefixed. Reserve once for the entire scan,
-  // avoiding concat/fold allocations for each of up to 4,096 books.
+  // avoiding concat/fold allocations for every book in the index.
   title.reserve(UINT8_MAX);
   author.reserve(UINT8_MAX);
   name.reserve(UINT8_MAX);
@@ -343,10 +514,9 @@ void LibraryActivity::applyFilter() {
     return true;
   };
   for (uint16_t row = 0; row < sourceCount; ++row) {
-    const uint16_t indexRow = sort == Sort::RecentlyRead ? library::recentHistoryRow(row, index.bookCount(), recentRows,
-                                                                                     recentCount, descending)
-                                                         : row;
-    const uint16_t ordinal = index.ordinalForRow(indexOrder(), indexRow);
+    if ((row & 31) == 31) delay(1);
+    if (row % FILTER_BLOCK_ROWS == 0) filterRanks[row / FILTER_BLOCK_ROWS] = filteredCount;
+    const uint16_t ordinal = index.ordinalForRow(filterOrder, row);
     library::ClixRecord record{};
     if (ordinal == UINT16_MAX || !index.readRecord(ordinal, record) || !index.readName(record, name)) {
       LOG_ERR("LIB", "Cannot read Library search data");
@@ -355,6 +525,20 @@ void LibraryActivity::applyFilter() {
       break;
     }
     if ((library::fileTypeFor(name) & visibleTypes) == 0) continue;
+    if (!needle.empty() && !index.readDisplayText(record, title, author)) {
+      LOG_ERR("LIB", "Cannot read Library search text");
+      filterFailed = true;
+      filteredCount = 0;
+      break;
+    }
+    if (!needle.empty()) {
+      combined.assign(title);
+      combined.push_back(' ');
+      combined.append(author);
+      library::foldInto(combined, folded);
+    }
+    // Only matching books need their completion state read from the SD card.
+    if (!needle.empty() && !library::matchesQuery(folded, needle)) continue;
     if (SETTINGS.libraryHideFinishedBooks) {
       const uint8_t type = library::fileTypeFor(name);
       cachePath.clear();
@@ -387,26 +571,13 @@ void LibraryActivity::applyFilter() {
       }
       if (!cachePath.empty() && BookReadingStats::load(cachePath).isCompleted) continue;
     }
-    if (!needle.empty() && !index.readDisplayText(record, title, author)) {
-      LOG_ERR("LIB", "Cannot read Library search text");
-      filterFailed = true;
-      filteredCount = 0;
-      break;
-    }
-    if (!needle.empty()) {
-      combined.assign(title);
-      combined.push_back(' ');
-      combined.append(author);
-      library::foldInto(combined, folded);
-    }
-    if (needle.empty() || library::matchesQuery(folded, needle)) {
-      filtered[filteredCount++] = ordinal;
-    }
-    if ((row & 31) == 31) delay(1);
+    filterBits[row / 8] |= static_cast<uint8_t>(1u << (row % 8));
+    filteredCount++;
   }
 }
 
 void LibraryActivity::resetViewport() {
+  swipeDelete.close();
   selection = rowCount() || !mappedInput.hasTouchHardware() ? CONTROL_COUNT : 3;
   showSelection = !mappedInput.hasTouchHardware();
   topIndex = 0;
@@ -420,7 +591,8 @@ void LibraryActivity::resetViewport() {
 }
 
 void LibraryActivity::reloadAfterBookAction() {
-  refreshIndexIfNeeded();
+  swipeDelete.close();
+  refreshIndexIfNeeded(true);
   selection = std::min(selection, std::max(CONTROL_COUNT, CONTROL_COUNT + rowCount() - 1));
   listNav.selected = selection - CONTROL_COUNT;
   listNav.top = topIndex;
@@ -439,13 +611,16 @@ void LibraryActivity::openDialog(std::unique_ptr<Activity>&& child, ActivityResu
     LOG_ERR("LIB", "Cannot allocate Library dialog");
     return;
   }
+  pendingInput.clear();
+  touchTracking = false;
   app.clearTapFlash();
   startActivityForResult(std::move(child), [this, handler = std::move(handler)](const ActivityResult& result) {
     RenderLock lock;
     ignoreConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
-    longPressFired = false;
+    confirmLongPressCaptured = false;
     uiReady = false;
     handler(result);
+    finishedCache.clear();
     requestUpdate();
   });
 }
@@ -460,7 +635,7 @@ void LibraryActivity::openBook(const int row) {
 
 void LibraryActivity::openSortPicker(const int selectedIndex) {
   static constexpr StrId choices[] = {StrId::STR_LIBRARY_DATE_ADDED,
-                                      StrId::STR_LIBRARY_TITLE,
+                                      StrId::STR_TITLE,
                                       StrId::STR_LIBRARY_AUTHOR_LAST_NAME,
                                       StrId::STR_LIBRARY_AUTHOR_FIRST_NAME,
                                       StrId::STR_LIBRARY_RECENTLY_OPENED,
@@ -478,8 +653,8 @@ void LibraryActivity::openSortPicker(const int selectedIndex) {
     }
     SETTINGS.librarySortMethod = static_cast<uint8_t>(sort);
     SETTINGS.librarySortDescending = descending;
-    if (!SETTINGS.saveToFile()) LOG_ERR("LIB", "Cannot save Library sort");
-    applyFilter();
+    if (!SETTINGS.saveGlobalDefaults()) LOG_ERR("LIB", "Cannot save Library sort");
+    refreshIndexIfNeeded(true);
     resetViewport();
     if (buttonOnly && selected == 0) openSortPicker(0);
   };
@@ -549,12 +724,23 @@ void LibraryActivity::activateControl(const int control) {
   if (control == 4) {
     descending = !descending;
     SETTINGS.librarySortDescending = descending;
-    if (!SETTINGS.saveToFile()) LOG_ERR("LIB", "Cannot save Library sort direction");
+    if (!SETTINGS.saveGlobalDefaults()) LOG_ERR("LIB", "Cannot save Library sort direction");
     applyFilter();
     topIndex = 0;
     if (gridEnabled()) resetViewport();
     requestUpdate();
   }
+}
+
+void LibraryActivity::onDeleteEvent(const fui::ActionEvent& event, void* user) {
+  auto* self = static_cast<LibraryActivity*>(user);
+  if (event.value < 0 || event.value != self->swipeDelete.index || event.value >= self->rowCount()) return;
+  RecentBook book;
+  if (!self->readBook(event.value, book)) return;
+  self->swipeDelete.close();
+  self->app.clearTapFlash();
+  self->selection = event.value + CONTROL_COUNT;
+  self->promptDeleteBook(book);
 }
 
 void LibraryActivity::onRowEvent(const fui::ActionEvent& event, void* user) {
@@ -575,55 +761,193 @@ void LibraryActivity::onControlEvent(const fui::ActionEvent& event, void* user) 
   self->activateControl(event.value);
 }
 
-void LibraryActivity::loop() {
-  RenderLock lock;
-  if (actionPopup.isActive()) {
-    actionPopup.handleInput(mappedInput, [this] { requestUpdate(); });
+void LibraryActivity::queueInput(const LibraryInputBuffer::Type type, const int x, const int y) {
+  if (inputOverflow) return;
+  if (pendingInput.push({type, static_cast<int16_t>(x), static_cast<int16_t>(y)})) return;
+  // Never replay a partial gesture or Select after losing its navigation.
+  LOG_ERR("LIB", "Input buffer full; cancelling pending input");
+  pendingInput.clear();
+  pendingInput.push({LibraryInputBuffer::Type::TouchRelease});
+  inputOverflow = true;
+  int heldX = 0;
+  int heldY = 0;
+  if (mappedInput.isScreenTouchHeld(heldX, heldY)) mappedInput.suppressCurrentTouchContact();
+  touchTracking = false;
+  ignoreConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
+}
+
+void LibraryActivity::latchInput() {
+  using Type = LibraryInputBuffer::Type;
+  const bool confirmHeld = mappedInput.isPressed(MappedInputManager::Button::Confirm);
+  if (ignoreConfirmRelease || confirmLongPressCaptured) {
+    (void)mappedInput.wasReleased(MappedInputManager::Button::Confirm);
+    if (!confirmHeld) {
+      ignoreConfirmRelease = false;
+      confirmLongPressCaptured = false;
+    }
     return;
   }
+  if (confirmHeld && mappedInput.getHeldTime() >= LONG_PRESS_MS) {
+    confirmLongPressCaptured = true;
+    queueInput(Type::ConfirmLongPress);
+    return;
+  }
+  int x = 0;
+  int y = 0;
+  if (mappedInput.wasScreenTouchDown(x, y)) {
+    touchTracking = true;
+    touchStartX = touchLastX = x;
+    touchStartY = touchLastY = y;
+  }
+  if (touchTracking && mappedInput.isScreenTouchHeld(x, y)) {
+    touchLastX = x;
+    touchLastY = y;
+  }
+  const bool released = mappedInput.wasScreenTouchReleased();
+  const int travelX = std::abs(touchLastX - touchStartX);
+  const int travelY = std::abs(touchLastY - touchStartY);
+  constexpr int DRAG_SCROLL_PX = 60;
+  auto snap = touchSnapshotFrom(mappedInput);
+  if (released && touchTracking && std::max(travelX, travelY) >= DRAG_SCROLL_PX && !snap.longPress) {
+    snap.touchX = snap.touchY = -1;
+  }
+  if (snap.touchPressed) queueInput(Type::TouchPress, snap.touchX, snap.touchY);
+  if (snap.touchReleased)
+    queueInput(snap.longPress ? Type::TouchLongPress : Type::TouchRelease, snap.touchX, snap.touchY);
+
+  MappedInputManager::SwipeDir swipe = MappedInputManager::SwipeDir::None;
+  int swipeX = 0, swipeY = 0, endX = 0, endY = 0;
+  mappedInput.wasSwipeWithPoints(swipe, swipeX, swipeY, endX, endY);
+  // Preserve the SDK's tap tolerance. Only a genuine vertical drag past its
+  // swipe distance scrolls when it is slower than the flick window.
+  if (swipe == MappedInputManager::SwipeDir::None && released && touchTracking && travelY >= DRAG_SCROLL_PX &&
+      travelY > travelX) {
+    swipe = touchLastY < touchStartY ? MappedInputManager::SwipeDir::Up : MappedInputManager::SwipeDir::Down;
+  }
+  if (released) touchTracking = false;
+  switch (swipe) {
+    case MappedInputManager::SwipeDir::Up:
+      queueInput(Type::SwipeUp);
+      break;
+    case MappedInputManager::SwipeDir::Down:
+      queueInput(Type::SwipeDown);
+      break;
+    case MappedInputManager::SwipeDir::Left:
+      queueInput(Type::SwipeLeft, swipeX, swipeY);
+      break;
+    case MappedInputManager::SwipeDir::Right:
+      queueInput(Type::SwipeRight, swipeX, swipeY);
+      break;
+    default:
+      break;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) queueInput(Type::ConfirmRelease);
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    if (ignoreBackRelease)
+      ignoreBackRelease = false;
+    else
+      queueInput(Type::BackRelease);
+  } else if (ignoreBackRelease && !mappedInput.isPressed(MappedInputManager::Button::Back)) {
+    ignoreBackRelease = false;
+  }
+  if (mappedInput.hasTouchHardware()) {
+    buttonNavigator.onNextRelease([&] { queueInput(Type::Next); });
+    buttonNavigator.onPreviousRelease([&] { queueInput(Type::Previous); });
+    buttonNavigator.onNextContinuous([&] { queueInput(Type::NextPage); });
+    buttonNavigator.onPreviousContinuous([&] { queueInput(Type::PreviousPage); });
+  } else {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) queueInput(Type::LeftRelease);
+    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) queueInput(Type::RightRelease);
+    buttonNavigator.onRelease({MappedInputManager::Button::Down, MappedInputManager::Button::Down},
+                              [&] { queueInput(Type::Next); });
+    buttonNavigator.onRelease({MappedInputManager::Button::Up, MappedInputManager::Button::Up},
+                              [&] { queueInput(Type::Previous); });
+    buttonNavigator.onContinuous({MappedInputManager::Button::Down, MappedInputManager::Button::Down},
+                                 [&] { queueInput(Type::NextPage); });
+    buttonNavigator.onContinuous({MappedInputManager::Button::Up, MappedInputManager::Button::Up},
+                                 [&] { queueInput(Type::PreviousPage); });
+  }
+}
+
+void LibraryActivity::loop() {
+  if (actionPopup.isActive()) {
+    pendingInput.clear();
+    touchTracking = false;
+    RenderLock lock;
+    actionPopup.handleInput(mappedInput, [this] { requestUpdate(); });
+    if (!actionPopup.isActive() && mappedInput.isPressed(MappedInputManager::Button::Confirm))
+      ignoreConfirmRelease = true;
+    return;
+  }
+  latchInput();
+  if (RenderLock::peek()) return;
+  // Try mode also closes the race if rendering starts after the busy check.
+  RenderLock lock(RenderLock::Mode::Try);
+  if (!lock.ownsLock()) return;
+  inputOverflow = false;
   if (pendingCacheDeletedFeedback && millis() - cacheDeletedFeedbackShowTime >= ACTION_FEEDBACK_MS) {
     pendingCacheDeletedFeedback = false;
     requestUpdate();
   }
-  if (ignoreConfirmRelease || longPressFired) {
-    if (!mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
-      ignoreConfirmRelease = false;
-      longPressFired = false;
+  LibraryInputBuffer::Event input;
+  if (pendingInput.pop(input)) {
+    handleInput(input);
+    return;
+  }
+  // Prepare at most one cover between input checks, then repaint the completed page.
+  loadGridPageCovers();
+}
+
+void LibraryActivity::handleInput(const LibraryInputBuffer::Event& input) {
+  using Type = LibraryInputBuffer::Type;
+  if (input.type == Type::TouchRelease && input.x >= 0 && input.y >= 0) {
+    const auto header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
+    const auto back = TouchHeaderBackButton::layout(header).touchRect;
+    if (input.y < header.y + header.height && input.x >= back.x && input.x < back.x + back.width && input.y >= back.y &&
+        input.y < back.y + back.height) {
+      pendingInput.clear();
+      onGoHome();
+      return;
     }
-    return;
   }
-  int tapX = 0;
-  int tapY = 0;
-  const auto header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
-  if (mappedInput.wasScreenTapped(tapX, tapY) && tapY < header.y + header.height &&
-      TouchHeaderBackButton::wasTapped(mappedInput, renderer)) {
-    onGoHome();
-    return;
-  }
-  if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= LONG_PRESS_MS) {
-    longPressFired = true;
+  if (input.type == Type::ConfirmLongPress) {
+    pendingInput.clear();
+    ignoreConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
     if (selection >= CONTROL_COUNT && rowCount() > 0)
-      showBookActionMenu(selection - CONTROL_COUNT, true);
+      showBookActionMenu(selection - CONTROL_COUNT, ignoreConfirmRelease);
     else
       activateControl(selection);
     return;
   }
-  if (uiReady) {
-    const auto snap = touchSnapshotFrom(mappedInput);
-    if (snap.touchPressed || snap.touchReleased) {
-      const auto event = app.route(snap);
-      if (app.invalidated()) requestUpdate();
-      if (event) return;
+  if (uiReady &&
+      (input.type == Type::TouchPress || input.type == Type::TouchRelease || input.type == Type::TouchLongPress)) {
+    fui::InputSnapshot snap{};
+    snap.touchPressed = input.type == Type::TouchPress;
+    snap.touchReleased = !snap.touchPressed;
+    snap.longPress = input.type == Type::TouchLongPress;
+    snap.touchX = input.x;
+    snap.touchY = input.y;
+    if (swipeDelete.dismissTap(app, snap, ACTION_DELETE)) {
+      requestUpdate();
+      return;
+    }
+    const auto event = app.route(snap);
+    if (app.invalidated()) requestUpdate();
+    if (event) {
+      pendingInput.clear();
+      return;
     }
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  if (input.type == Type::ConfirmRelease) {
+    pendingInput.clear();
     if (selection < CONTROL_COUNT)
       activateControl(selection);
     else if (rowCount() > 0)
       openBook(selection - CONTROL_COUNT);
     return;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+  if (input.type == Type::BackRelease) {
+    pendingInput.clear();
     if (!query.empty()) {
       query.clear();
       applyFilter();
@@ -633,7 +957,18 @@ void LibraryActivity::loop() {
       onGoHome();
     return;
   }
-  const auto swipe = mappedInput.wasSwipe();
+  const auto swipe = input.type == Type::SwipeUp      ? MappedInputManager::SwipeDir::Up
+                     : input.type == Type::SwipeDown  ? MappedInputManager::SwipeDir::Down
+                     : input.type == Type::SwipeLeft  ? MappedInputManager::SwipeDir::Left
+                     : input.type == Type::SwipeRight ? MappedInputManager::SwipeDir::Right
+                                                      : MappedInputManager::SwipeDir::None;
+  if (!gridEnabled() && uiReady &&
+      (swipe == MappedInputManager::SwipeDir::Left || swipe == MappedInputManager::SwipeDir::Right)) {
+    swipeDelete.swipe(app, swipe, input.x, input.y, ACTION_ROW);
+    requestUpdate();
+    return;
+  }
+  if (swipe != MappedInputManager::SwipeDir::None) swipeDelete.close();
   if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down ||
       (gridEnabled() &&
        (swipe == MappedInputManager::SwipeDir::Left || swipe == MappedInputManager::SwipeDir::Right))) {
@@ -657,17 +992,20 @@ void LibraryActivity::loop() {
     return;
   }
   if (!mappedInput.hasTouchHardware()) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    if (input.type == Type::LeftRelease) {
+      pendingInput.clear();
       openSortPicker();
       return;
     }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+    if (input.type == Type::RightRelease) {
+      pendingInput.clear();
       openMenu();
       return;
     }
   }
   const int count = rowCount() + CONTROL_COUNT;
   const auto move = [this](const int next) {
+    swipeDelete.close();
     if (!showSelection) {
       showSelection = true;
       loadGridProgress();
@@ -694,35 +1032,62 @@ void LibraryActivity::loop() {
     requestUpdate();
   };
   if (mappedInput.hasTouchHardware()) {
-    buttonNavigator.onNextRelease([&] { move(ButtonNavigator::nextIndex(selection, count)); });
-    buttonNavigator.onPreviousRelease([&] { move(ButtonNavigator::previousIndex(selection, count)); });
-    buttonNavigator.onNextContinuous([&] {
-      move(ButtonNavigator::nextPageIndex(selection, count,
-                                          gridEnabled() ? GRID_PAGE_SIZE : listNav.pageRowsFor(rowCount())));
-    });
-    buttonNavigator.onPreviousContinuous([&] {
-      move(ButtonNavigator::previousPageIndex(selection, count,
-                                              gridEnabled() ? GRID_PAGE_SIZE : listNav.pageRowsFor(rowCount())));
-    });
+    if (input.type == Type::Next) move(ButtonNavigator::nextIndex(selection, count));
+    if (input.type == Type::Previous) move(ButtonNavigator::previousIndex(selection, count));
+    const int page = gridEnabled() ? GRID_PAGE_SIZE : listNav.pageRowsFor(rowCount());
+    if (input.type == Type::NextPage) move(ButtonNavigator::nextPageIndex(selection, count, page));
+    if (input.type == Type::PreviousPage) move(ButtonNavigator::previousPageIndex(selection, count, page));
   } else if (rowCount() > 0) {
     const int bookCount = rowCount();
-    const auto moveBook = [&](const int row) { move(CONTROL_COUNT + row); };
-    buttonNavigator.onRelease({MappedInputManager::Button::Down, MappedInputManager::Button::Down},
-                              [&] { moveBook(ButtonNavigator::nextIndex(selection - CONTROL_COUNT, bookCount)); });
-    buttonNavigator.onRelease({MappedInputManager::Button::Up, MappedInputManager::Button::Up},
-                              [&] { moveBook(ButtonNavigator::previousIndex(selection - CONTROL_COUNT, bookCount)); });
-    buttonNavigator.onContinuous({MappedInputManager::Button::Down, MappedInputManager::Button::Down}, [&] {
-      moveBook(ButtonNavigator::nextPageIndex(selection - CONTROL_COUNT, bookCount,
-                                              gridEnabled() ? GRID_PAGE_SIZE : listNav.pageRowsFor(bookCount)));
-    });
-    buttonNavigator.onContinuous({MappedInputManager::Button::Up, MappedInputManager::Button::Up}, [&] {
-      moveBook(ButtonNavigator::previousPageIndex(selection - CONTROL_COUNT, bookCount,
-                                                  gridEnabled() ? GRID_PAGE_SIZE : listNav.pageRowsFor(bookCount)));
-    });
+    const int row = selection - CONTROL_COUNT;
+    const auto moveBook = [&](const int next) { move(CONTROL_COUNT + next); };
+    if (input.type == Type::Next) moveBook(ButtonNavigator::nextIndex(row, bookCount));
+    if (input.type == Type::Previous) moveBook(ButtonNavigator::previousIndex(row, bookCount));
+    const int page = gridEnabled() ? GRID_PAGE_SIZE : listNav.pageRowsFor(bookCount);
+    if (input.type == Type::NextPage) moveBook(ButtonNavigator::nextPageIndex(row, bookCount, page));
+    if (input.type == Type::PreviousPage) moveBook(ButtonNavigator::previousPageIndex(row, bookCount, page));
   }
-  // Prepare at most one visible cover per turn, leaving an input check between
-  // EPUB parses. Redraw as each thumbnail becomes available.
-  loadGridPageCovers();
+}
+
+bool LibraryActivity::isFinishedRow(const int row) {
+  // Rows are drawn with only the file name (or the full path for recents).
+  if (rowScratch.path.empty() || UITheme::getFileIcon(rowScratch.path) != UIIcon::Book) return false;
+  const bool recentRow = sort == Sort::RecentlyRead;
+  library::ClixRecord record{};
+  uint32_t key = 0;
+  if (recentRow) {
+    key = static_cast<uint32_t>(std::hash<std::string>{}(rowScratch.path));
+  } else {
+    uint64_t pathHash = 0;
+    const uint16_t ordinal = ordinalForRow(row);
+    if (ordinal == UINT16_MAX || !index.readRecord(ordinal, record) || !index.readPathHash(record, pathHash)) {
+      return false;
+    }
+    key = static_cast<uint32_t>(pathHash ^ (pathHash >> 32));
+  }
+  bool finished = false;
+  if (finishedCache.lookup(key, finished)) return finished;
+
+  if (recentRow) {
+    finished = BookActions::isBookCompletedForList(rowScratch.path);
+  } else {
+    std::string fullPath;
+    if (!index.readPath(record, fullPath)) {
+      LOG_ERR("LIB", "Cannot read Library book path");
+      finishedCache.store(key, false);  // log once, not on every render
+      return false;
+    }
+    finished = BookActions::isBookCompletedForList(fullPath);
+  }
+  finishedCache.store(key, finished);
+  return finished;
+}
+
+void LibraryActivity::onFrontlightPanelClosed() {
+  // The panel's Reading Stats page can set or clear a book's finished date.
+  // ActivityManager calls this while it already holds the render lock.
+  finishedCache.clear();
+  requestUpdate();
 }
 
 void LibraryActivity::listScreen(UiApp::ScreenType& screen, void* user) {
@@ -738,7 +1103,8 @@ void LibraryActivity::provideRow(void* user, const uint16_t row, fui::ListItem& 
   }
   item.label = self->rowScratch.title.c_str();
   if (!self->rowScratch.author.empty()) item.subtitle = self->rowScratch.author.c_str();
-  if (SETTINGS.libraryUseMetadata && (SETTINGS.libraryShowSeries || SETTINGS.libraryShowGenre)) {
+  if (self->sort != Sort::RecentlyRead && SETTINGS.libraryUseMetadata &&
+      (SETTINGS.libraryShowSeries || SETTINGS.libraryShowGenre)) {
     library::ClixRecord record{};
     const uint16_t ordinal = self->ordinalForRow(row);
     if (ordinal != UINT16_MAX && self->index.readRecord(ordinal, record) &&
@@ -761,7 +1127,8 @@ void LibraryActivity::provideRow(void* user, const uint16_t row, fui::ListItem& 
       item.subtitle = self->subtitleScratch.c_str();
     }
   }
-  item.icon = listIconFor(UITheme::getFileIcon(self->rowScratch.path), 32);
+  const UIIcon icon = self->isFinishedRow(row) ? UIIcon::BookCheck : UITheme::getFileIcon(self->rowScratch.path);
+  item.icon = listIconFor(icon, 32);
   item.actionValue = static_cast<int16_t>(row);
   if (!SETTINGS.libraryListExpanded) return;
   if (self->sort == Sort::DateAdded) {
@@ -770,7 +1137,7 @@ void LibraryActivity::provideRow(void* user, const uint16_t row, fui::ListItem& 
       if (date == 0) {
         self->groupHeading = "?";
       } else {
-        char heading[20];
+        char heading[32];
         const char separator = SETTINGS.dateSeparator == CrossPointSettings::DATE_SEPARATOR_PERIOD   ? '.'
                                : SETTINGS.dateSeparator == CrossPointSettings::DATE_SEPARATOR_HYPHEN ? '-'
                                                                                                      : '/';
@@ -889,9 +1256,9 @@ void LibraryActivity::buildListScreen(UiApp::ScreenType& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   int bounds[4]{};
   renderer.getOrientedViewableTRBL(&bounds[0], &bounds[1], &bounds[2], &bounds[3]);
-  const int16_t headerBottom =
-      static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput));
-  const int buttonHintsHeight = mappedInput.hasTouchHardware() ? 0 : metrics.buttonHintsHeight;
+  const int16_t headerBottom = static_cast<int16_t>(TouchHeaderBackButton::contentTop(renderer, mappedInput));
+  const int buttonHintsHeight =
+      mappedInput.hasTouchHardware() ? 0 : UITheme::getInstance().getMetrics().buttonHintsHeight;
   screen.setContentMarginFromScreen(fui::Insets{headerBottom, static_cast<int16_t>(bounds[1]),
                                                 static_cast<int16_t>(FOOTER_HEIGHT + buttonHintsHeight + bounds[2]),
                                                 static_cast<int16_t>(bounds[3])});
@@ -928,16 +1295,21 @@ void LibraryActivity::buildListScreen(UiApp::ScreenType& screen) {
                             static_cast<int16_t>(header.y + header.height - controlSize), controlSize, controlSize});
   }
   buildSortHeader(screen);
+  // Status lines share the sort row's side padding instead of touching the bezel.
+  const int16_t statusPadding = static_cast<int16_t>(metrics.contentSidePadding);
+  const fui::Insets statusInsets{0, statusPadding, 0, statusPadding};
   if (scanFailed || index.ranksDegraded() || filterFailed) {
-    const auto warning = screen.take(fui::LayoutAnchor::Top, uiTarget.lineHeight(screen.theme().smallText.font) + 8);
+    const auto warning =
+        screen.take(fui::LayoutAnchor::Top, uiTarget.lineHeight(screen.theme().smallText.font) + 8).inset(statusInsets);
     uiTarget.text(warning,
                   filterFailed ? tr(STR_LIBRARY_SEARCH_FAILED)
-                  : scanFailed ? tr(STR_LIBRARY_SCAN_FAILED)
+                  : scanFailed ? I18n::getInstance().get(scanFailureText)
                                : tr(STR_LIBRARY_UNSORTED),
                   screen.theme().smallText);
   }
   if (!query.empty()) {
-    const auto search = screen.take(fui::LayoutAnchor::Top, uiTarget.lineHeight(screen.theme().smallText.font) + 8);
+    const auto search =
+        screen.take(fui::LayoutAnchor::Top, uiTarget.lineHeight(screen.theme().smallText.font) + 8).inset(statusInsets);
     uiTarget.text(search, query.c_str(), screen.theme().smallText);
   }
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
@@ -946,7 +1318,7 @@ void LibraryActivity::buildListScreen(UiApp::ScreenType& screen) {
       const char* message = tr(STR_LIBRARY_EMPTY);
       if (hasActiveFilter())
         message = tr(STR_LIBRARY_NO_RESULTS);
-      else if (sort == Sort::RecentlyRead && index.bookCount() > 0)
+      else if (sort == Sort::RecentlyRead)
         message = tr(STR_NO_RECENT_BOOKS);
       screen.centeredText(message, screen.theme().bodyText);
     }
@@ -961,6 +1333,8 @@ void LibraryActivity::buildListScreen(UiApp::ScreenType& screen) {
   props.rowProviderCtx = this;
   props.count = static_cast<uint16_t>(rowCount());
   props.selectedIndex = showSelection ? static_cast<int16_t>(selection - CONTROL_COUNT) : -1;
+  const auto reveal = swipeDelete.reveal(ACTION_DELETE);
+  props.reveal = &reveal;
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch | fui::InputLongPress;
   props.iconSize = 28;
@@ -969,14 +1343,17 @@ void LibraryActivity::buildListScreen(UiApp::ScreenType& screen) {
   props.labelText.maxLines = 1;
   props.headerText = screen.theme().bodyText;
   props.headerText.bold = true;
-  props.rtl = (I18N.getLanguage() == Language::AR || I18N.getLanguage() == Language::HE);
+  props.rtl = I18N.isRightToLeft();
   configureUiList(props, screen.theme(), screen.body(), UiListRowType::WithSubtitle);
   props.subtitleText.maxLines = 3;
   listNav.selected = showSelection ? selection - CONTROL_COUNT : -1;
   listNav.top = topIndex;
   listNav.syncToProps(screen.body(), props.rowHeight, props.rowGap, rowCount(), props);
   topIndex = listNav.top;
-  screen.list(props);
+  {
+    FilenameUiFontScope fonts(uiTarget, renderer);
+    screen.list(props);
+  }
 }
 
 void LibraryActivity::buildGrid(UiApp::ScreenType& screen) {
@@ -1008,6 +1385,7 @@ void LibraryActivity::buildGrid(UiApp::ScreenType& screen) {
     const bool hasProgress = gridProgressRow == selectedRow && RecentBookProgress::hasPercent(gridProgress);
     subtitleScratch.clear();
     if (hasProgress) subtitleScratch.assign("  ·  ").append(RecentBookProgress::formatPercent(gridProgress));
+    FilenameUiFontScope fonts(uiTarget, renderer);
     auto style = screen.theme().bodyText;
     style.maxLines = 1;
     // Center the whole title row between the sort divider and the first cover.
@@ -1020,7 +1398,7 @@ void LibraryActivity::buildGrid(UiApp::ScreenType& screen) {
         hasProgress ? uiTarget.measureText(style.font, subtitleScratch.c_str(), style).width : 0;
     const int16_t titleWidth = std::max<int16_t>(0, textBand.width - suffixWidth);
     const std::string visibleTitle =
-        renderer.truncatedText(uiScaleSpec().bodyFontId, rowScratch.title.c_str(), titleWidth,
+        renderer.truncatedText(renderer.filenameFontId(uiScaleSpec().bodyFontId), rowScratch.title.c_str(), titleWidth,
                                style.bold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
     const int16_t drawnTitleWidth = uiTarget.measureText(style.font, visibleTitle.c_str(), style).width;
     uiTarget.text(fui::Rect{textBand.x, textBand.y, titleWidth, textBand.height}, visibleTitle.c_str(), style);
@@ -1093,11 +1471,15 @@ void LibraryActivity::buildGrid(UiApp::ScreenType& screen) {
 void LibraryActivity::loadGridPageCovers() {
   if (!gridEnabled() || gridCoverWidth <= 0 || gridCoverHeight <= 0 || gridPageStart == loadedGridPageStart) return;
   const int pageEnd = std::min(gridPageStart + GRID_PAGE_SIZE, rowCount());
-  if (nextGridCoverRow < 0) nextGridCoverRow = gridPageStart;
-  if (nextGridCoverRow < pageEnd && loadGridCover(nextGridCoverRow++)) requestUpdate();
+  if (nextGridCoverRow < 0) {
+    nextGridCoverRow = gridPageStart;
+    gridCoverAdded = false;
+  }
+  if (nextGridCoverRow < pageEnd && loadGridCover(nextGridCoverRow++)) gridCoverAdded = true;
   if (nextGridCoverRow >= pageEnd) {
     loadedGridPageStart = gridPageStart;
     nextGridCoverRow = -1;
+    if (gridCoverAdded) requestUpdate();
   }
 }
 
@@ -1141,8 +1523,7 @@ bool LibraryActivity::loadGridCover(const int row) {
 void LibraryActivity::render(RenderLock&&) {
   uiReady = false;
   if (initialScanPending) {
-    renderer.clearScreen();
-    GUI.drawPopup(renderer, tr(STR_LIBRARY_SCANNING));
+    drawScanScreen(tr(STR_LIBRARY_SCANNING));
     return;
   }
   for (int pass = 0; pass < 8; ++pass) {
@@ -1153,7 +1534,7 @@ void LibraryActivity::render(RenderLock&&) {
                                   3 * HEADER_CONTROL_SIZE + 2 * HEADER_CONTROL_GAP + headerControlRightInset() + 10);
     else
       GUI.drawHeader(renderer, header, tr(STR_LIBRARY));
-    app.render();
+    renderUiApp(app, uiTarget);
     topIndex = listNav.top;
     if (!listNav.consumeRebuildNeeded()) break;
   }
@@ -1177,8 +1558,12 @@ void LibraryActivity::render(RenderLock&&) {
                             renderer.getScreenHeight() - bounds[2] - buttonHintsHeight -
                                 (FOOTER_HEIGHT + renderer.getLineHeight(SMALL_FONT_ID)) / 2,
                             footer);
-  if (pendingCacheDeletedFeedback) GUI.drawPopup(renderer, tr(STR_BOOK_CACHE_DELETED));
-  renderer.displayBuffer();
+  // drawPopup() refreshes the panel itself; avoid repeating the same frame.
+  if (pendingCacheDeletedFeedback) {
+    GUI.drawPopup(renderer, tr(STR_BOOK_CACHE_DELETED));
+  } else {
+    renderer.displayBuffer();
+  }
 }
 
 void LibraryActivity::promptDeleteBook(const RecentBook& book) {
@@ -1193,13 +1578,18 @@ void LibraryActivity::promptDeleteBook(const RecentBook& book) {
       LOG_ERR("LIB", "Failed to delete file: %s", path.c_str());
       return;
     }
+    // A deleted book has nothing left to upload or pull.
+    SyncPending::removePath(path);
+    BookSyncFile::onDeleted(path);
 
     library::invalidateLibraryIndex();
+    // The card changed, so a cancelled scan must not keep showing this book.
+    scanCancelledThisVisit = false;
     RECENT_BOOKS.removeByPath(path);
     reloadAfterBookAction();
   };
 
-  const std::string heading = tr(STR_DELETE) + std::string("? ");
+  const std::string heading = tr(STR_DELETE_ITEM_CONFIRM);
   openDialog(makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, heading, book.title), std::move(handler));
 }
 
@@ -1213,7 +1603,8 @@ void LibraryActivity::promptRemoveBook(const std::string& path, const std::strin
     }
   };
 
-  openDialog(makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_REMOVE_FROM_RECENTS), title,
+  openDialog(makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput,
+                                                     std::string(tr(STR_REMOVE_FROM_RECENTS_ACTION)) + "?", title,
                                                      /*ignoreInitialConfirmRelease=*/false),
              std::move(handler));
 }
@@ -1233,7 +1624,7 @@ void LibraryActivity::showBookActionMenu(const size_t bookIndex, const bool igno
   openDialog(makeUniqueNoThrow<FileBrowserActionActivity>(renderer, mappedInput, book.title, std::move(items),
                                                           ignoreInitialConfirmRelease),
              [this, book](const ActivityResult& result) {
-               longPressFired = false;
+               confirmLongPressCaptured = false;
                if (result.isCancelled) {
                  return;
                }
@@ -1252,6 +1643,18 @@ void LibraryActivity::showBookActionMenu(const size_t bookIndex, const bool igno
                      BookActions::drawToast(renderer, error.c_str());
                    }
                    reloadAfterBookAction();
+                   return;
+                 }
+                 case FileBrowserAction::SyncProgress: {
+                   PendingOverlayResume resume;
+                   resume.origin = PendingOverlayOrigin::Library;
+                   resume.tab = static_cast<uint8_t>(sort);
+                   resume.pane = descending;
+                   resume.selectedIndex = selection;
+                   resume.scrollPosition = topIndex;
+                   resume.libraryQuery = query;
+                   BookActions::syncProgress(renderer, mappedInput, book.path, std::move(resume));
+                   requestUpdate();
                    return;
                  }
                  case FileBrowserAction::ReadingStats:
@@ -1347,6 +1750,7 @@ void LibraryActivity::showBookActionMenu(const size_t bookIndex, const bool igno
                  case FileBrowserAction::UnpinFavorite:
                  case FileBrowserAction::PinBootFavorite:
                  case FileBrowserAction::UnpinBootFavorite:
+                 case FileBrowserAction::UploadFolderProgress:
                  case FileBrowserAction::SetSleepFolder:
                  case FileBrowserAction::ClearSleepFolder:
                  case FileBrowserAction::ViewBookmarks:

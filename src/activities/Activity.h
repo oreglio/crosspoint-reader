@@ -39,6 +39,7 @@ class Activity {
   virtual ~Activity() = default;
   virtual void onEnter();
   virtual void onExit();
+  virtual void prepareForSleep() {}
   virtual void loop() {}
 
   virtual void render(RenderLock&&) {}
@@ -54,6 +55,9 @@ class Activity {
   virtual RequestUpdateResult requestUpdateAndWait();
 
   virtual bool skipLoopDelay() { return false; }
+  // Read on the main task even while render() holds the render lock.
+  // Overrides must return a fixed value that does not depend on render state.
+  virtual uint8_t inputPollDelayMs() const { return 10; }
   virtual bool preventAutoSleep() { return false; }
   // Only meaningful alongside preventAutoSleep(). Some screens hold the device
   // awake merely to keep the panel showing (a countdown), not because they have
@@ -73,6 +77,11 @@ class Activity {
   // activity validates that trigger without routing any other normal input.
   virtual bool handleQuickLockUnlock(QuickLockTrigger) { return false; }
   virtual bool isReaderActivity() const { return false; }
+  // Reader-mode child screens may also report isReaderActivity(); only the
+  // activity owning the open book should be the Home/Reader unwind target.
+  virtual bool isBookReaderActivity() const { return false; }
+  // Lists use spatial menu directions; text-selection/keyboard screens keep their own navigation rules.
+  virtual bool usesMenuButtonOrientation() const { return !isBookReaderActivity(); }
   virtual bool isHomeActivity() const { return false; }
   // The open book uses its vertical swipe actions across the entire page;
   // dialogs and lists retain their normal edge or scroll gestures.
@@ -119,7 +128,7 @@ class Activity {
   virtual void persistGlobalSettings() { SETTINGS.saveGlobalDefaults(); }
   virtual bool onFrontlightGlobalSettingsOpened() { return false; }
   virtual void onFrontlightGlobalSettingsClosed() {}
-  virtual bool handleFrontlightPanelResult(const FrontlightPanelResult&) { return false; }
+  virtual bool handleFrontlightPanelResult(const FrontlightPanelResult& result);
   virtual bool handleExternalReaderMenuAction(uint8_t) { return false; }
   virtual bool restorePendingOverlay(const PendingOverlayResume&) { return false; }
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }

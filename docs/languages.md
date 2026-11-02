@@ -1,0 +1,185 @@
+---
+title: Languages
+nav_order: 11
+---
+
+# Languages
+
+CrossInk includes English. You can download other menu languages on the reader
+or install them from your SD card. You can also edit a translation or create your
+own.
+
+Hyphenation packs help split long words at the end of a line. They follow the
+book's language, independently of your menu language.
+
+## Download a language on the reader
+
+1. Open **Settings > System > Device > Download Languages**.
+2. Select a language marked **Install**.
+3. Follow the Wi-Fi screen to download and activate it. The reader restarts to
+   Home; reopen your book to continue reading.
+
+English is marked **Built in**. Other languages may be marked **Current** (in
+use), **Installed** (already on the reader or SD card), or **Install**.
+
+Selecting an installed language offers **Activate**, **Update**, and **Cancel**.
+The current language offers **Update** and **Cancel**. **Update** downloads a
+fresh copy. Cancelling the Wi-Fi screen returns Home without changing your
+language or reading position.
+
+After a firmware update, **What's New** offers **Update** when your active
+language pack is older than the firmware. You can also open this screen through
+**Settings > System > Release Notes**.
+
+If you see **Downloads unavailable**, use the SD-card instructions below. If no
+compatible download is available for your firmware, update the firmware or
+install the language manually.
+
+If you have edited the SD copy, downloading an update asks before replacing it.
+Keep a separate copy of any translation you want to save.
+
+## Install a language from SD
+
+1. Download `crossink-languages-<version>.zip` for your firmware from the
+   [releases page](https://github.com/uxjulia/CrossInk/releases).
+2. Unzip it and copy the `.crosspoint/languages` folder to the root of your SD
+   card. You only need the language files you want. Turn on **Show hidden files**
+   in your file manager if you cannot see the `.crosspoint` folder.
+3. On the reader, open **Settings > System > Device > Language** and select the
+   language. The reader prepares it, saves your choice, and restarts to Home.
+
+If you edit a language file later, select it again to apply your changes. Editing
+or removing the file alone does not change the installed language. Keep the file
+if you want to reapply or reinstall it again.
+
+Good to know:
+
+- Missing translations appear in English.
+- A file with an error is rejected; your current language stays in use.
+- Keep only one file for each language code. Two files with the same code cannot
+  be selected until you remove the duplicate or give it a different code.
+- After a firmware update, new or changed menu text may appear in English until
+  you update or reapply your translation.
+- Translations change text. They do not add fonts, keyboards, or support for new
+  writing systems.
+- Reapplying an unchanged translation may return without restarting.
+
+## Hyphenation packs
+
+English hyphenation is included. Packs are available for French, German,
+Russian, Spanish, Italian, Polish, Portuguese, Swedish, and Ukrainian.
+
+A book uses the pack for its own language, regardless of your menu language.
+If a needed pack is missing, CrossInk offers once per reading session to open
+**Hyphenation Packs**. You can cancel and keep reading.
+
+### Download and install
+
+1. Open **Settings > Reader > Page Layout > Hyphenation Packs**.
+2. Select a pack marked **Install**. If its file is already on SD, the reader
+   installs that copy. Otherwise, follow the Wi-Fi screen to download it.
+3. After the reader restarts to Home, reopen your book.
+
+Installed packs offer **Update**, **Delete**, and **Cancel**. **Update** downloads
+and reinstalls the pack. If you edited its SD file, you are asked before it is
+replaced. English is always available and cannot be removed.
+
+### Install from SD
+
+1. Copy the `.crosspoint/hyphenation` folder from the language ZIP to the root
+   of your SD card.
+2. Open **Settings > Reader > Page Layout > Hyphenation Packs**.
+3. Select the pack marked **Install**. The reader installs it and restarts to
+   Home; reopen your book afterward.
+
+Deleting an installed pack also restarts the reader. Its SD file stays available
+for reinstallation. Removing or replacing an SD file alone does not change the
+installed pack. To replace a pack from SD without Wi-Fi, delete the installed
+copy first, then select **Install** to install the replacement file.
+
+Turn **Hyphenation** on under **Settings > Reader > Page Layout** to use automatic
+hyphenation. Turning it off does not remove your packs. Hyphens already present
+in a book's text still appear.
+
+Books adjust automatically after a pack changes. You do not need to clear the
+book cache, and your bookmarks and reading position are kept.
+
+## Create or edit a translation
+
+You can use [Inky](https://inky.crossink.dev/#language-tools) (recommended), or edit a YAML file in a plain-text editor. See instructions
+below for plain-text editing.
+
+To start a new translation, copy `english_template.yaml` from the language ZIP.
+Give your copy a filename ending in `.yaml`, then set its language code and name at the top:
+
+```yaml
+_language_code: "MY-LANGUAGE"
+_language_name: "My language"
+_direction: "ltr"
+_keyboard: "EN"
+
+# Keep the STR_ names; edit the quoted text.
+STR_SETTINGS_TITLE: "My settings"
+```
+
+- Use a unique language code starting with a letter, using only letters, digits,
+  hyphens, or underscores. Do not use `EN`, which is reserved for English.
+- Write the language's display name in `_language_name`.
+- Use `ltr` for left-to-right text or `rtl` for right-to-left text.
+- `_keyboard` chooses an existing keyboard layout. `EN` uses English; a
+  translation cannot add a new keyboard layout.
+- Keep these language details above the `STR_` entries.
+- Save as UTF-8 plain text. Keep values in double quotes, one entry per line.
+  Type accented and non-Latin characters directly. Use `\n` for a line break
+  inside a value and `\"` for a quotation mark.
+- Change the quoted text without changing the `STR_` names. You can leave entries
+  empty or remove ones you do not want to translate; they will appear in English.
+- Keep placeholders such as `%s`, `%d`, and `%zu` exactly as they are and in the
+  same order. They are filled in by the reader.
+
+Copy your file into `.crosspoint/languages` on SD and select it through
+**Settings > System > Device > Language**. Select it again after each edit to
+apply the changes. Creating a translation does not require rebuilding firmware.
+
+## Add missing characters with UI Font
+
+On devices with PSRAM such as the X4 Classic, X4 Pro, and Sticky, **UI Font** can fill in characters missing
+from the built-in font, such as Chinese characters in menu text or book titles.
+It also applies to filenames, dialogs, keyboards, chapter lists, bookmarks, and
+other interface text. It keeps characters the built-in font already supports
+and does not change your reading font. This option is unavailable on the X3 and
+X4.
+
+1. Copy a static `.ttf` or `.otf` font into a family folder, for example
+   `/.crosspoint/languages/fonts/Noto Sans SC/`.
+2. Include one regular face and, optionally, one bold face. Each file can be up
+   to **32 MiB**. Italic faces, variable fonts, font collections, and bitmap
+   `.cpfont` files are not supported here.
+3. Open **Settings > System > Device > UI Font** and select the folder's name.
+   Select **None** to turn this fallback off.
+
+Keep fonts for book text in `/fonts` or `/.fonts`. A UI font's first use can take
+longer than later redraws. If a font is missing or unreadable, CrossInk uses its
+built-in font while keeping your saved choice. After changing font files on a
+computer, select the family again or restart the reader.
+
+File Transfer and USB Drive temporarily use built-in fonts. Your selected UI
+font returns when you leave those screens.
+
+## SD cards and recovery
+
+Some readers, including X4 Pro devices with their factory storage layout, keep
+installed languages and hyphenation packs in `/.crosspoint/asset-cache.bin` on
+SD. Keep this file on the card. You do not need to repartition or fully erase the
+reader to use language packs.
+
+The original YAML and hyphenation source files can be removed after installation,
+but a replacement SD card needs its own installed packs. If installed packs stop
+loading, CrossInk falls back to English and built-in hyphenation.
+
+To recover a damaged installed-pack cache, remove only
+`/.crosspoint/asset-cache.bin`, then reinstall your language and hyphenation packs.
+This resets both kinds of installed packs without removing your books.
+
+Normal firmware updates preserve installed packs. A full device erase, switching
+firmware, or replacing the SD card may require reinstalling them.

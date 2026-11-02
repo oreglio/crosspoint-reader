@@ -70,6 +70,8 @@ struct PixelCache {
     flushedRows = 0;
     ok = false;
 
+    // A padded decode block cannot cover more rows than the output image.
+    if (maxBlockDstRows > h) maxBlockDstRows = h;
     int wantRows = maxBlockDstRows + 2;
     if (wantRows < MIN_BAND_ROWS) wantRows = MIN_BAND_ROWS;
     if (wantRows > h) wantRows = h;
@@ -155,7 +157,11 @@ struct PixelCache {
         return false;
       }
     }
-    file.close();
+    if (!file.close()) {
+      LOG_ERR("IMG", "Failed to close cache: %s", cachePathStr.c_str());
+      abort();
+      return false;
+    }
     ok = false;  // file handed off; nothing left to clean up
     return true;
   }

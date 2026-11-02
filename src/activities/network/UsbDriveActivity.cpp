@@ -7,8 +7,10 @@
 #include <LibraryState.h>
 #include <SdCardFontSystem.h>
 
+#include "FilenameFontSystem.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
+#include "activities/boot_sleep/ImageFolderIndex.h"
 #include "components/CompactHeader.h"
 #include "components/TouchHeaderBackButton.h"
 #include "components/UITheme.h"
@@ -31,9 +33,16 @@ void UsbDriveActivity::onEnter() {
   // Paint the instruction screen before detaching the filesystem and exposing
   // its block device to the host. The two operations must never overlap.
   requestUpdateAndWait();
+  {
+    RenderLock lock(*this);
+    filenameFontSystem.suspend(renderer);
+  }
 #ifndef SIMULATOR
   // The host can replace fonts without going through firmware file APIs.
   sdFontSystem.markRegistryDirty();
+  // Invalidate while FAT is still mounted. USB writes bypass firmware hooks,
+  // and endUsbDrive() leaves the filesystem detached until the reboot.
+  ImageFolderIndex::invalidate();
   if (!Storage.beginUsbDrive()) {
     LOG_ERR("USB", "Unable to start USB Drive");
     preparing = false;
@@ -56,6 +65,7 @@ void UsbDriveActivity::onExit() {
 #ifndef SIMULATOR
   if (!restartRequested) Storage.endUsbDrive();
 #endif
+  filenameFontSystem.resume();
   Activity::onExit();
 }
 
@@ -179,9 +189,10 @@ void UsbDriveActivity::render(RenderLock&&) {
 
 void UsbDriveActivity::renderMessage(const char* message, const char* detail) const {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const Rect textArea{metrics.contentSidePadding, 0, renderer.getScreenWidth() - metrics.contentSidePadding * 2,
-                      renderer.getScreenHeight()};
-  int y = renderer.getScreenHeight() / 2 - renderer.getLineHeight(UI_10_FONT_ID);
+  const auto safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const Rect textArea{safe.x + metrics.contentSidePadding, safe.y, safe.width - metrics.contentSidePadding * 2,
+                      safe.height};
+  int y = safe.y + safe.height / 2 - renderer.getLineHeight(UI_10_FONT_ID);
   y += UITheme::drawCenteredWrappedText(renderer, textArea, UI_10_FONT_ID, y, message, 2, true, EpdFontFamily::BOLD);
   if (detail) {
     y += metrics.verticalSpacing;

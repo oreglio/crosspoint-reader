@@ -65,8 +65,8 @@ class OtaUpdater {
   // An asset was found and its tag differs from the running version, in either
   // direction. isUpdateNewer() answers the narrower question and is unchanged.
   bool isDifferentVersion() const {
-#ifdef CROSSINK_VERSION
-    return updateAvailable && !latestVersion.empty() && latestVersion != CROSSINK_VERSION;
+#if __has_include(<AppVersion.h>)
+    return updateAvailable && !latestVersion.empty() && latestVersion != AppVersion::version();
 #else
     return updateAvailable && !latestVersion.empty();
 #endif

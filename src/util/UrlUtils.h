@@ -3,6 +3,9 @@
 
 namespace UrlUtils {
 
+// Omit query tokens, fragments, and credentials from diagnostic URLs.
+std::string forLog(const std::string& url);
+
 /**
  * Check if URL uses HTTPS protocol
  */
@@ -29,5 +32,9 @@ std::string encodeUnsafeUrlChars(const std::string& url);
  * Otherwise, it's relative to the server URL.
  */
 std::string buildUrl(const std::string& serverUrl, const std::string& path);
+
+// Resolve an HTTP document link (including query-only and parent references).
+// Unlike buildUrl's directory join, a relative link replaces the base filename.
+std::string resolveReference(const std::string& baseUrl, const std::string& reference);
 
 }  // namespace UrlUtils

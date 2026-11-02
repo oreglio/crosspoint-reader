@@ -160,12 +160,14 @@ Refer to https://freeink.org/llms.txt for guidance.
 
 ## Langues et build
 
-Un build X3/X4 n'embarque qu'EN+FR (`custom_languages` dans `platformio.ini`),
-donc `Language` n'a pas d'énumérateur pour les autres : nommer `Language::DE`
-ne compile pas. Garder tout code sensible derrière `I18N_HAS_*`. La table
-`keyboard_layouts::ALL` garde ses neuf lignes en toutes circonstances — leur
-position **est** l'affectation de bits persistée — les langues absentes portant
-`Language::_COUNT` via les macros `KBD_LANG_*`.
+Depuis la sync du 02/11/2026, les langues suivent le système d'amont : seul
+`custom_i18n_builtin_langs` (section `[crossink]` de `platformio.ini`) choisit
+les langues compilées ; les autres sont des paquets YAML sur SD. Ce fork compile
+`en,fr` : le paquet français téléchargeable d'amont ne contient pas nos chaînes
+(Tasks, Raindrop, Library). L'ancien `custom_languages` et les gardes `I18N_HAS_*`
+n'existent plus. Une clé que l'amont supprime alors que notre code l'utilise
+encore fait échouer `gen_i18n.py` (« missing from english.yaml ») : la remettre
+dans `english.yaml` ET `french.yaml`.
 
 ## Tests hôte
 

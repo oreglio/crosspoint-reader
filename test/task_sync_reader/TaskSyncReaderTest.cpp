@@ -456,13 +456,17 @@ TEST(TaskSyncReader, RejectsAHeaderWithoutACursorKey) {
 }
 
 // Au-delà de TOKEN_BUF_SIZE, StreamingJsonParser n'émet pas le jeton du tout :
-// la garde d'alphabet ne voit rien passer et le curseur resterait vide.
-TEST(TaskSyncReader, RejectsACursorLongerThanTheParserTokenBuffer) {
+// la garde d'alphabet ne verrait rien passer et le curseur resterait vide.
+// Depuis que le SDK porte ce tampon à 2048 octets, aucune ligne acceptée ne
+// peut contenir un jeton tronqué : une ligne plus longue que LINE_BUF_SIZE est
+// refusée avant l'analyse. Le refus d'un curseur trop long passe donc par là.
+static_assert(StreamingJsonParser::TOKEN_BUF_SIZE >= TaskSyncReader::LINE_BUF_SIZE,
+              "a line that fits must never carry a token the parser drops");
+TEST(TaskSyncReader, RejectsACursorLongerThanTheLineBuffer) {
   Capture cap;
   TaskSyncReader r(callbacks(cap));
-  const std::string cursor(StreamingJsonParser::TOKEN_BUF_SIZE + 1, 'A');
+  const std::string cursor(TaskSyncReader::LINE_BUF_SIZE, 'A');
   const std::string body = "{\"schema\":1,\"cursor\":\"" + cursor + "\",\"more\":false,\"reset\":false}\n";
-  ASSERT_LT(body.size(), TaskSyncReader::LINE_BUF_SIZE);
   r.feed(body.data(), body.size());
   EXPECT_TRUE(r.hasError());
   EXPECT_FALSE(cap.header);

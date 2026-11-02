@@ -1,0 +1,89 @@
+name: Publish language download assets
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing published firmware release tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+# Serialize publication, including manual retries. Never cancel an active upload.
+concurrency:
+  group: language-assets-publication
+  cancel-in-progress: false
+
+jobs:
+  publish-github:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check GitHub asset publishing configuration
+        env:
+          ASSETS_TOKEN: ${{ secrets.RELEASE_PAT }}
+        run: |
+          [[ -n "$ASSETS_TOKEN" ]] || { echo 'Set RELEASE_PAT with contents write access to uxjulia/crossink-assets'; exit 1; }
+      - uses: actions/checkout@v6
+        with:
+          repository: uxjulia/crossink-assets
+          ref: main
+          token: ${{ secrets.RELEASE_PAT }}
+          path: github-assets
+      - name: Export individual GitHub downloads from published firmware
+        run: python3 scripts/export_github_language_assets.py --release-tag "$RELEASE_TAG" --output github-assets/assets
+      - name: Publish individual files and catalogs to crossink-assets
+        working-directory: github-assets
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add assets
+          if git diff --cached --quiet; then
+            echo 'GitHub language downloads are already current'
+            exit 0
+          fi
+          git commit -m "Update language downloads for $RELEASE_TAG"
+          git push origin HEAD:main
+
+  publish:
+    runs-on: ubuntu-latest
+    environment: language-assets
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      AWS_ROLE: ${{ vars.LANGUAGE_ASSETS_AWS_ROLE_ARN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check release publishing configuration
+        shell: bash
+        run: |
+          [[ -n "$AWS_ROLE" ]] || { echo 'Set LANGUAGE_ASSETS_AWS_ROLE_ARN'; exit 1; }
+      # Release events use the workflow at the release tag, including RC branches.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Verify published release and build matching assets
+        run: python3 scripts/publish_language_assets.py --release-tag "$RELEASE_TAG"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.LANGUAGE_ASSETS_AWS_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Publish changed assets and verified catalogs
+        run: python3 scripts/publish_language_assets.py --release-tag "$RELEASE_TAG" --publish

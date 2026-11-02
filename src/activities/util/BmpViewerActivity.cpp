@@ -5,6 +5,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Memory.h>
 #include <SdCardFontSystem.h>
 
 #include <algorithm>
@@ -143,12 +144,30 @@ void BmpViewerActivity::onEnter() {
   if (siblingImages.empty() && !filePath.empty()) {
     loadSiblingImages();
   }
+  requestImageRedraw();
+}
 
+void BmpViewerActivity::requestImageRedraw() {
+  needsImageRedraw.store(true, std::memory_order_release);
+  requestUpdate();
+}
+
+void BmpViewerActivity::onFrontlightPanelClosed() {
+  // The drop-down panel drew over the top of the image in the shared framebuffer.
+  requestImageRedraw();
+}
+
+void BmpViewerActivity::render(RenderLock&&) {
+  if (!needsImageRedraw.exchange(false, std::memory_order_acq_rel)) return;
+  drawImage();
+}
+
+void BmpViewerActivity::drawImage() {
   HalFile file;
 
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
-  Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING));
   GUI.fillPopupProgress(renderer, popupRect, 20);  // Initial 20% progress
 
   if (FsHelpers::hasPngExtension(filePath)) {
@@ -249,17 +268,42 @@ void BmpViewerActivity::onExit() {
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 }
 
+void BmpViewerActivity::confirmSetSleepCover() {
+  std::string subject = imageDisplayName(filePath);
+  if (FsHelpers::hasPngExtension(filePath) && SETTINGS.sleepScreen != CrossPointSettings::OVERLAY &&
+      SETTINGS.sleepScreen != CrossPointSettings::COVER_OVERLAY) {
+    subject += "\n";
+    subject += tr(STR_PIN_PNG_WARNING);
+  }
+  auto confirmation =
+      makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_SET_SLEEP_COVER_CONFIRM), subject);
+  if (!confirmation) {
+    LOG_ERR("BmpViewer", "OOM: sleep image confirmation");
+    return;
+  }
+  needsImageRedraw.store(true, std::memory_order_release);
+  startActivityForResult(std::move(confirmation), [this](const ActivityResult& result) {
+    if (!result.isCancelled)
+      doSetSleepCover();
+    else
+      requestImageRedraw();
+  });
+}
+
 void BmpViewerActivity::doSetSleepCover() {
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  // The popups draw from this task; wait for any image redraw on the render task.
+  RenderLock lock(*this);
+  GUI.drawPopup(renderer, tr(STR_LOADING));
 
   APP_STATE.favoriteSleepImagePath = filePath;
   if (APP_STATE.saveToFile()) {
     LOG_INF("BmpViewer", "Pinned favorite sleep image: %s", filePath.c_str());
 
-    // PNG covers only render in Page Overlay sleep mode; other modes silently skip them (see
+    // PNG covers render in the overlay sleep modes; other modes silently skip them (see
     // selectPinnedSleepImage() in SleepActivity.cpp), so switch the setting for the user.
     if (FsHelpers::hasPngExtension(filePath) &&
-        SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::OVERLAY) {
+        SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::OVERLAY &&
+        SETTINGS.sleepScreen != CrossPointSettings::COVER_OVERLAY) {
       SETTINGS.sleepScreen = CrossPointSettings::SLEEP_SCREEN_MODE::OVERLAY;
       if (SETTINGS.saveGlobalDefaults()) {
         LOG_INF("BmpViewer", "Switched sleep wallpaper mode to Page Overlay for PNG cover");
@@ -273,27 +317,10 @@ void BmpViewerActivity::doSetSleepCover() {
     LOG_ERR("BmpViewer", "Failed to save favorite sleep image path: %s", filePath.c_str());
     GUI.drawPopup(renderer, tr(STR_FAILED_LOWER));
   }
+  lock.unlock();
 
   delay(1000);
-  onEnter();
-}
-
-void BmpViewerActivity::pinSleepFavorite() {
-  APP_STATE.favoriteSleepImagePath = filePath;
-  if (!APP_STATE.saveToFile()) {
-    LOG_ERR("BmpViewer", "Failed to save favorite sleep image path: %s", filePath.c_str());
-    return;
-  }
-  LOG_INF("BmpViewer", "Pinned favorite sleep image: %s", filePath.c_str());
-
-  // Keep the context-menu action consistent with Confirm: PNG sleep images
-  // only render in Page Overlay mode.
-  if (FsHelpers::hasPngExtension(filePath) && SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::OVERLAY) {
-    SETTINGS.sleepScreen = CrossPointSettings::SLEEP_SCREEN_MODE::OVERLAY;
-    if (!SETTINGS.saveGlobalDefaults()) {
-      LOG_ERR("BmpViewer", "Failed to save Page Overlay mode for PNG sleep image");
-    }
-  }
+  requestImageRedraw();
 }
 
 void BmpViewerActivity::unpinSleepFavorite() {
@@ -325,6 +352,7 @@ void BmpViewerActivity::unpinBootFavorite() {
 
 void BmpViewerActivity::promptDeleteImage() {
   const std::string path = filePath;
+  needsImageRedraw.store(true, std::memory_order_release);  // the prompt draws over the image
   startActivityForResult(
       std::make_unique<ConfirmationActivity>(renderer, mappedInput, BookActions::confirmationHeading(StrId::STR_DELETE),
                                              imageDisplayName(path)),
@@ -362,6 +390,7 @@ void BmpViewerActivity::showContextMenu() {
                      isBootPinned ? StrId::STR_CLEAR_BOOT_SCREEN : StrId::STR_SET_AS_BOOT_SCREEN});
   }
 
+  needsImageRedraw.store(true, std::memory_order_release);  // the menu draws over the image
   startActivityForResult(std::make_unique<FileBrowserActionActivity>(renderer, mappedInput, imageDisplayName(filePath),
                                                                      std::move(items), false, false),
                          [this](const ActivityResult& result) {
@@ -378,15 +407,7 @@ void BmpViewerActivity::showContextMenu() {
                                activityManager.goToNearbyBookSend(filePath, false);
                                return;
                              case FileBrowserAction::PinFavorite:
-                               if (FsHelpers::hasPngExtension(filePath)) {
-                                 startActivityForResult(std::make_unique<ConfirmationActivity>(
-                                                            renderer, mappedInput, "", tr(STR_PIN_PNG_WARNING)),
-                                                        [this](const ActivityResult& confirmation) {
-                                                          if (!confirmation.isCancelled) pinSleepFavorite();
-                                                        });
-                               } else {
-                                 pinSleepFavorite();
-                               }
+                               confirmSetSleepCover();
                                return;
                              case FileBrowserAction::UnpinFavorite:
                                unpinSleepFavorite();
@@ -400,6 +421,8 @@ void BmpViewerActivity::showContextMenu() {
                              case FileBrowserAction::DeleteCache:
                              case FileBrowserAction::ReadingStats:
                              case FileBrowserAction::ToggleBookStatsTracking:
+                             case FileBrowserAction::SyncProgress:
+                             case FileBrowserAction::UploadFolderProgress:
                              case FileBrowserAction::SetSleepFolder:
                              case FileBrowserAction::ClearSleepFolder:
                              case FileBrowserAction::ToggleCompleted:
@@ -430,11 +453,15 @@ void BmpViewerActivity::loop() {
     if (siblingImages.size() <= 1 || nextIndex < 0 || nextIndex >= static_cast<int>(siblingImages.size())) {
       return false;
     }
-    currentImageIndex = nextIndex;
     std::string dirPath = FsHelpers::extractFolderPath(filePath);
     if (dirPath.back() != '/') dirPath += "/";
-    filePath = dirPath + siblingImages[currentImageIndex];
-    onEnter();
+    {
+      // render() reads filePath and currentImageIndex on the render task.
+      RenderLock lock(*this);
+      currentImageIndex = nextIndex;
+      filePath = dirPath + siblingImages[currentImageIndex];
+    }
+    requestImageRedraw();
     return true;
   };
 
@@ -470,7 +497,7 @@ void BmpViewerActivity::loop() {
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (isViewableImageFile(filePath)) {
-      doSetSleepCover();
+      confirmSetSleepCover();
     }
     return;
   }

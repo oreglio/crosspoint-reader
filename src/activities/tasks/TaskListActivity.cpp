@@ -291,7 +291,7 @@ void TaskListActivity::buildRows(UiScreen& screen) {
       // trois : la priorite basse ne se distingue que par sa place en fin de
       // tri (taskOrderBefore), pas par un style — l'exception (haute) se
       // marque, pas la regle. Une tache faite cesse de crier : le gras ne vaut que pour une tache ouverte.
-      item.emphasis = (rec.priority == TASK_PRIORITY_HIGH) && !rec.done;
+      item.bold = (rec.priority == TASK_PRIORITY_HIGH) && !rec.done;
       // Pas de fui::StateDisabled sur une tache faite : BoxStyle::resolve()
       // (FreeInkUICore.h:606-615) teste Disabled AVANT Selected, donc une ligne
       // faite ET selectionnee prend le style "disabled", sans fond de

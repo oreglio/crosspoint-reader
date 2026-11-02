@@ -42,6 +42,22 @@ void HalPowerManager::begin() {
   assert(modeMutex != nullptr);
 }
 
+bool HalPowerManager::updateBatteryCalibration() {
+  if (BoardConfig::ACTIVE.board != BoardConfig::Board::XteinkX3 &&
+      BoardConfig::ACTIVE.board != BoardConfig::Board::XteinkX3Uc8279)
+    return false;
+
+  // The SDK performs one best-effort attempt per boot. False is terminal,
+  // including I2C failure; an interrupted/failed load is retried next boot.
+  const bool wasPending = batteryCalibrationPending;
+  batteryCalibrationPending = BatteryMonitor::loadDesignCapacity();
+  if (wasPending && !batteryCalibrationPending) {
+    _batteryPollStarted = false;  // Sample the corrected gauge on the next battery read.
+    LOG_INF("PWR", "X3 battery capacity check finished");
+  }
+  return batteryCalibrationPending;
+}
+
 void HalPowerManager::setPowerSaving(bool enabled) {
   if (normalFreq <= 0) {
     return;  // invalid state
@@ -57,9 +73,9 @@ void HalPowerManager::setPowerSaving(bool enabled) {
     enabled = false;
   }
 
-  const LockMode mode = currentLockMode;
+  const bool locked = lockCount > 0;
 
-  if (mode == None && enabled && !isLowPower) {
+  if (!locked && enabled && !isLowPower) {
     LOG_DBG("PWR", "Going to low-power mode");
     if (!setCpuFrequencyMhz(LOW_POWER_FREQ)) {
       LOG_DBG("PWR", "Failed to set CPU frequency = %d MHz", LOW_POWER_FREQ);
@@ -70,7 +86,7 @@ void HalPowerManager::setPowerSaving(bool enabled) {
     }
     isLowPower = true;
 
-  } else if ((!enabled || mode != None) && isLowPower) {
+  } else if ((!enabled || locked) && isLowPower) {
     LOG_DBG("PWR", "Restoring normal CPU frequency");
     if (!setCpuFrequencyMhz(normalFreq)) {
       LOG_DBG("PWR", "Failed to set CPU frequency = %d MHz", normalFreq);
@@ -90,6 +106,12 @@ void HalPowerManager::setPowerSaving(bool enabled) {
 }
 
 void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
+  // Once started, let the SDK exit configuration mode and seal the gauge.
+  // Sleep runs on the main task after rendering has stopped. The SDK bounds
+  // every wait; ordinary sleep has no delay once the startup check is done.
+  while (batteryCalibrationPending && BatteryMonitor::loadDesignCapacity()) {
+    delay(20);
+  }
   disableWiFiBeforeDeepSleep();
 
 #ifdef ENABLE_SERIAL_LOG
@@ -148,13 +170,15 @@ void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
 
 uint16_t HalPowerManager::getBatteryPercentage() const {
   static const BatteryMonitor battery;
-  if (BoardConfig::ACTIVE.batteryGauge.gaugeAddr != 0) {
-    const unsigned long now = millis();
-    if (_batteryLastPollMs != 0 && (now - _batteryLastPollMs) < BATTERY_POLL_MS) {
-      return _batteryCachedPercent;
-    }
+  const bool hasGauge = BoardConfig::ACTIVE.batteryGauge.gaugeAddr != 0;
+  const unsigned long now = millis();
+  if (_batteryPollStarted && (now - _batteryLastPollMs) < BATTERY_POLL_MS) {
+    return hasGauge ? _batteryCachedPercent : _batteryCachedPercent / 10;
+  }
 
-    _batteryLastPollMs = now;
+  _batteryLastPollMs = now;
+  if (hasGauge) {
+    _batteryPollStarted = true;
     uint16_t percent = 0;
     if (!battery.readPercentageChecked(percent)) {
       return _batteryCachedPercent;
@@ -163,16 +187,14 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
     return _batteryCachedPercent;
   }
 
-  // TEMP battery-gauge diagnosis (#3020): log the raw millivolts next to the
-  // percent so a full charge (true 4.20 V) exposes any divider over-read.
-  LOG_INF("BATT", "adc=%u mV -> notch=%u%%", battery.readMillivolts(), battery.readPercentage());
-
-  // smooth the battery %.
-  if (_batteryCachedPercent == 0) {
-    _batteryCachedPercent = 10 * battery.readPercentage();
+  // Smooth once per poll, independent of how many times the UI measures or draws it.
+  const uint16_t percent = battery.readPercentage();
+  if (!_batteryPollStarted) {
+    _batteryCachedPercent = 10 * percent;
   } else {
-    _batteryCachedPercent = (_batteryCachedPercent * 9 + battery.readPercentage() * 10) / 10;
+    _batteryCachedPercent = (_batteryCachedPercent * 9 + percent * 10) / 10;
   }
+  _batteryPollStarted = true;
   return _batteryCachedPercent / 10;
 }
 
@@ -199,25 +221,14 @@ bool HalPowerManager::getBatteryDiagnostics(BatteryDiagnostics& out) const {
 
 HalPowerManager::Lock::Lock() {
   xSemaphoreTake(powerManager.modeMutex, portMAX_DELAY);
-  // Current limitation: only one lock at a time
-  if (powerManager.currentLockMode != None) {
-    LOG_ERR("PWR", "Lock already held, ignore");
-    valid = false;
-  } else {
-    powerManager.currentLockMode = NormalSpeed;
-    valid = true;
-  }
+  ++powerManager.lockCount;
   xSemaphoreGive(powerManager.modeMutex);
-  if (valid) {
-    // Immediately restore normal CPU frequency if currently in low-power mode
-    powerManager.setPowerSaving(false);
-  }
+  // Immediately restore normal CPU frequency if currently in low-power mode.
+  powerManager.setPowerSaving(false);
 }
 
 HalPowerManager::Lock::~Lock() {
   xSemaphoreTake(powerManager.modeMutex, portMAX_DELAY);
-  if (valid) {
-    powerManager.currentLockMode = None;
-  }
+  --powerManager.lockCount;
   xSemaphoreGive(powerManager.modeMutex);
 }

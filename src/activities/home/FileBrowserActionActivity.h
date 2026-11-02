@@ -31,9 +31,11 @@ enum class FileBrowserAction : int {
   Rename = 18,
   ReadingStats = 19,
   ToggleBookStatsTracking = 20,
+  UploadFolderProgress = 21,
+  SyncProgress = 22,
   // This fork (Raindrop articles). Values only travel from the menu to its
   // caller within one visit, never to disk, so it simply follows upstream's.
-  MarkArticleDone = 21,
+  MarkArticleDone = 23,
 };
 
 class FileBrowserActionActivity final : public Activity {

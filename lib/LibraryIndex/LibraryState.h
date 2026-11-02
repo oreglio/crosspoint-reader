@@ -47,5 +47,12 @@ void markShelfStaleIfBook(const char* path);
 void invalidateLibraryIndex();
 // True exactly once per marking: reading consumes the flag.
 bool takeShelfStale();
+// Upstream's core keeps a RAM dirty flag and an RTC token so a deep sleep need
+// not rescan. This shelf persists its stale marker on the SD card instead, so
+// there is nothing to carry across sleep: the index is never declared clean
+// here, and restoring is a no-op. Same names as upstream's LibraryBuilder API
+// so main.cpp stays identical to upstream's.
+inline bool libraryIndexNeedsRefresh() { return true; }
+inline void restoreLibraryIndexAfterSleep() {}
 
 }  // namespace library

@@ -1,13 +1,19 @@
 #include "GlobalReadingStats.h"
 
 #include <HalStorage.h>
+#include <KOReaderCredentialStore.h>
 #include <Logging.h>
+#include <MD5Builder.h>
 #include <esp_mac.h>
 
 #include <array>
 #include <cstring>
 #include <limits>
 #include <string>
+
+#include "DailyReadingStats.h"
+#include "sync/SyncFiles.h"
+#include "util/FileContentEquals.h"
 
 namespace {
 enum class StatsLoadResult : uint8_t { Ok, Invalid, NewerFormat };
@@ -52,6 +58,29 @@ static constexpr char GLOBAL_STATS_PATH[] = "/.crosspoint/global_stats.bin";
 static constexpr char GLOBAL_STATS_BAK_PATH[] = "/.crosspoint/global_stats.bin.bak";
 static constexpr char SYNCED_STATS_DIR[] = "/.crosspoint/synced_stats";
 static bool s_blockDestructiveSave = false;
+
+// Bind the cached calendar to the selected server/account without storing credentials.
+std::string serverStreakPath() {
+  MD5Builder md5;
+  md5.begin();
+  md5.add(KOREADER_STORE.getBaseUrl().c_str());
+  md5.add("\n");
+  md5.add(KOREADER_STORE.getUsername().c_str());
+  md5.calculate();
+  return std::string("/.crosspoint/server_streak_") + md5.toString().c_str() + ".bin";
+}
+
+bool loadServerStreak(GlobalReadingStats& out) {
+  if (!KOREADER_STORE.hasCredentials() || !KOREADER_STORE.getSyncStats()) return false;
+  SyncFiles::Reader reader(serverStreakPath().c_str());
+  uint8_t version = 0;
+  const bool loaded = reader.open() != SyncFiles::Reader::Source::None && reader.pod(version) && version == 1 &&
+                      reader.pod(out.readingHistoryAnchorDay) &&
+                      reader.read(out.readingHistoryBits.data(), READING_HISTORY_BYTES) &&
+                      reader.pod(out.longestReadingStreak) && reader.atEnd();
+  reader.close();
+  return loaded;
+}
 
 uint32_t readLe32(const uint8_t* data, const int offset) {
   return static_cast<uint32_t>(data[offset]) | (static_cast<uint32_t>(data[offset + 1]) << 8) |
@@ -195,6 +224,13 @@ bool verifyFileSize(const char* path, const size_t expectedSize) {
 }
 
 bool saveToFile(const GlobalReadingStats& stats, const char* path, const char* backupPath) {
+  uint8_t data[GLOBAL_STATS_FILE_SIZE];
+  serializeStats(stats, data);
+
+  // Reader exit saves unconditionally; a quick open-and-close changes nothing.
+  const bool unchanged = fileContentEquals("GSTATS", path, data, sizeof(data));
+  if (unchanged) return true;
+
   const std::string tmpPath = std::string(path) + ".tmp";
   if (Storage.exists(tmpPath.c_str()) && !Storage.remove(tmpPath.c_str())) {
     LOG_ERR("GSTATS", "Could not remove stale stats temp file: %s", tmpPath.c_str());
@@ -207,8 +243,6 @@ bool saveToFile(const GlobalReadingStats& stats, const char* path, const char* b
     return false;
   }
 
-  uint8_t data[GLOBAL_STATS_FILE_SIZE];
-  serializeStats(stats, data);
   const size_t bytesWritten = f.write(data, GLOBAL_STATS_FILE_SIZE);
   if (bytesWritten != GLOBAL_STATS_FILE_SIZE) {
     LOG_ERR("GSTATS", "Short write for stats temp file %s: %u/%u bytes", tmpPath.c_str(),
@@ -274,6 +308,15 @@ static StatsLoadOutcome loadFromFile(const char* path, GlobalReadingStats& out) 
   outcome = loadFromOpenFile(f, out);
   f.close();
   return outcome;
+}
+
+bool GlobalReadingStats::loadForUpload(GlobalReadingStats& stats) {
+  stats = {};
+  const auto primary = loadFromFile(GLOBAL_STATS_PATH, stats);
+  if (primary.result == StatsLoadResult::Ok) return true;
+  if (primary.result == StatsLoadResult::NewerFormat) return false;
+  const auto backup = loadFromFile(GLOBAL_STATS_BAK_PATH, stats);
+  return backup.result == StatsLoadResult::Ok;
 }
 
 GlobalReadingStats GlobalReadingStats::load() {
@@ -361,15 +404,27 @@ GlobalReadingStats GlobalReadingStats::loadAggregated(const GlobalReadingStats& 
   return stats;
 }
 
-void GlobalReadingStats::save() const {
+bool GlobalReadingStats::save() const {
+  const bool dailySaved = DailyReadingStats::flush();
+  if (!dailySaved) LOG_ERR("GSTATS", "Failed to flush daily reading counters");
   if (s_blockDestructiveSave) {
     LOG_ERR("GSTATS", "Refusing to overwrite on-disk stats after newer-format file was detected");
-    return;
+    return false;
   }
-  saveToFile(*this, GLOBAL_STATS_PATH, GLOBAL_STATS_BAK_PATH);
+  // Keep the global snapshot even if the independent daily flush needs retrying.
+  const bool globalSaved = saveToFile(*this, GLOBAL_STATS_PATH, GLOBAL_STATS_BAK_PATH);
+  return globalSaved && dailySaved;
 }
 
-bool GlobalReadingStats::resetLocal() { return saveToFile(GlobalReadingStats{}, GLOBAL_STATS_PATH, nullptr); }
+static uint32_t s_localResetRevision = 0;
+
+bool GlobalReadingStats::resetLocal() {
+  if (!saveToFile(GlobalReadingStats{}, GLOBAL_STATS_PATH, nullptr)) return false;
+  s_localResetRevision++;
+  return true;
+}
+
+uint32_t GlobalReadingStats::localResetRevision() { return s_localResetRevision; }
 
 void GlobalReadingStats::recordReadingSpan(const ReadingStatsDateTime& localStart, const uint32_t seconds) {
   recordReadingSpanIntoBuckets(timeOfDaySeconds, dayOfWeekSeconds, localStart, seconds);
@@ -382,10 +437,33 @@ void GlobalReadingStats::recordReadingSpan(const ReadingStatsDateTime& localStar
 }
 
 uint16_t GlobalReadingStats::currentReadingStreak(const ReadingStatsDate* today) const {
+  GlobalReadingStats server;
+  if (loadServerStreak(server)) {
+    mergeReadingHistory(server.readingHistoryAnchorDay, server.readingHistoryBits, readingHistoryAnchorDay,
+                        readingHistoryBits);
+    return computeReadingHistoryCurrentStreak(server.readingHistoryAnchorDay, server.readingHistoryBits, today);
+  }
   return computeReadingHistoryCurrentStreak(readingHistoryAnchorDay, readingHistoryBits, today);
 }
 
 uint16_t GlobalReadingStats::displayLongestReadingStreak() const {
+  GlobalReadingStats server;
+  if (loadServerStreak(server)) {
+    mergeReadingHistory(server.readingHistoryAnchorDay, server.readingHistoryBits, readingHistoryAnchorDay,
+                        readingHistoryBits);
+    return std::max(std::max(longestReadingStreak, server.longestReadingStreak),
+                    computeReadingHistoryLongestStreak(server.readingHistoryAnchorDay, server.readingHistoryBits));
+  }
   return std::max(longestReadingStreak,
                   computeReadingHistoryLongestStreak(readingHistoryAnchorDay, readingHistoryBits));
+}
+
+bool GlobalReadingStats::saveServerStreak(const GlobalReadingStats& streak) {
+  SyncFiles::Writer writer(serverStreakPath().c_str());
+  constexpr uint8_t version = 1;
+  const bool saved = writer.open() && writer.pod(version) && writer.pod(streak.readingHistoryAnchorDay) &&
+                     writer.write(streak.readingHistoryBits.data(), READING_HISTORY_BYTES) &&
+                     writer.pod(streak.longestReadingStreak) && writer.commit();
+  if (!saved) LOG_ERR("GSTATS", "Cannot save server reading calendar");
+  return saved;
 }

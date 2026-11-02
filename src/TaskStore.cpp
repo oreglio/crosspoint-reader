@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <ObfuscationUtils.h>
 
 #include <algorithm>
@@ -138,7 +139,14 @@ bool secretParses(const char* path) {
 void forEachQueuedOp(const char* path, bool (*visit)(void* ctx, TaskOp& op), void* ctx) {
   HalFile file;
   if (!Storage.openFileForRead(TAG, path, file)) return;
-  TaskOpLineSplitter splitter;
+  // ~2,6 Ko (ligne + parseur JSON) : sur le tas, pas sur la pile de l'appelant.
+  auto splitterPtr = makeUniqueNoThrow<TaskOpLineSplitter>();
+  if (!splitterPtr) {
+    LOG_ERR(TAG, "Cannot allocate the ops line splitter");
+    file.close();
+    return;
+  }
+  TaskOpLineSplitter& splitter = *splitterPtr;
   TaskOp op;
   while (file.available()) {
     const int byte = file.read();

@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "components/OptionLabels.h"
+#include "fontIds.h"
 #include "util/ReaderStatusBarConfig.h"
 
 class GfxRenderer;
@@ -28,6 +30,9 @@ struct TabInfo {
 };
 
 struct ReaderStatusBarContent {
+  // Readers share one frame's sample between bars; -1 samples locally for previews/global bars.
+  int batteryPercentage = -1;
+  bool outsideReader = false;
   float bookProgress = 0;
   float chapterProgress = -1;
   int chapterPage = 0;
@@ -46,6 +51,8 @@ struct ReaderStatusBarContent {
   bool darkMode = false;
   int edgePadding = 0;
   int previewOriginY = -1;
+  // Optional borrowed bounds, used only during this draw call.
+  const Rect* horizontalBounds = nullptr;
 };
 
 enum class ThemeTabBarAppearance : uint8_t {
@@ -170,7 +177,9 @@ enum UIIcon {
   Wifi,
   Hotspot,
   Chart,
-  Cloud
+  Cloud,
+  BookCheck,
+  Plugins
 };
 
 // Default theme implementation (Classic Theme)
@@ -263,10 +272,12 @@ class BaseTheme {
 
   // Component drawing methods
   void drawProgressBar(const GfxRenderer& renderer, Rect rect, size_t current, size_t total) const;
-  void drawBatteryLeft(const GfxRenderer& renderer, Rect rect, bool showPercentage = true,
-                       bool foregroundBlack = true) const;  // Left aligned (reader mode)
-  void drawBatteryRight(const GfxRenderer& renderer, Rect rect, bool showPercentage = true,
-                        bool foregroundBlack = true) const;  // Right aligned (UI headers)
+  void drawBatteryLeft(const GfxRenderer& renderer, Rect rect, uint16_t percentage, bool showPercentage = true,
+                       bool foregroundBlack = true,
+                       int fontId = SMALL_FONT_ID) const;  // Left aligned (reader mode)
+  void drawBatteryRight(const GfxRenderer& renderer, Rect rect, uint16_t percentage, bool showPercentage = true,
+                        bool foregroundBlack = true,
+                        int fontId = SMALL_FONT_ID) const;  // Right aligned (UI headers)
   virtual void fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t percentage,
                                bool foregroundBlack = true) const;
   // Button hint labels use three states: non-empty labels draw an active hint,
@@ -287,7 +298,7 @@ class BaseTheme {
                         const std::function<bool(int index)>& isHeader = nullptr, int rowHeightScale = 1,
                         bool showSelection = true) const;
   virtual void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle = nullptr,
-                          bool readerContext = false, bool showStatus = true) const;
+                          bool readerContext = false, bool showStatus = true, bool filenameTitle = false) const;
   virtual void drawSubHeader(const GfxRenderer& renderer, Rect rect, const char* label,
                              const char* rightLabel = nullptr) const;
   virtual void drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
@@ -306,20 +317,22 @@ class BaseTheme {
   // With preserveBackdrop, leave the popup on the display but restore the backing
   // pixels for the next redraw. Caller must own RenderLock.
   virtual Rect drawPopup(const GfxRenderer& renderer, const char* message, bool preserveBackdrop = false) const;
-  virtual void drawOptionPopup(const GfxRenderer& renderer, const char* title, const std::vector<std::string>& options,
-                               int selectedIndex, bool showConfirmationFooter = false,
-                               const char* cancelLabel = nullptr, const char* saveLabel = nullptr,
-                               bool saveFocused = false, int primaryOptionIndex = -1, const char* noteLabel = nullptr,
-                               const char* noteBody = nullptr, const std::vector<bool>& disabledOptions = {},
-                               int firstOptionIndex = -1) const;
+  virtual void drawOptionPopup(const GfxRenderer& renderer, const char* title, OptionLabels options, int selectedIndex,
+                               bool showConfirmationFooter = false, const char* cancelLabel = nullptr,
+                               const char* saveLabel = nullptr, bool saveFocused = false, int primaryOptionIndex = -1,
+                               const char* noteLabel = nullptr, const char* noteBody = nullptr,
+                               int firstOptionIndex = -1, const char* secondNoteLabel = nullptr,
+                               const char* secondNoteBody = nullptr) const;
   virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const;
   // title is borrowed and must stay alive for the call; pass nullptr or "" for none.
-  virtual void drawReaderStatusBar(GfxRenderer& renderer, ReaderStatusBarPosition position,
+  virtual void drawReaderStatusBar(const GfxRenderer& renderer, ReaderStatusBarPosition position,
                                    const ReaderStatusBarContent& content,
                                    const ReaderStatusBarConfig* overrideConfig = nullptr) const;
-  virtual void drawTopStatusBarClock(const GfxRenderer& renderer, int topY = -1, const char* previewTime = nullptr,
-                                     bool readerContext = true, int textYOffset = 0, bool darkMode = false,
-                                     bool forceVisible = false) const;
+  void drawDisplayStatusBar(const GfxRenderer& renderer, int topY, const Rect* horizontalBounds = nullptr) const;
+#ifdef SIMULATOR
+  // Smoke-test hook: origin Y of the latest drawDisplayStatusBar call (-1 if none since the last take).
+  static int takeLastDisplayStatusBarOriginY();
+#endif
   virtual void drawHelpText(const GfxRenderer& renderer, Rect rect, const char* label) const;
   virtual void drawTextField(const GfxRenderer& renderer, Rect rect, const int textWidth, bool cursorMode = false,
                              int contentStartX = 0, int contentWidth = 0) const;
@@ -331,8 +344,6 @@ class BaseTheme {
 
   // Shared constants and helpers for battery drawing (used by all themes)
   static constexpr int batteryPercentSpacing = 4;
-  static constexpr int homeHeaderTopInset = ReaderStatusBarConfig::TOP_TEXT_INSET;
-  static int homeHeaderClockTextYOffset(const GfxRenderer& renderer);
   static Rect buttonMenuTouchTarget(Rect rowRect, Rect menuRect, bool isLastItem, int rowSpacing);
   static void drawBatteryOutline(const GfxRenderer& renderer, int x, int y, int battWidth, int rectHeight,
                                  bool foregroundBlack = true);

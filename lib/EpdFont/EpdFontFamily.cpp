@@ -22,12 +22,25 @@ const EpdFont* EpdFontFamily::getFont(const Style style) const {
   return regular;
 }
 
-void EpdFontFamily::getTextDimensions(const char* string, int* w, int* h, const Style style) const {
+void EpdFontFamily::getTextDimensions(const char* string, int* w, int* h, const Style style, int* inkMinY,
+                                      int* inkMaxY) const {
   int minX = 0, minY = 0, maxX = 0, maxY = 0;
+  int boundsMinY = 0, boundsMaxY = 0;
+  bool hasInk = false;
+  const auto includeVerticalBounds = [&](const int bottom, const int top) {
+    minY = std::min(minY, bottom);
+    maxY = std::max(maxY, top);
+    if ((!inkMinY && !inkMaxY) || top <= bottom) return;
+    boundsMinY = hasInk ? std::min(boundsMinY, bottom) : bottom;
+    boundsMaxY = hasInk ? std::max(boundsMaxY, top) : top;
+    hasInk = true;
+  };
 
   if (*string == '\0') {
     *w = 0;
     *h = 0;
+    if (inkMinY) *inkMinY = 0;
+    if (inkMaxY) *inkMaxY = 0;
     return;
   }
 
@@ -75,8 +88,7 @@ void EpdFontFamily::getTextDimensions(const char* string, int* w, int* h, const 
 
       minX = std::min(minX, lastBaseX + glyphLeft);
       maxX = std::max(maxX, lastBaseX + glyphLeft + glyphWidth);
-      minY = std::min(minY, glyphTop - glyphHeight);
-      maxY = std::max(maxY, glyphTop);
+      includeVerticalBounds(glyphTop - glyphHeight, glyphTop);
 
       lastBaseLeft = glyphLeft;
       lastBaseWidth = glyphWidth;
@@ -101,8 +113,7 @@ void EpdFontFamily::getTextDimensions(const char* string, int* w, int* h, const 
 
       minX = std::min(minX, lastBaseX + glyphLeft);
       maxX = std::max(maxX, lastBaseX + glyphLeft + glyphWidth);
-      minY = std::min(minY, glyphTop - glyphHeight);
-      maxY = std::max(maxY, glyphTop);
+      includeVerticalBounds(glyphTop - glyphHeight, glyphTop);
 
       lastBaseLeft = glyphLeft;
       lastBaseWidth = glyphWidth;
@@ -127,8 +138,7 @@ void EpdFontFamily::getTextDimensions(const char* string, int* w, int* h, const 
 
       minX = std::min(minX, lastBaseX + glyphLeft);
       maxX = std::max(maxX, lastBaseX + glyphLeft + glyphWidth);
-      minY = std::min(minY, glyphTop - glyphHeight);
-      maxY = std::max(maxY, glyphTop);
+      includeVerticalBounds(glyphTop - glyphHeight, glyphTop);
 
       lastBaseLeft = glyphLeft;
       lastBaseWidth = glyphWidth;
@@ -162,12 +172,11 @@ void EpdFontFamily::getTextDimensions(const char* string, int* w, int* h, const 
     const int glyphBaseX = isCombining ? combiningMark::anchorOver(anchor, lastBaseX, lastBaseLeft, lastBaseWidth,
                                                                    glyph->left, glyph->width)
                                        : lastBaseX;
-    const int glyphBaseY = -raiseBy;
+    const int glyphBaseY = raiseBy;
 
     minX = std::min(minX, glyphBaseX + glyph->left);
     maxX = std::max(maxX, glyphBaseX + glyph->left + glyph->width);
-    minY = std::min(minY, glyphBaseY + glyph->top - glyph->height);
-    maxY = std::max(maxY, glyphBaseY + glyph->top);
+    includeVerticalBounds(glyphBaseY + glyph->top - glyph->height, glyphBaseY + glyph->top);
 
     if (!isCombining) {
       lastBaseLeft = glyph->left;
@@ -180,6 +189,8 @@ void EpdFontFamily::getTextDimensions(const char* string, int* w, int* h, const 
 
   *w = maxX - minX;
   *h = maxY - minY;
+  if (inkMinY) *inkMinY = boundsMinY;
+  if (inkMaxY) *inkMaxY = boundsMaxY;
 }
 
 const EpdFontData* EpdFontFamily::getData(const Style style) const { return getFont(style)->data; }
@@ -199,6 +210,13 @@ EpdFontFamily::GlyphData EpdFontFamily::findGlyphData(const uint32_t cp, const S
   if (fallback) {
     if (const EpdGlyph* glyph = fallback->findGlyph(cp)) {
       return {fallback->data, glyph};
+    }
+  }
+  const auto extra = getFallbackFont(style);
+  if (extra) {
+    if (const auto glyph = extra->findGlyph(cp)) return {extra->data, glyph};
+    if (extra != fallbackRegular && fallbackRegular) {
+      if (const auto glyph = fallbackRegular->findGlyph(cp)) return {fallbackRegular->data, glyph};
     }
   }
   return {nullptr, nullptr};
@@ -231,11 +249,25 @@ uint32_t EpdFontFamily::getFallbackCodepoint(const uint32_t cp, const Style styl
 }
 
 bool EpdFontFamily::hasCodepoint(const uint32_t cp, const Style style) const {
-  return getFont(style)->hasCodepoint(cp) || (fallback && fallback->hasCodepoint(cp));
+  const auto extra = getFallbackFont(style);
+  return getFont(style)->hasCodepoint(cp) || regular->hasCodepoint(cp) || (fallback && fallback->hasCodepoint(cp)) ||
+         (extra && extra->hasCodepoint(cp)) || (fallbackRegular && fallbackRegular->hasCodepoint(cp));
 }
 
 int8_t EpdFontFamily::getKerning(const uint32_t leftCp, const uint32_t rightCp, const Style style) const {
-  return getFont(style)->getKerning(leftCp, rightCp);
+  const auto primary = getFont(style);
+  if (!fallbackRegular) return primary->getKerning(leftCp, rightCp);
+  // Never apply a kerning pair across different faces in a mixed-script filename.
+  const auto owner = [&](uint32_t cp) -> const EpdFont* {
+    if (primary->hasCodepoint(cp)) return primary;
+    if (regular->hasCodepoint(cp)) return regular;
+    if (fallback && fallback->hasCodepoint(cp)) return fallback;
+    const auto extra = getFallbackFont(style);
+    if (extra && extra->hasCodepoint(cp)) return extra;
+    return fallbackRegular->hasCodepoint(cp) ? fallbackRegular : nullptr;
+  };
+  const auto leftFont = owner(leftCp);
+  return leftFont && leftFont == owner(rightCp) ? leftFont->getKerning(leftCp, rightCp) : 0;
 }
 
 uint32_t EpdFontFamily::applyLigatures(const uint32_t cp, const char*& text, const Style style) const {

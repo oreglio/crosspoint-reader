@@ -9,14 +9,18 @@
 #include <utility>
 
 #include "CrossPointSettings.h"
+#include "util/OpdsDownloadFolder.h"
 
 namespace {
 constexpr char FILENAME_FORMAT_AUTHOR_TITLE[] = "author_title";
 constexpr char FILENAME_FORMAT_TITLE_AUTHOR[] = "title_author";
+constexpr char FILENAME_FORMAT_SERVER[] = "server_filename";
 }  // namespace
 
 const char* opdsFilenameFormatToJson(const OpdsFilenameFormat format) {
   switch (format) {
+    case OpdsFilenameFormat::SERVER_FILENAME:
+      return FILENAME_FORMAT_SERVER;
     case OpdsFilenameFormat::TITLE_AUTHOR:
       return FILENAME_FORMAT_TITLE_AUTHOR;
     case OpdsFilenameFormat::AUTHOR_TITLE:
@@ -26,10 +30,19 @@ const char* opdsFilenameFormatToJson(const OpdsFilenameFormat format) {
 }
 
 OpdsFilenameFormat opdsFilenameFormatFromJson(const char* value) {
+  if (value && strcmp(value, FILENAME_FORMAT_SERVER) == 0) return OpdsFilenameFormat::SERVER_FILENAME;
   if (value && strcmp(value, FILENAME_FORMAT_TITLE_AUTHOR) == 0) {
     return OpdsFilenameFormat::TITLE_AUTHOR;
   }
   return OpdsFilenameFormat::AUTHOR_TITLE;
+}
+
+bool applyOpdsDownloadFolder(JsonVariantConst object, std::string& folder) {
+  const auto value = object["downloadFolder"];
+  if (value.isUnbound()) return true;
+  if (!value.is<const char*>()) return false;
+  const auto input = value.as<JsonString>();
+  return OpdsDownloadFolder::normalize(std::string_view(input.c_str(), input.size()), folder);
 }
 
 void OpdsServerStore::toJson(JsonDocument& doc) const {
@@ -41,12 +54,13 @@ void OpdsServerStore::toJson(JsonDocument& doc) const {
     obj["username"] = server.username;
     obj["password_obf"] = obfuscation::obfuscateToBase64(server.password);
     obj["filenameFormat"] = opdsFilenameFormatToJson(server.filenameFormat);
+    obj["downloadFolder"] = server.downloadFolder;
   }
 }
 
 bool OpdsServerStore::fromJson(JsonVariantConst doc) {
-  // Tolerate a missing/invalid 'servers' key (treat as empty list); only a
-  // JSON parse error is fatal. A null JsonArray iterates zero times.
+  // Tolerate a missing/invalid 'servers' key (a null array iterates zero
+  // times). Reject invalid folder overrides rather than silently rerouting.
   servers.clear();
   JsonArrayConst arr = doc["servers"].as<JsonArrayConst>();
   servers.reserve(std::min(arr.size(), MAX_SERVERS));
@@ -59,6 +73,11 @@ bool OpdsServerStore::fromJson(JsonVariantConst doc) {
     server.url = obj["url"] | "";
     server.username = obj["username"] | "";
     server.filenameFormat = opdsFilenameFormatFromJson(obj["filenameFormat"] | "");
+    if (!applyOpdsDownloadFolder(obj, server.downloadFolder)) {
+      LOG_ERR("OPS", "Invalid OPDS download folder");
+      servers.clear();
+      return false;
+    }
     obfuscation::DecodeStatus status = obfuscation::DecodeStatus::INVALID;
     server.password = obfuscation::deobfuscateFromBase64(obj["password_obf"] | "", &status);
     if (status == obfuscation::DecodeStatus::LEGACY && !server.password.empty()) {
@@ -147,7 +166,14 @@ bool OpdsServerStore::addServer(const OpdsServer& server) {
   }
 
   servers.push_back(server);
-  return saveToFile();
+  if (!OpdsDownloadFolder::normalize(servers.back().downloadFolder, servers.back().downloadFolder)) {
+    LOG_ERR("OPS", "Invalid OPDS download folder");
+    servers.pop_back();
+    return false;
+  }
+  if (saveToFile()) return true;
+  servers.pop_back();
+  return false;
 }
 
 bool OpdsServerStore::updateServer(size_t index, const OpdsServer& server) {
@@ -156,8 +182,15 @@ bool OpdsServerStore::updateServer(size_t index, const OpdsServer& server) {
     return false;
   }
 
-  servers[index] = server;
-  return saveToFile();
+  OpdsServer replacement = server;
+  if (!OpdsDownloadFolder::normalize(replacement.downloadFolder, replacement.downloadFolder)) {
+    LOG_ERR("OPS", "Invalid OPDS download folder");
+    return false;
+  }
+  std::swap(servers[index], replacement);
+  if (saveToFile()) return true;
+  std::swap(servers[index], replacement);
+  return false;
 }
 
 bool OpdsServerStore::removeServer(size_t index) {

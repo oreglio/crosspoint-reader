@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 
 #include "StreamingJsonParser.h"
 
@@ -51,7 +52,7 @@ bool kindFromName(const char* name, TaskOpKind& out) {
 // Echappe pour du JSON : guillemets et antislashs sont doubles. Un caractere
 // de controle est remplace par une espace plutot que par un \u0000 — le
 // StreamingJsonParser partage ne decode pas les echappements \uXXXX, il les
-// recopie tels quels (cf lib/JsonParser/StreamingJsonParser.cpp) ; les coder
+// recopie tels quels (cf JsonSax/StreamingJsonParser.cpp dans le SDK) ; les coder
 // ainsi romprait le aller-retour par taskOpFromLine sans jamais rien
 // corrompre cote serveur, qui lui les decoderait correctement. Une espace
 // reste correcte des deux cotes et rejoint de toute facon ce que le serveur
@@ -237,7 +238,7 @@ bool TaskOpLineSplitter::feed(const char byte, TaskOp& out) {
     }
     return false;
   }
-  const bool usable = !overflow_ && len_ > 0 && taskOpFromLine(line_, len_, out);
+  const bool usable = !overflow_ && len_ > 0 && taskOpFromLine(parserStorage_, line_, len_, out);
   lastTooLong_ = overflow_;
   len_ = 0;
   overflow_ = false;
@@ -245,10 +246,20 @@ bool TaskOpLineSplitter::feed(const char byte, TaskOp& out) {
 }
 
 bool taskOpFromLine(const char* line, const size_t len, TaskOp& out) {
+  alignas(StreamingJsonParser) unsigned char storage[sizeof(StreamingJsonParser)];
+  return taskOpFromLine(storage, line, len, out);
+}
+
+bool taskOpFromLine(void* parserStorage, const char* line, const size_t len, TaskOp& out) {
   OpSink sink;
   const JsonCallbacks cb{&sink,  opKey,         opString,    opNumber,     opBool,
                          opNull, opObjectStart, opObjectEnd, opArrayStart, opArrayEnd};
-  StreamingJsonParser parser(cb);
+  auto* parserPtr = new (parserStorage) StreamingJsonParser(cb);
+  StreamingJsonParser& parser = *parserPtr;
+  struct Destroy {
+    StreamingJsonParser* p;
+    ~Destroy() { p->~StreamingJsonParser(); }
+  } destroy{parserPtr};
   parser.feed(line, len);
   // hasError() ne couvre pas une ligne tronquee : une chaine ou un objet
   // jamais refermes s'arretent juste au dernier octet recu, sans lever

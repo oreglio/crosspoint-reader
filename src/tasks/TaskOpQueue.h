@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "StreamingJsonParser.h"
 #include "TaskRecord.h"
 
 // Del : suppression faite sur l'appareil. Le serveur la pose en tombstone,
@@ -57,6 +58,9 @@ class TaskOpLineSplitter {
 
  private:
   char line_[TASK_OP_LINE_MAX] = {};
+  // Place du parseur JSON (~2,2 Ko avec le tampon de jeton du SDK) : le
+  // decoupeur est trop gros pour la pile, l'appelant l'alloue sur le tas.
+  alignas(StreamingJsonParser) unsigned char parserStorage_[sizeof(StreamingJsonParser)];
   size_t len_ = 0;
   bool overflow_ = false;
   bool lastTooLong_ = false;
@@ -67,6 +71,9 @@ class TaskOpLineSplitter {
 // coupure de courant en plein write(), qui ne doit jamais repasser pour une
 // op valide aux champs par defaut.
 bool taskOpFromLine(const char* line, size_t len, TaskOp& out);
+// Meme lecture, le parseur construit dans `parserStorage` (au moins
+// sizeof(StreamingJsonParser) octets, alignes) au lieu de la pile.
+bool taskOpFromLine(void* parserStorage, const char* line, size_t len, TaskOp& out);
 
 // Assemble {"schema":1,"cursor":"…","ops":[…]}. Rend 0 si tout ne tient pas,
 // y compris quand `count` depasse TASK_MAX_OPS_PER_SYNC : cette fonction ne

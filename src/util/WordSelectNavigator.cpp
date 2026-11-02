@@ -114,6 +114,17 @@ bool WordSelectNavigator::getLookupSelectionRange(int& fromIdx, int& toIdx) cons
   return true;
 }
 
+bool WordSelectNavigator::getExpandedSelectionRange(int& fromIdx, int& toIdx) const {
+  if (!getLookupSelectionRange(fromIdx, toIdx)) return false;
+  if (fromIdx > toIdx) std::swap(fromIdx, toIdx);
+  const auto* first = getWordAt(fromIdx);
+  const auto* last = getWordAt(toIdx);
+  if (!first || !last) return false;
+  if (first->continuationOf >= 0) fromIdx = std::min(fromIdx, first->continuationOf);
+  if (last->continuationIndex >= 0) toIdx = std::max(toIdx, last->continuationIndex);
+  return getWordAt(fromIdx) && getWordAt(toIdx);
+}
+
 size_t WordSelectNavigator::getLookupSelectionWordCount() const {
   int fromIdx = -1;
   int toIdx = -1;
@@ -353,20 +364,22 @@ bool WordSelectNavigator::selectWordAtPoint(const int x, const int y, const int 
   if (rows.empty() || words.empty() || lineHeight <= 0) return false;
 
   const int horizontalPad = 6;
-  const int verticalPad = std::max(4, lineHeight / 4);
+
   int bestIdx = -1;
   int bestScore = INT_MAX;
 
   for (int idx = 0; idx < static_cast<int>(words.size()); idx++) {
     const auto& word = words[idx];
+    const int wordHeight = word.heightOr(lineHeight);
+    const int verticalPad = std::max(4, wordHeight / 4);
     const int left = static_cast<int>(word.screenX) - horizontalPad;
     const int right = static_cast<int>(word.screenX) + static_cast<int>(word.width) + horizontalPad;
     const int top = static_cast<int>(word.screenY) - verticalPad;
-    const int bottom = static_cast<int>(word.screenY) + lineHeight + verticalPad;
+    const int bottom = static_cast<int>(word.screenY) + wordHeight + verticalPad;
     if (x < left || x > right || y < top || y > bottom) continue;
 
     const int centerX = static_cast<int>(word.screenX) + static_cast<int>(word.width) / 2;
-    const int centerY = static_cast<int>(word.screenY) + lineHeight / 2;
+    const int centerY = static_cast<int>(word.screenY) + wordHeight / 2;
     const int score = std::abs(x - centerX) + std::abs(y - centerY);
     if (score < bestScore) {
       bestScore = score;
@@ -376,20 +389,43 @@ bool WordSelectNavigator::selectWordAtPoint(const int x, const int y, const int 
 
   if (bestIdx < 0) return false;
   if (hit) *hit = true;
-  const int targetRow = words[bestIdx].row;
+  return selectIndex(bestIdx);
+}
+
+bool WordSelectNavigator::selectIndex(const int index) {
+  if (!getWordAt(index)) return false;
+  const int targetRow = words[index].row;
   if (targetRow < 0 || targetRow >= static_cast<int>(rows.size())) return false;
-
-  int targetWordInRow = -1;
-  if (bestIdx >= rows[targetRow].firstWord && bestIdx < rows[targetRow].firstWord + rows[targetRow].wordCount) {
-    targetWordInRow = bestIdx - rows[targetRow].firstWord;
-  }
-  if (targetWordInRow < 0) return false;
-
-  const bool changed = currentRow != targetRow || currentWordInRow != targetWordInRow;
+  const int offset = index - rows[targetRow].firstWord;
+  if (offset < 0 || offset >= rows[targetRow].wordCount) return false;
+  const bool changed = currentRow != targetRow || currentWordInRow != offset;
   currentRow = targetRow;
-  currentWordInRow = targetWordInRow;
+  currentWordInRow = offset;
   pendingSnapIdx = -1;
   return changed;
+}
+
+bool WordSelectNavigator::selectNearestWord(const int x, const int y, const int lineHeight) {
+  int nearest = -1, bestY = INT_MAX, bestX = INT_MAX;
+  for (int i = 0; i < static_cast<int>(words.size()); ++i) {
+    const auto& word = words[i];
+    const int dy = std::abs(word.screenY + word.heightOr(lineHeight) / 2 - y);
+    const int dx = std::max({word.screenX - x, 0, x - (word.screenX + word.width)});
+    if (dy < bestY || (dy == bestY && dx < bestX)) {
+      nearest = i;
+      bestY = dy;
+      bestX = dx;
+    }
+  }
+  return selectIndex(nearest);
+}
+
+bool WordSelectNavigator::setTouchSelection(const int anchor, const int cursor) {
+  if (!getWordAt(anchor) || !getWordAt(cursor)) return false;
+  selectIndex(anchor);
+  beginTouchMultiSelect();
+  selectIndex(cursor);
+  return true;
 }
 
 WordSelectNavigator::MultiSelectAction WordSelectNavigator::handleMultiSelectInput(const MappedInputManager& input,
@@ -517,7 +553,7 @@ void WordSelectNavigator::drawSingleHighlight(const GfxRenderer& renderer, int l
                                               const bool foregroundBlack) const {
   const auto* w = getWordAt(wordIndex);
   if (!w) return;
-  renderer.fillRect(w->screenX - 2, w->screenY - 2, w->width + 4, lineHeight + 4, foregroundBlack);
+  renderer.fillRect(w->screenX - 2, w->screenY - 2, w->width + 4, w->heightOr(lineHeight) + 4, foregroundBlack);
   const char* displayedText = getDisplay(*w);
   const auto baseDir = w->isRtl ? BidiUtils::BidiBaseDir::RTL : BidiUtils::BidiBaseDir::LTR;
   if (w->focusBoundary > 0 && w->focusSuffixX > 0) {
@@ -549,7 +585,7 @@ void WordSelectNavigator::drawTouchDragCursor(const GfxRenderer& renderer, int l
   if (!w) return;
   const int x = w->screenX + w->width + 4;
   const int top = w->screenY - 2;
-  const int bottom = w->screenY + lineHeight + 1;
+  const int bottom = w->screenY + w->heightOr(lineHeight) + 1;
   renderer.drawLine(x, top, x, bottom, 2, foregroundBlack);
   renderer.drawLine(x - 2, top, x + 3, top, 2, foregroundBlack);
   renderer.drawLine(x - 2, bottom, x + 3, bottom, 2, foregroundBlack);
@@ -571,7 +607,7 @@ WordSelectNavigator::Rect WordSelectNavigator::boundsForWord(int wordIndex, int 
   if (!w) return Rect{};
   const int cursorWidth = touchDragCursorVisible ? 10 : 0;
   return Rect{static_cast<int>(w->screenX) - 2, static_cast<int>(w->screenY) - 2,
-              static_cast<int>(w->width) + 4 + cursorWidth, lineHeight + 4};
+              static_cast<int>(w->width) + 4 + cursorWidth, w->heightOr(lineHeight) + 4};
 }
 
 WordSelectNavigator::Rect WordSelectNavigator::computeDirtyRect(int prevWordIdx, int currWordIdx,

@@ -543,6 +543,15 @@ void RecentBooksGridActivity::showBookActionMenu(const int bookIndex, const bool
         switch (static_cast<FileBrowserAction>(actionResult->action)) {
           case FileBrowserAction::MarkArticleDone:  // les articles ne sont jamais dans les récents
             return;
+          case FileBrowserAction::UploadFolderProgress:  // folders only
+            return;
+          case FileBrowserAction::SyncProgress: {
+            PendingOverlayResume resume;
+            resume.origin = PendingOverlayOrigin::Home;
+            BookActions::syncProgress(renderer, mappedInput, book.path, resume);
+            requestUpdate();
+            return;
+          }
           // Upstream's file-browser actions; this list's menu never offers them.
           case FileBrowserAction::Rename:
           case FileBrowserAction::ReadingStats:

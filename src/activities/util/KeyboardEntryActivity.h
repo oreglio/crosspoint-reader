@@ -1,7 +1,7 @@
 #pragma once
 #include <FreeInkUIGfxRenderer.h>
-#include <components/keyboard/keyboard.h>
 #include <GfxRenderer.h>
+#include <components/keyboard/keyboard.h>
 
 #include <atomic>
 #include <cstdint>
@@ -19,6 +19,7 @@ enum class InputType { Text, Password, Url };
 // editing, and the URL snippet layouts.
 class KeyboardEntryActivity : public Activity {
  public:
+  bool usesMenuButtonOrientation() const override { return false; }
   explicit KeyboardEntryActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                  std::string title = "Enter Text", std::string initialText = "",
                                  const size_t maxLength = 0, InputType inputType = InputType::Text,
@@ -35,16 +36,23 @@ class KeyboardEntryActivity : public Activity {
   void loop() override;
   void render(RenderLock&&) override;
   bool preventAutoSleep() override { return true; }
+  uint8_t inputPollDelayMs() const override { return mappedInput.hasTouchHardware() ? 2 : 10; }
 
  private:
   bool selectionUsable() const;
 
+#ifdef SIMULATOR
+  friend struct ScreenCalibrationSmokeTest;
+#endif
   std::string title;
   std::string text;
   size_t maxLength;
   InputType inputType;
   size_t minLength;
   bool passwordVisible = false;
+  // Fixed UI font metric, captured before input starts. Querying the renderer
+  // during hit testing can wait for an entire e-ink refresh on TTF builds.
+  int inputLineHeight = 0;
 
   ButtonNavigator buttonNavigator;
 
@@ -61,11 +69,21 @@ class KeyboardEntryActivity : public Activity {
   // loop() routes touch snapshots against them. Cyrillic's wider rows register
   // 48 keys, so 56 retains headroom for the double-buffered interaction table.
   freeink::ui::InteractionBuffer<56> interactions;
+#if CROSSINK_APP_CAP_TOUCH
+  // Render-only state prevents live contact changes from altering a frame's
+  // feedback. Fixed storage is reused for the lifetime of this activity.
+  freeink::ui::InteractionBuffer<56> paintInteractions;
+  std::atomic<uint32_t> pendingFeedback{0};
+  uint16_t feedbackSequence = 0;  // Main task only; distinguishes repeated keys.
+  void showTouchFeedback(int16_t value);
+#endif
 
   // GPIO selection over the current layout grid (row/col in layout terms;
   // the bottom action row is just the last row).
   int selRow = 0;
   int selCol = 0;
+  // Touch entry has no persistent key highlight; button navigation reveals it.
+  std::atomic<bool> buttonSelectionVisible{false};
 
   bool confirmHeld = false;
   bool confirmLongHandled = false;
@@ -130,6 +148,7 @@ class KeyboardEntryActivity : public Activity {
   static size_t utf8Next(const std::string& s, size_t pos);
 
   freeink::ui::Rect keyboardRect() const;
+  int textFieldMargin() const;
 
   static constexpr uint16_t LONG_PRESS_MS = 500;
   static constexpr uint16_t DEL_LONG_PRESS_MS = 1500;

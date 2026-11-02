@@ -47,19 +47,24 @@ DATE_OFFSET = APP_DESC_OFFSET + 0x60
 DATE_SIZE = 16
 CHECKSUM_SEED = 0xEF
 
-GENERATED_HEADER = 'lib/AppVersion/AppVersionGenerated.h'
+# BuildInfo.cpp (the one translation unit that receives the version define)
+# builds the User-Agent as "CrossInk-ESP32-" CROSSINK_VERSION: reading it back
+# from the image gives exactly the string the firmware reports.
+USER_AGENT_RE = re.compile(rb'CrossInk-ESP32-([\x21-\x7e]{1,128})\x00')
 
 
-def _read_generated_version(project_dir):
+def _read_image_version(image_path):
     """The string the firmware itself reports, not a second one derived here."""
-    path = os.path.join(project_dir, GENERATED_HEADER)
     try:
-        with open(path, 'r', encoding='utf-8') as handle:
-            match = re.search(r'#define\s+CROSSINK_VERSION_GENERATED\s+"([^"]*)"', handle.read())
+        with open(image_path, 'rb') as handle:
+            matches = set(USER_AGENT_RE.findall(handle.read()))
     except OSError as exc:
-        print(f'stamp_app_desc: cannot read {GENERATED_HEADER}: {exc}', file=sys.stderr)
+        print(f'stamp_app_desc: cannot read {image_path}: {exc}', file=sys.stderr)
         return None
-    return match.group(1) if match else None
+    if len(matches) != 1:
+        print(f'stamp_app_desc: expected one User-Agent version in the image, found {len(matches)}', file=sys.stderr)
+        return None
+    return matches.pop().decode('ascii')
 
 
 def _segment_area_end(data):
@@ -160,12 +165,12 @@ def verify_image_stamp(env, image_path, version):
 
 
 def stamp_app_desc(source, target, env):
-    version = _read_generated_version(env['PROJECT_DIR'])
+    image_path = str(target[0])
+    version = _read_image_version(image_path)
     if not version:
-        sys.stderr.write('stamp_app_desc: no generated version to stamp\n')
+        sys.stderr.write('stamp_app_desc: no version found to stamp\n')
         env.Exit(1)
         return
-    image_path = str(target[0])
     stamped_version = stamp(image_path, version)
     if stamped_version:
         verify_image_stamp(env, image_path, stamped_version)

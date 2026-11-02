@@ -48,12 +48,23 @@ void ensureScalableBuiltinFamily(GfxRenderer& renderer, unsigned family) {
       break;
     }
   }
+  if (ok) {
+    for (uint8_t points = ScalableContentMinPointSize; points <= ScalableContentMaxPointSize && ok; ++points) {
+      for (unsigned style = 0; style < 4; ++style) {
+        if (!faces[family * 4 + style]->atSize(points)) {
+          LOG_ERR("TTF", "Built-in size %u unavailable", unsigned(points));
+          ok = false;
+          break;
+        }
+      }
+    }
+  }
   if (!ok) {
     for (unsigned style = 0; style < 4; ++style) faces[family * 4 + style].reset();
     LOG_ERR("TTF", "Built-in family unavailable; using UI recovery font");
   }
   ready[family] = ok;
-  for (uint8_t points : SCALABLE_READER_FONT_SIZES) {
+  for (uint8_t points = ScalableContentMinPointSize; points <= ScalableContentMaxPointSize; ++points) {
     if (ok) {
       EpdFontFamily font(faces[family * 4]->atSize(points), faces[family * 4 + 1]->atSize(points),
                          faces[family * 4 + 2]->atSize(points), faces[family * 4 + 3]->atSize(points));
@@ -64,7 +75,9 @@ void ensureScalableBuiltinFamily(GfxRenderer& renderer, unsigned family) {
       const auto it = renderer.getFontMap().find(UI_12_FONT_ID);
       if (it != renderer.getFontMap().end()) {
         for (unsigned size = 0; size < 4; ++size)
-          if (points == 10 + size * 2) renderer.insertFont(ids[family][size], it->second);
+          // Recovery reader fonts must not borrow the selected UI font: the
+          // latter can be released independently for selection/storage changes.
+          if (points == 10 + size * 2) renderer.insertFont(ids[family][size], it->second.withFallbackFonts(nullptr));
       }
     }
   }

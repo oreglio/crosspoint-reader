@@ -65,7 +65,7 @@ void LibrarySettingsActivity::toggle(const int row) {
     default:
       return;
   }
-  if (!SETTINGS.saveToFile()) LOG_ERR("LIB", "Cannot save Library settings");
+  if (!SETTINGS.saveGlobalDefaults()) LOG_ERR("LIB", "Cannot save Library settings");
   requestUpdate();
 }
 
@@ -87,6 +87,9 @@ void LibrarySettingsActivity::loop() {
     return;
   }
   if (ignoreConfirmRelease) {
+    // Consume the menu selection's release even when this screen ignores it.
+    // Otherwise its one-shot suppression can swallow the next quick Select.
+    (void)mappedInput.wasReleased(MappedInputManager::Button::Confirm);
     if (!mappedInput.isPressed(MappedInputManager::Button::Confirm)) ignoreConfirmRelease = false;
     return;
   }
@@ -190,11 +193,10 @@ void LibrarySettingsActivity::buildScreen(UiApp::ScreenType& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   int bounds[4]{};
   renderer.getOrientedViewableTRBL(&bounds[0], &bounds[1], &bounds[2], &bounds[3]);
-  const int16_t headerBottom =
-      static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput));
-  screen.setContentMarginFromScreen(fui::Insets{headerBottom, static_cast<int16_t>(bounds[1]),
-                                                static_cast<int16_t>(metrics.buttonHintsHeight + bounds[2]),
-                                                static_cast<int16_t>(bounds[3])});
+  const int16_t headerBottom = static_cast<int16_t>(TouchHeaderBackButton::contentTop(renderer, mappedInput));
+  screen.setContentMarginFromScreen(fui::Insets{
+      headerBottom, static_cast<int16_t>(bounds[1]),
+      static_cast<int16_t>(UITheme::getButtonHintsReserve(renderer) + bounds[2]), static_cast<int16_t>(bounds[3])});
   fui::ListProps props;
   props.rowProvider = &LibrarySettingsActivity::provideRow;
   props.rowProviderCtx = this;
@@ -206,7 +208,7 @@ void LibrarySettingsActivity::buildScreen(UiApp::ScreenType& screen) {
   props.rowGap = 0;
   props.labelText = props.valueText = props.headerText = screen.theme().bodyText;
   props.headerText.bold = true;
-  props.rtl = (I18N.getLanguage() == Language::AR || I18N.getLanguage() == Language::HE);
+  props.rtl = I18N.isRightToLeft();
   props.rowStyles = screen.theme().listRow;
   props.rowStyles.selected.background = fui::Paint::dither(fui::Color::LightGray);
   props.rowStyles.selected.foreground = fui::Paint::solid(fui::Color::Black);
@@ -227,7 +229,7 @@ void LibrarySettingsActivity::render(RenderLock&&) {
       TouchHeaderBackButton::draw(renderer, uiTarget, header, tr(STR_LIBRARY_SETTINGS), false);
     else
       GUI.drawHeader(renderer, header, tr(STR_LIBRARY_SETTINGS));
-    app.render();
+    renderUiApp(app, uiTarget);
     topIndex = listNav.top;
     if (!listNav.consumeRebuildNeeded()) break;
   }

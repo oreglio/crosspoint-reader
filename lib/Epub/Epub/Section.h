@@ -62,12 +62,18 @@ class Section {
     // the EMA is stepped once per build advance (not per redraw) to damp that wobble.
     float smoothedEstimate = 0;
     uint32_t smoothedAtConsumed = 0;
+    // Staging buffer for page serialization (see onPageComplete()).
+    std::unique_ptr<uint8_t[]> pageWriteBuffer;
   };
   std::unique_ptr<BuildContext> build_;
+  // createSectionFile()'s staging buffer while that full build runs; it owns the
+  // allocation. Incremental builds use BuildContext::pageWriteBuffer instead.
+  uint8_t* fullBuildPageWriteBuffer_ = nullptr;
   bool buildComplete_ = false;
   bool lastImagesWereSuppressed_ = false;
   bool lastLayoutAbortedForLowMemory_ = false;
   uint16_t imageEstimateViewportHeight_ = 0;
+  uint16_t imageEstimateViewportWidth_ = 0;
   uint32_t protectedImageUnits_ = 0;
   // Pages laid out by the active build. Distinct from pageCount, which is the pages
   // available to read and may include a loaded partial file's pages.
@@ -79,6 +85,12 @@ class Section {
   uint32_t partialTotalBytes_ = 0;
   std::string activeBuildTmpSectionPath_;
 
+  uint32_t baseLayoutSignature_ = 0;
+  bool publisherFontsEnabled_ = false;
+  uint32_t publisherFontFaces_ = 0;
+  uint32_t publisherFaceSignature_ = 0;
+  uint32_t publisherLoadedFaces_ = 0;
+  bool writePublisherFontState();
   bool writeSectionFileHeader(const ReaderRenderSpec& spec);
   uint32_t onPageComplete(std::unique_ptr<Page> page);
   bool ensureBuildFileOpen();
@@ -90,11 +102,15 @@ class Section {
   // partial/finalized file stays readable while a rebuild is in progress.
   std::string binTmpPath() const { return filePath + ".part"; }
   std::unique_ptr<Page> loadPageAt(int page) const;
+  std::optional<uint32_t> getTextOffsetForPage(uint16_t page, bool reference, uint32_t* textLength) const;
   // Read a page already laid out by the in-progress build (page < build LUT size), from
   // the partially-written tmp .bin without disturbing the build's write cursor.
   std::unique_ptr<Page> loadPageDuringBuild(int page);
 
  public:
+  uint32_t layoutSignature() const {
+    return publisherFontFaces_ ? (baseLayoutSignature_ ^ publisherFaceSignature_) * 16777619U : baseLayoutSignature_;
+  }
   uint16_t pageCount = 0;
   int currentPage = 0;
 
@@ -140,12 +156,14 @@ class Section {
   // Resolve an anchor from the in-progress build first, then the on-disk anchor map
   // (covers finalized sections and partials from a previous session).
   std::optional<uint16_t> findAnchor(const std::string& anchor) const;
+  int getTocIndexForPage(int page) const;
 
   // True if this spine's unzipped HTML is already cached, so a build won't pay the (multi-second on a
   // giant spine) zip inflation. Lets the reader skip the indexing popup on a fast reopen/rebuild.
   bool hasHtmlCache() const;
 
   // Look up the page number for an anchor id from the section cache file.
+  bool openAnchorMap(FsFile& f, uint16_t& count) const;
   std::optional<uint16_t> getPageForAnchor(const std::string& anchor) const;
 
   // Look up an anchor among the pages built so far by the in-progress build, so an anchor jump
@@ -174,6 +192,13 @@ class Section {
 
   // Look up the synthetic paragraph index for the given rendered page.
   std::optional<uint16_t> getParagraphIndexForPage(uint16_t page) const;
+  struct ParagraphPosition {
+    uint16_t index;
+    uint16_t offset;
+    uint16_t span;
+  };
+  // Capture the contiguous paragraph run using one cache-file session.
+  std::optional<ParagraphPosition> getParagraphPositionForPage(uint16_t page) const;
 
   // Look up the running list-item index for the given rendered page.
   std::optional<uint16_t> getListItemIndexForPage(uint16_t page) const;
@@ -181,5 +206,6 @@ class Section {
   // Content coordinate recorded at the start of each rendered page. Available
   // for finalized sections and the readable prefix of incremental sections.
   std::optional<uint32_t> getVisibleTextOffsetForPage(uint16_t page) const;
+  std::optional<uint32_t> getReferenceTextOffsetForPage(uint16_t page, uint32_t& textLength) const;
   std::optional<uint16_t> getPageForVisibleTextOffset(uint32_t offset, bool preferFirstAtOffset = false) const;
 };

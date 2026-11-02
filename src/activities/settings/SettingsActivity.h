@@ -12,6 +12,7 @@
 
 #include "CrossPointSettings.h"
 #include "activities/Activity.h"
+#include "components/MenuNavigationNote.h"
 #include "components/OptionPopup.h"
 #include "util/ButtonNavigator.h"
 
@@ -22,8 +23,11 @@ enum class SettingAction {
   RemapFrontButtons,
   RemapFrontButtonsReader,
   CustomiseStatusBar,
+  DisplayStatusBar,
+  ScreenCalibration,
   KOReaderSync,
   OPDSBrowser,
+  Plugins,
   DisplaySleepScreen,
   DisplayFrontlight,
   ReaderFontOptions,
@@ -37,6 +41,8 @@ enum class SettingAction {
   ControlsTapsGestures,
   ControlsTwoFingerSwipe,
   ControlsEdgeGestures,
+  ReleaseNotes,
+  About,
   SystemDevice,
   SystemFilesCache,
   SystemLibrary,
@@ -51,6 +57,9 @@ enum class SettingAction {
   CheckForUpdates,
   SdFirmwareUpdate,
   Language,
+  DownloadLanguages,
+  ManageHyphenation,
+  FilenameFallbackFont,
   KeyboardLayouts,
   DownloadFonts,
   TtfRendering,
@@ -225,10 +234,17 @@ inline std::string settingEnumOptionLabel(const SettingInfo& setting, const uint
 
 inline bool settingShowsNavigationCaret(const SettingInfo& setting) {
   return setting.type == SettingType::SUBMENU || setting.action == SettingAction::CustomiseStatusBar ||
-         setting.action == SettingAction::QuickActions || setting.action == SettingAction::TtfRendering;
+         setting.action == SettingAction::DisplayStatusBar || setting.action == SettingAction::QuickActions ||
+         setting.action == SettingAction::TtfRendering;
 }
 
 class SettingsActivity final : public Activity {
+#ifdef SIMULATOR
+  friend struct ScreenCalibrationSmokeTest;
+#endif
+#ifdef SIMULATOR
+  friend struct AssetDownloadSmokeTest;
+#endif
  public:
   enum class View : uint8_t { Root, FileBrowser };
 
@@ -283,6 +299,24 @@ class SettingsActivity final : public Activity {
   SettingAction parentSubmenu = SettingAction::None;
 
   OptionPopup optionPopup;
+  HeapObject<I18n::Catalog> languageCatalog;
+  I18n::Option pendingLanguage;
+  bool languageDownloadsOpen = false;
+  bool languageRestartRequired = false;
+  bool pendingLanguageDownloads = false;
+  bool openLanguageDownloadsPending = false;
+  bool pendingLanguageDownloadConnect = false;
+  bool pendingLanguageDownloadAction = false;
+  uint8_t languageDownloadRow = 0;  // Index into LANGUAGE_CODES of the tapped download row.
+  mutable char languageDownloadLabel[256] = {};
+  char languageRuntimeNote[96] = {};
+#if CROSSINK_SCALABLE_FONTS
+  std::vector<std::string> filenameFontNames;
+  char pendingFilenameFont[64] = {};
+  bool filenameFontSelectionPending = false;
+#endif
+  StrId languageError = StrId::_COUNT;
+  MenuNavigationNote menuNavigationNote;
 
   static constexpr int categoryCount = 4;
   static const StrId categoryNames[categoryCount];
@@ -314,7 +348,14 @@ class SettingsActivity final : public Activity {
   void openEnumOptionPicker(const SettingInfo& setting);
   void openScreenMarginPicker(const SettingInfo& setting);
   void openWordSpacingPicker();
+  void openCharacterSpacingPicker();
   void openLanguagePicker();
+  void openLanguageDownloads();
+  void selectLanguageDownload();
+  void startLanguageDownload();
+  int languageSourceIndex(const char* code) const;
+  void openFilenameFontPicker();
+  void applyLanguage(const I18n::Option& selected);
   void openIdleTimeThresholdPicker();
   void toggleCurrentSetting();
   void openSleepTimeoutPicker();
@@ -330,8 +371,22 @@ class SettingsActivity final : public Activity {
  public:
   explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool dismissOnUpSwipe = false,
                             bool returnToParentOnClose = false, View view = View::Root);
-  bool allowGlobalHomeSwipeGesture() const override { return false; }
+  bool allowGlobalHomeSwipeGesture() const override { return !dismissOnUpSwipe && !optionPopup.isActive(); }
   bool handleHomeGesture() override;
+  // Opens System > Device with the Download Languages popup once the activity enters.
+  void openLanguageDownloadsOnEnter() { openLanguageDownloadsPending = true; }
+#ifdef SIMULATOR
+  void simulatorOpenFrontButtons();
+  int simulatorCategoryIndex() const { return selectedCategoryIndex; }
+  int simulatorSelectedIndex() const { return selectedSettingIndex; }
+  bool simulatorOptionPopupActive() const { return optionPopup.isActive(); }
+#if CROSSINK_SCALABLE_FONTS
+  const std::vector<std::string>& simulatorFilenameFontNames() const { return filenameFontNames; }
+#endif
+  freeink::ui::Rect simulatorSafeRect() const { return app.device().safeRect(); }
+  SettingAction simulatorActiveSubmenu() const { return activeSubmenu; }
+  bool simulatorLanguageDownloadsOpen() const { return languageDownloadsOpen && optionPopup.isActive(); }
+#endif
   void onEnter() override;
   void onExit() override;
   void loop() override;
