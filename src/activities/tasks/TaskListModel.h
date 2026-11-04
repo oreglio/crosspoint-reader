@@ -35,12 +35,16 @@ enum class TaskListView : uint8_t { Open, Done };
 
 struct TaskListRow {
   TaskRowKind kind = TaskRowKind::Task;
+  // Indice dans `groups` pour un GroupHeader ; -1 sinon. MAX_GROUPS = 16 tient
+  // dans un int8_t.
+  int8_t groupIndex = -1;
   // Indice dans `records` (le tableau passe a buildTaskOrder) ; non
-  // significatif quand kind != Task.
-  int recordIndex = -1;
-  // Indice dans `groups` pour un GroupHeader ; -1 sinon.
-  int groupIndex = -1;
+  // significatif quand kind != Task. MAX_TASKS = 120 tient dans un int16_t.
+  int16_t recordIndex = -1;
 };
+// 4 octets par ligne : `rows` pese (120 + 16) x 4 au pire, moins que les
+// 121 x 8 d'avant les groupes.
+static_assert(sizeof(TaskListRow) == 4, "TaskListRow must stay packed to 4 bytes");
 
 // Trie les indices de `records`. Les ouvertes d'abord : rang de groupe (sans
 // groupe ou groupe inconnu = avant tout, puis `position` du groupe, puis son

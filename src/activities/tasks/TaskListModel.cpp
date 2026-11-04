@@ -80,15 +80,15 @@ void buildTaskListRows(const std::vector<int>& order, int openCount, TaskListVie
     for (int i = 0; i < openCount; ++i) {
       const int g = findGroup(groups, records[static_cast<size_t>(order[i])].group);
       // Les taches d'un meme groupe sont contigues dans `order`.
-      if (g >= 0 && g != lastGroup) rows.push_back({TaskRowKind::GroupHeader, -1, g});
+      if (g >= 0 && g != lastGroup) rows.push_back({TaskRowKind::GroupHeader, static_cast<int8_t>(g), -1});
       lastGroup = g;
-      rows.push_back({TaskRowKind::Task, order[i], -1});
+      rows.push_back({TaskRowKind::Task, -1, static_cast<int16_t>(order[i])});
     }
     return;
   }
 
   rows.reserve(static_cast<size_t>(total - openCount));
-  for (int i = openCount; i < total; ++i) rows.push_back({TaskRowKind::Task, order[i], -1});
+  for (int i = openCount; i < total; ++i) rows.push_back({TaskRowKind::Task, -1, static_cast<int16_t>(order[i])});
 }
 
 int taskListGroupJump(const std::vector<TaskListRow>& rows, int selected, int direction) {

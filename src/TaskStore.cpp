@@ -266,8 +266,9 @@ bool TaskStore::fromJson(JsonVariantConst doc) {
   // de parsing JSON est fatale — meme convention qu'OpdsServerStore::fromJson.
   records.clear();
   groupList.clear();
-  // Capacite fixe d'emblee : upsertGroup() ne reallouera jamais.
-  groupList.reserve(MAX_GROUPS);
+  // Seulement les groupes du fichier : l'ecran des taches n'en ajoute jamais.
+  // La capacite pleine est prise par reserveFullCapacity(), avant la sync.
+  groupList.reserve(std::min(doc["groups"].as<JsonArrayConst>().size(), MAX_GROUPS));
   groupsSyncedFlag = doc["gs"] | false;
 
   // Lus avant les taches : `groupList` est complet quand la boucle des taches
@@ -403,6 +404,9 @@ void TaskStore::remove(const char* id) {
 }
 
 bool TaskStore::reserveFullCapacity() {
+  // 736 o au plus, avant le retour anticipe : la sync pose les groupes depuis le
+  // rappel TLS, donc upsertGroup() ne doit jamais y allouer.
+  if (groupList.capacity() < MAX_GROUPS) groupList.reserve(MAX_GROUPS);
   if (records.capacity() >= MAX_TASKS) return true;
   // La marge couvre l'en-tete et l'alignement de l'allocateur.
   constexpr uint32_t RECORDS_BYTES = MAX_TASKS * sizeof(TaskRecord);
@@ -481,8 +485,17 @@ bool TaskStore::upsertGroup(const TaskGroup& g) {
     LOG_ERR(TAG, "Dropping group %s: already at the %zu-group cap", g.id, MAX_GROUPS);
     return false;
   }
-  // Index charge sans fromJson() (absent) : la capacite n'est pas encore posee.
-  if (groupList.capacity() < MAX_GROUPS) groupList.reserve(MAX_GROUPS);
+  // La sync a deja pris la capacite pleine (reserveFullCapacity()) ; hors sync
+  // (outils du simulateur), on ne grandit que si un bloc assez grand existe,
+  // sinon le `new` qui aborte tuerait la liseuse : meme garde que pour `records`.
+  if (groupList.capacity() < MAX_GROUPS) {
+    constexpr uint32_t GROUPS_BYTES = MAX_GROUPS * sizeof(TaskGroup);
+    if (ESP.getMaxAllocHeap() < GROUPS_BYTES + 1024) {
+      LOG_ERR(TAG, "No contiguous block for group %s", g.id);
+      return false;
+    }
+    groupList.reserve(MAX_GROUPS);
+  }
   TaskGroup stored{};
   std::snprintf(stored.id, sizeof(stored.id), "%s", g.id);
   copyGroupName(stored.name, g.name);

@@ -154,24 +154,24 @@ TEST(BuildTaskListRows, RowZeroIsTheDefaultSelectionInOpenView) {
 // tests pin that it no longer steps off anything.
 
 TEST(TaskListClampSelection, ClampsOutOfRangeIndex) {
-  std::vector<TaskListRow> rows = {{TaskRowKind::Task, 0}, {TaskRowKind::Task, 1}};
+  std::vector<TaskListRow> rows = {{TaskRowKind::Task, -1, 0}, {TaskRowKind::Task, -1, 1}};
   EXPECT_EQ(taskListClampSelection(rows, 99), 1);
   EXPECT_EQ(taskListClampSelection(rows, -5), 0);
   // La frontiere qui compte vraiment : une liste qui raccourcit d'une ligne
   // sous une selection posee sur sa derniere ligne laisse selected == size().
   EXPECT_EQ(taskListClampSelection(rows, 2), 1);
 
-  std::vector<TaskListRow> addOnly = {{TaskRowKind::AddTask, -1}};
+  std::vector<TaskListRow> addOnly = {{TaskRowKind::AddTask, -1, -1}};
   EXPECT_EQ(taskListClampSelection(addOnly, 1), 0);
 }
 
 TEST(TaskListClampSelection, AStaleIndexPastTheEndLandsOnTheLastRow) {
   // Garde de bornes pure : un indice perime au-dela de la fin atterrit sur la
   // derniere ligne telle qu'elle est, sans chercher une tache.
-  std::vector<TaskListRow> rows = {{TaskRowKind::Task, 0}, {TaskRowKind::Task, 1}};
+  std::vector<TaskListRow> rows = {{TaskRowKind::Task, -1, 0}, {TaskRowKind::Task, -1, 1}};
   EXPECT_EQ(taskListClampSelection(rows, 4), 1);
 
-  std::vector<TaskListRow> addOnly = {{TaskRowKind::AddTask, -1}};
+  std::vector<TaskListRow> addOnly = {{TaskRowKind::AddTask, -1, -1}};
   EXPECT_EQ(taskListClampSelection(addOnly, 3), 0);
 }
 
@@ -326,12 +326,12 @@ namespace {
 std::vector<TaskListRow> sample() {
   // T H T T H T
   std::vector<TaskListRow> r;
-  r.push_back({TaskRowKind::Task, 0, -1});
-  r.push_back({TaskRowKind::GroupHeader, -1, 0});
-  r.push_back({TaskRowKind::Task, 1, -1});
-  r.push_back({TaskRowKind::Task, 2, -1});
-  r.push_back({TaskRowKind::GroupHeader, -1, 1});
-  r.push_back({TaskRowKind::Task, 3, -1});
+  r.push_back({TaskRowKind::Task, -1, 0});
+  r.push_back({TaskRowKind::GroupHeader, 0, -1});
+  r.push_back({TaskRowKind::Task, -1, 1});
+  r.push_back({TaskRowKind::Task, -1, 2});
+  r.push_back({TaskRowKind::GroupHeader, 1, -1});
+  r.push_back({TaskRowKind::Task, -1, 3});
   return r;
 }
 }  // namespace
@@ -364,7 +364,7 @@ TEST(TaskListStepSkippingHeaders, NeverLandsOnHeaderAndWraps) {
 }
 
 TEST(TaskListStepSkippingHeaders, OnlyHeadersReturnsMinusOne) {
-  std::vector<TaskListRow> r = {{TaskRowKind::GroupHeader, -1, 0}};
+  std::vector<TaskListRow> r = {{TaskRowKind::GroupHeader, 0, -1}};
   EXPECT_EQ(taskListStepSkippingHeaders(r, 0, +1), -1);
 }
 
@@ -380,7 +380,7 @@ TEST(TaskListStepSkippingHeaders, NothingSelectedStartsFromTheMatchingEnd) {
   EXPECT_EQ(taskListStepSkippingHeaders(rows, -1, -1), 5);
   EXPECT_EQ(taskListStepSkippingHeaders(rows, -1, +1), 0);
   // Une derniere ligne qui serait un titre est sautee elle aussi.
-  std::vector<TaskListRow> r = {{TaskRowKind::GroupHeader, -1, 0}, {TaskRowKind::Task, 0, -1}};
+  std::vector<TaskListRow> r = {{TaskRowKind::GroupHeader, 0, -1}, {TaskRowKind::Task, -1, 0}};
   EXPECT_EQ(taskListStepSkippingHeaders(r, -1, +1), 1);
   EXPECT_EQ(taskListStepSkippingHeaders(r, -1, -1), 1);
   // Un indice perime au-dela de la fin se comporte comme -1.

@@ -38,8 +38,9 @@ inline constexpr size_t TASK_CURSOR_BUF = 40;
 class TaskStore : public PersistableStore<TaskStore> {
  private:
   std::vector<TaskRecord> records;
-  // Au plus MAX_GROUPS x sizeof(TaskGroup) = 736 o, reserves d'un coup au
-  // chargement ; rendus par unload() comme `records`.
+  // Au plus MAX_GROUPS x sizeof(TaskGroup) = 736 o. Au chargement, juste le
+  // nombre de groupes du fichier ; la capacite pleine vient de
+  // reserveFullCapacity(). Rendus par unload() comme `records`.
   std::vector<TaskGroup> groupList;
   bool groupsSyncedFlag = false;
   std::string secretObfuscated;
@@ -186,7 +187,8 @@ class TaskStore : public PersistableStore<TaskStore> {
   // l'ancien bloc vit encore). stageUpsert() refuse au-dela de MAX_TASKS, donc
   // apres cet appel aucune reallocation n'est possible. Deux appelants : la
   // sync, avant la connexion (les stage*() tournent dans le rappel TLS), et la
-  // creation d'une tache, avant d'ouvrir le clavier.
+  // creation d'une tache, avant d'ouvrir le clavier. Porte aussi `groupList` a
+  // MAX_GROUPS, meme quand `records` est deja plein.
   bool reserveFullCapacity();
   void stageReset();
   bool stageUpsert(const TaskRecord& rec);

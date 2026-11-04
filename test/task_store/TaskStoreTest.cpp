@@ -143,3 +143,25 @@ TEST(TaskStoreGroups, UnloadReleasesGroupCapacity) {
   EXPECT_EQ(TASK_STORE.groups().capacity(), 0u);
   EXPECT_FALSE(TASK_STORE.groupsSynced());
 }
+
+TEST(TaskStoreGroups, LoadReservesOnlyThePresentGroupsUntilTheSyncReservesAll) {
+  loadIndex(
+      R"({"gs":true,"groups":[{"id":"g0000001","name":"A","pos":0},{"id":"g0000002","name":"B","pos":1}],"tasks":[]})");
+  ASSERT_EQ(TASK_STORE.groups().size(), 2u);
+  EXPECT_LT(TASK_STORE.groups().capacity(), MAX_GROUPS);
+
+  ASSERT_TRUE(TASK_STORE.reserveFullCapacity());
+  EXPECT_GE(TASK_STORE.groups().capacity(), MAX_GROUPS);
+  // Deja pleine cote taches : le second appel ne revient pas avant les groupes.
+  const TaskGroup* before = TASK_STORE.groups().data();
+  ASSERT_TRUE(TASK_STORE.reserveFullCapacity());
+  EXPECT_EQ(TASK_STORE.groups().data(), before);
+}
+
+TEST(TaskStoreGroups, UpsertGroupAfterFullReservationNeverReallocates) {
+  freshEmptyStore();
+  ASSERT_TRUE(TASK_STORE.reserveFullCapacity());
+  const TaskGroup* base = TASK_STORE.groups().data();
+  fillGroups();
+  EXPECT_EQ(TASK_STORE.groups().data(), base);
+}
