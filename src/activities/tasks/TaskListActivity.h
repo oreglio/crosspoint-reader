@@ -68,8 +68,9 @@ class TaskListActivity final : public UiListActivity {
   // Retour (bouton ou fleche de l'en-tete) quitte d'abord le mode selection,
   // puis la vue des faites, puis l'ecran.
   void onBackButton() override;
-  // Haut depuis la ligne 0 monte sur le compteur de l'en-tete ; Bas ou Haut
-  // depuis le compteur redescend dans la liste. Le reste comme la base.
+  // Haut depuis la premiere ligne monte sur le compteur de l'en-tete ; Bas ou
+  // Haut depuis le compteur redescend dans la liste. En mode selection, les
+  // titres de groupe sont sautes. Le reste comme la base.
   void navigateButtons() override;
   // En-tete (titre de la vue, compteur de l'autre vue + marque d'envoi en
   // attente), rejoue par la base a chaque passe de reconstruction ; pieds :
@@ -80,6 +81,22 @@ class TaskListActivity final : public UiListActivity {
  private:
   void rebuildOrder();
   void buildRows(UiScreen& screen);
+  // Titres de groupe : list() ne pose qu'une ligne vide (fond, selection,
+  // zone tactile) ; le nom, le compteur et le filet sont peints ici, par-dessus,
+  // a la geometrie que list() vient d'employer. Voir le .cpp.
+  void drawGroupHeaders(UiScreen& screen, const freeink::ui::ListProps& props) const;
+  // Pas de Haut/Bas : ButtonNavigator hors mode selection, les titres sautes
+  // en mode selection (Gauche et Droite y effacent et cochent).
+  int stepFrom(int from, int direction) const;
+  // Premiere ligne ou le curseur peut se poser : 0, ou la premiere qui n'est
+  // pas un titre en mode selection.
+  int firstCursorRow() const;
+  // `index`, ou la tache qui suit si c'est un titre en mode selection : aucun
+  // chemin ne laisse le curseur sur un titre pendant la selection.
+  int cursorRowFor(int index) const;
+  // Ligne selectionnee si c'est un titre de groupe hors mode selection et hors
+  // compteur, -1 sinon.
+  int focusedGroupHeader();
   void toggleAt(int index);
   // Confirmer sur le compteur de l'en-tete (ou un toucher dessus) : remplace
   // la liste par l'autre vue. Les taches qui quittent l'ecran quittent aussi
@@ -102,6 +119,9 @@ class TaskListActivity final : public UiListActivity {
   // « Taille du texte des taches » depuis le menu : ouvre le choix 10/12/14.
   void chooseTextSize();
   void editTaskPriority(const std::string& id);
+  // « Groupe » du menu : « Sans groupe » puis les groupes, dans l'ordre des
+  // titres ; puis op Group, index, et le curseur suit la tache.
+  void chooseGroup(const std::string& taskId);
   void promptDeleteTask(const std::string& id);
   void deleteTask(const std::string& id);
   // « Supprimer les faites (N) » du menu, apres confirmation.
@@ -131,9 +151,10 @@ class TaskListActivity final : public UiListActivity {
   // Creation sur l'appareil, sans serveur ni Wi-Fi : refus du plafond, puis
   // clavier, puis choix de priorite. Les deux etapes sont chainees par leurs
   // gestionnaires de resultat, comme TaskDetailActivity::editTitle() enchaine
-  // sur editPriority().
-  void createTask();
-  void askPriorityForNewTask(std::string title);
+  // sur editPriority(). `groupId` : « ajouter » sur un titre de groupe, la
+  // tache nait dans ce groupe ; nullptr (Gauche « Nouv. ») = sans groupe.
+  void createTask(const char* groupId = nullptr);
+  void askPriorityForNewTask(std::string title, std::string groupId);
   // Ligne d'ecran portant la tache `id`, ou -1 si aucune. Un balayage de `rows`
   // (121 lignes au plus) plutot qu'un indice retenu : l'enregistrement est
   // ajoute en fin d'index mais le tri le place selon sa priorite, donc sa
@@ -156,6 +177,8 @@ class TaskListActivity final : public UiListActivity {
   // Police de la liste, choisie par le reglage « Taille du texte des taches ».
   int listFontId = 0;
   static int taskListFontId();
+  // Police des titres de groupe, liee a l'emplacement FONT_LABEL de cet ecran.
+  static int groupTitleFontId();
   bool dirty = true;
   // Erreur a montrer en toast par-dessus la liste : une ecriture refusee par
   // la file d'ops, une creation refusee au plafond, ou le tas trop fragmente.

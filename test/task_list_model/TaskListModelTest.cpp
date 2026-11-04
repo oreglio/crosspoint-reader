@@ -373,3 +373,30 @@ TEST(TaskGroupOpenCount, CountsUntilNextHeader) {
   EXPECT_EQ(taskGroupOpenCount(rows, 1), 2);
   EXPECT_EQ(taskGroupOpenCount(rows, 4), 1);
 }
+
+TEST(TaskListStepSkippingHeaders, NothingSelectedStartsFromTheMatchingEnd) {
+  const auto rows = sample();
+  // Sans selection, reculer arrive sur la derniere ligne (pas l'avant-derniere).
+  EXPECT_EQ(taskListStepSkippingHeaders(rows, -1, -1), 5);
+  EXPECT_EQ(taskListStepSkippingHeaders(rows, -1, +1), 0);
+  // Une derniere ligne qui serait un titre est sautee elle aussi.
+  std::vector<TaskListRow> r = {{TaskRowKind::GroupHeader, -1, 0}, {TaskRowKind::Task, 0, -1}};
+  EXPECT_EQ(taskListStepSkippingHeaders(r, -1, +1), 1);
+  EXPECT_EQ(taskListStepSkippingHeaders(r, -1, -1), 1);
+  // Un indice perime au-dela de la fin se comporte comme -1.
+  EXPECT_EQ(taskListStepSkippingHeaders(rows, 99, -1), 5);
+}
+
+TEST(TaskGroupDisplayOrder, ByPositionThenId) {
+  const std::vector<TaskGroup> groups = {grp("gc", "C", 2), grp("gb", "B", 1), grp("ga", "A", 2)};
+  uint8_t out[MAX_GROUPS];
+  ASSERT_EQ(taskGroupDisplayOrder(groups, out), 3u);
+  EXPECT_EQ(out[0], 1);
+  EXPECT_EQ(out[1], 2);
+  EXPECT_EQ(out[2], 0);
+}
+
+TEST(TaskGroupDisplayOrder, NoGroupsGivesNothing) {
+  uint8_t out[MAX_GROUPS];
+  EXPECT_EQ(taskGroupDisplayOrder({}, out), 0u);
+}

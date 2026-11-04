@@ -40,7 +40,17 @@ STEPS = [
     "menu-done", "done-down-1", "done-down-2", "done-down-3", "25-menu-delete-done-selected",
     "26-delete-done-confirm", "done-confirm-down", "27-done-deleted",
     "06-all-done", "06b-all-done-counter-focused", "06c-all-done-view", "all-done-reopen-1",
-    "all-done-reopen-2", "06d-last-reopened-back-to-open", "07-empty", "08-add-keyboard", "09-pair", "10-pair-confirm",
+    "all-done-reopen-2", "06d-last-reopened-back-to-open",
+    "28-groups", "29-group-title", "30-group-next", "31-group-last", "31b-group-last-no-wrap",
+    "32-group-add-keyboard", "kbd-type", "kbd-bottom-row", "33-group-add-ok-key", "34-group-add-priority",
+    "35-group-added", "36-group-menu", "group-menu-down-1", "group-menu-down-2", "37-group-menu-selected",
+    "38-group-chooser", "39-group-chooser-up", "40-group-moved",
+    "group-select-menu", "group-select-down-1", "group-select-down-2", "group-select-down-3",
+    "41-group-select-selected", "42-group-selection-mode", "43-selection-down-1", "44-selection-down-2",
+    "45-selection-down-3", "group-selection-exit",
+    "46-group-detail", "detail-edit-keyboard", "detail-kbd-bottom-row", "detail-kbd-ok",
+    "47-detail-edit-priority", "48-detail-edit-group", "detail-group-cancel", "detail-back-to-list",
+    "07-empty", "08-add-keyboard", "09-pair", "10-pair-confirm",
     "11-pair-cancelled", "ask-again", "pick-confirm", "12-pair-renewed", "end",
 ]
 THEMES = {"classic": 0, "lyra": 1, "minimal": 5}

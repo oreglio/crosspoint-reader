@@ -7,23 +7,23 @@ namespace {
 
 int findGroup(const std::vector<TaskGroup>& groups, const char* id) {
   if (id[0] == '\0') return -1;
-  for (size_t i = 0; i < groups.size(); ++i) {
-    if (std::strcmp(groups[i].id, id) == 0) return static_cast<int>(i);
-  }
-  return -1;
+  const auto it =
+      std::find_if(groups.begin(), groups.end(), [id](const TaskGroup& g) { return std::strcmp(g.id, id) == 0; });
+  return it == groups.end() ? -1 : static_cast<int>(it - groups.begin());
+}
+
+// Ordre d'affichage des groupes : position, puis id. Le meme pour les titres
+// (groupRank) et pour le selecteur de groupe (taskGroupDisplayOrder).
+bool groupBefore(const TaskGroup& a, const TaskGroup& b) {
+  if (a.position != b.position) return a.position < b.position;
+  return std::strcmp(a.id, b.id) < 0;
 }
 
 // Rang d'affichage de chaque groupe (0 = premier) : position, puis id.
 // Compte les groupes qui le precedent ; MAX_GROUPS est petit, O(n^2) sans tas.
 size_t groupRank(const std::vector<TaskGroup>& groups, size_t g) {
-  size_t rank = 0;
-  for (size_t i = 0; i < groups.size(); ++i) {
-    if (groups[i].position != groups[g].position ? groups[i].position < groups[g].position
-                                                 : std::strcmp(groups[i].id, groups[g].id) < 0) {
-      ++rank;
-    }
-  }
-  return rank;
+  return static_cast<size_t>(std::count_if(groups.begin(), groups.end(),
+                                           [&](const TaskGroup& other) { return groupBefore(other, groups[g]); }));
 }
 
 }  // namespace
@@ -105,12 +105,22 @@ int taskListStepSkippingHeaders(const std::vector<TaskListRow>& rows, int select
   const int total = static_cast<int>(rows.size());
   if (total == 0) return -1;
   const int step = direction < 0 ? -1 : 1;
+  // Hors liste (-1 : rien de choisi) : le premier pas tombe sur la premiere
+  // ligne en avancant, sur la DERNIERE en reculant, comme ButtonNavigator.
   int i = selected;
+  if (i < 0 || i >= total) i = step > 0 ? -1 : total;
   for (int tries = 0; tries < total; ++tries) {
     i = ((i + step) % total + total) % total;
     if (rows[static_cast<size_t>(i)].kind != TaskRowKind::GroupHeader) return i;
   }
   return -1;
+}
+
+size_t taskGroupDisplayOrder(const std::vector<TaskGroup>& groups, uint8_t* out) {
+  const size_t n = std::min(groups.size(), MAX_GROUPS);
+  for (size_t i = 0; i < n; ++i) out[i] = static_cast<uint8_t>(i);
+  std::sort(out, out + n, [&](const uint8_t a, const uint8_t b) { return groupBefore(groups[a], groups[b]); });
+  return n;
 }
 
 int taskGroupOpenCount(const std::vector<TaskListRow>& rows, int headerRow) {

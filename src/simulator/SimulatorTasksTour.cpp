@@ -27,7 +27,7 @@ namespace {
 
 using Button = MappedInputManager::Button;
 
-enum class Act : uint8_t { ColdPair, OpenList, Tap, Hold, SeedAllDone, SeedEmpty, OpenPair, Finish };
+enum class Act : uint8_t { ColdPair, OpenList, Tap, Hold, SeedAllDone, SeedGroups, SeedEmpty, OpenPair, Finish };
 
 // Relache d'un Hold : au-dela du seuil de 800 ms de la liste, avant la capture
 // (kShotOffsetMs) pour que la popup soit deja peinte.
@@ -125,6 +125,52 @@ constexpr TourStep kSteps[] = {
     {"all-done-reopen-1", Act::Tap, Button::Confirm},
     {"all-done-reopen-2", Act::Tap, Button::Confirm},
     {"06d-last-reopened-back-to-open", Act::Tap, Button::Confirm},
+    // Groupes (maquette groups-device-v2) : une tache sans groupe en tete,
+    // puis MAISON, ADMINISTRATIF et WORK avec leur titre ; VACANCES n'a que
+    // des faites et ne s'affiche pas. Sur un titre : ajouter / prec. / suiv.,
+    // sans bouclage au bout.
+    {"28-groups", Act::SeedGroups, Button::Confirm},
+    {"29-group-title", Act::Tap, Button::Down},
+    {"30-group-next", Act::Tap, Button::Right},
+    {"31-group-last", Act::Tap, Button::Right},
+    {"31b-group-last-no-wrap", Act::Tap, Button::Right},
+    // « ajouter » sur WORK : clavier, une lettre, OK (Haut puis Gauche
+    // bouclent sur la touche OK), priorite, et la tache nait dans WORK.
+    {"32-group-add-keyboard", Act::Tap, Button::Confirm},
+    {"kbd-type", Act::Tap, Button::Confirm},
+    {"kbd-bottom-row", Act::Tap, Button::Up},
+    {"33-group-add-ok-key", Act::Tap, Button::Left},
+    {"34-group-add-priority", Act::Tap, Button::Confirm},
+    {"35-group-added", Act::Tap, Button::Confirm},
+    // « Groupe » dans le menu, apres « Modifier » : la tache passe dans
+    // ADMINISTRATIF et le curseur la suit.
+    {"36-group-menu", Act::Hold, Button::Confirm},
+    {"group-menu-down-1", Act::Tap, Button::Down},
+    {"group-menu-down-2", Act::Tap, Button::Down},
+    {"37-group-menu-selected", Act::Tap, Button::Down},
+    {"38-group-chooser", Act::Tap, Button::Confirm},
+    {"39-group-chooser-up", Act::Tap, Button::Up},
+    {"40-group-moved", Act::Tap, Button::Confirm},
+    // Mode selection : le curseur saute les titres de groupe.
+    {"group-select-menu", Act::Hold, Button::Confirm},
+    {"group-select-down-1", Act::Tap, Button::Down},
+    {"group-select-down-2", Act::Tap, Button::Down},
+    {"group-select-down-3", Act::Tap, Button::Down},
+    {"41-group-select-selected", Act::Tap, Button::Down},
+    {"42-group-selection-mode", Act::Tap, Button::Confirm},
+    {"43-selection-down-1", Act::Tap, Button::Down},
+    {"44-selection-down-2", Act::Tap, Button::Down},
+    {"45-selection-down-3", Act::Tap, Button::Down},
+    {"group-selection-exit", Act::Tap, Button::Back},
+    // Detail, « modifier » : titre, priorite, puis groupe.
+    {"46-group-detail", Act::Tap, Button::Right},
+    {"detail-edit-keyboard", Act::Tap, Button::Left},
+    {"detail-kbd-bottom-row", Act::Tap, Button::Up},
+    {"detail-kbd-ok", Act::Tap, Button::Left},
+    {"47-detail-edit-priority", Act::Tap, Button::Confirm},
+    {"48-detail-edit-group", Act::Tap, Button::Confirm},
+    {"detail-group-cancel", Act::Tap, Button::Back},
+    {"detail-back-to-list", Act::Tap, Button::Back},
     {"07-empty", Act::SeedEmpty, Button::Confirm},
     {"08-add-keyboard", Act::Tap, Button::Left},
     {"09-pair", Act::OpenPair, Button::Confirm},
@@ -209,6 +255,36 @@ void seedAllDone() {
   TASK_STORE.replaceAll(std::move(all));
 }
 
+TaskRecord makeGrouped(const char* id, const char* title, uint8_t priority, bool done, const char* group) {
+  TaskRecord rec = makeRecord(id, title, priority, done);
+  std::snprintf(rec.group, sizeof(rec.group), "%s", group);
+  return rec;
+}
+
+void seedGroups() {
+  std::vector<TaskRecord> all;
+  all.push_back(makeGrouped("d000000b1", "Appeler maman", TASK_PRIORITY_NORMAL, false, ""));
+  all.push_back(makeGrouped("d000000b2", "Rappeler le plombier", TASK_PRIORITY_HIGH, false, "g0000000a"));
+  all.push_back(makeGrouped("d000000b3", "Changer le joint", TASK_PRIORITY_NORMAL, false, "g0000000a"));
+  all.push_back(makeGrouped("d000000b4", "Payer la taxe fonci\xC3\xA8re", TASK_PRIORITY_HIGH, false, "g0000000b"));
+  all.push_back(makeGrouped("d000000b5", "Lire le contrat", TASK_PRIORITY_NORMAL, false, "g0000000b"));
+  all.push_back(makeGrouped("d000000b6", "Pr\xC3\xA9parer la d\xC3\xA9mo", TASK_PRIORITY_NORMAL, false, "g0000000c"));
+  all.push_back(makeGrouped("d000000b7", "Sortir les poubelles", TASK_PRIORITY_NORMAL, true, "g0000000a"));
+  all.push_back(makeGrouped("d000000b8", "Envoyer les photos", TASK_PRIORITY_NORMAL, true, ""));
+  all.push_back(makeGrouped("d000000b9", "R\xC3\xA9server l'h\xC3\xB4tel", TASK_PRIORITY_NORMAL, true, "g0000000d"));
+  TASK_STORE.replaceAll(std::move(all));
+  // Positions dans le desordre de la liste : l'ecran trie par position.
+  const TaskGroup groups[] = {
+      {"g0000000c", "WORK", 3},
+      {"g0000000a", "MAISON", 1},
+      {"g0000000d", "VACANCES", 4},
+      {"g0000000b", "ADMINISTRATIF", 2},
+  };
+  for (const TaskGroup& g : groups) TASK_STORE.upsertGroup(g);
+  // upsertGroup() ne touche que la RAM ; la liste, rouverte, relit la carte.
+  if (!TASK_STORE.saveIndex()) LOG_ERR("TOUR", "Cannot save the seeded groups");
+}
+
 void openList() {
   TASK_STORE.ensureLoaded();
   activityManager.goToTaskList();
@@ -281,6 +357,10 @@ void runSimulatorTasksTourTick() {
         break;
       case Act::SeedAllDone:
         seedAllDone();
+        openList();
+        break;
+      case Act::SeedGroups:
+        seedGroups();
         openList();
         break;
       case Act::SeedEmpty:

@@ -14,6 +14,7 @@
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "TaskStore.h"
+#include "activities/tasks/TaskGroupChoices.h"
 #include "activities/tasks/TaskNotePager.h"
 #include "activities/tasks/TaskPriorityChoices.h"
 #include "activities/util/KeyboardEntryActivity.h"
@@ -507,21 +508,51 @@ void TaskDetailActivity::editPriority() {
                            }
 
                            const uint8_t priority = TASK_PRIORITY_CHOICES[choice->index];
-                           if (priority == record.priority) return;
+                           if (priority != record.priority) {
+                             TaskRecord next = record;
+                             next.priority = priority;
+                             // Au bout de sa nouvelle bande, comme sur le serveur.
+                             next.order = TASK_ORDER_UNSET;
+                             TaskOp op{};
+                             op.kind = TaskOpKind::Prio;
+                             std::snprintf(op.id, sizeof(op.id), "%s", next.id);
+                             op.priority = priority;
 
-                           TaskRecord next = record;
-                           next.priority = priority;
-                           // Au bout du nouveau groupe, comme sur le serveur.
-                           next.order = TASK_ORDER_UNSET;
-                           TaskOp op{};
-                           op.kind = TaskOpKind::Prio;
-                           std::snprintf(op.id, sizeof(op.id), "%s", next.id);
-                           op.priority = priority;
-
-                           // La graisse du titre porte la priorite haute : la
-                           // changer rend l'enroulement precedent caduc.
-                           appendAndApply(op, next, /*rewrapTitle=*/true);
+                             // La graisse du titre porte la priorite haute : la
+                             // changer rend l'enroulement precedent caduc.
+                             if (!appendAndApply(op, next, /*rewrapTitle=*/true)) return;
+                           }
+                           // Troisieme etape, seulement s'il existe un groupe :
+                           // sans groupe, il n'y a rien a choisir.
+                           if (!TASK_STORE.groups().empty()) editGroup();
                          });
+}
+
+void TaskDetailActivity::editGroup() {
+  TaskGroupChoices choices;
+  std::vector<std::string> labels;
+  const uint8_t selected = buildTaskGroupChoices(TASK_STORE.groups(), record.group, choices, labels);
+  startActivityForResult(
+      std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "TaskGroup", StrId::STR_TASK_MENU_GROUP,
+                                                std::move(labels), selected),
+      [this, choices](const ActivityResult& result) {
+        pendingFullRefresh = true;
+        const auto* choice = std::get_if<OptionSelectionResult>(&result.data);
+        if (result.isCancelled || choice == nullptr) return;
+        const char* group = taskGroupChoiceId(TASK_STORE.groups(), choices, choice->index);
+        if (group == nullptr || std::strcmp(group, record.group) == 0) return;
+
+        TaskRecord next = record;
+        std::snprintf(next.group, sizeof(next.group), "%s", group);
+        // Au bout de sa bande dans le nouveau groupe, comme sur le serveur.
+        next.order = TASK_ORDER_UNSET;
+        TaskOp op{};
+        op.kind = TaskOpKind::Group;
+        std::snprintf(op.id, sizeof(op.id), "%s", next.id);
+        std::snprintf(op.group, sizeof(op.group), "%s", next.group);
+        // Le groupe ne s'affiche pas ici : rien a re-enrouler.
+        appendAndApply(op, next, /*rewrapTitle=*/false);
+      });
 }
 
 void TaskDetailActivity::startPomodoro() {

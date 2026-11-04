@@ -172,6 +172,9 @@ class TaskDetailActivity final : public Activity {
   void toggleDone();
   void editTitle();
   void editPriority();
+  // Troisieme etape de « modifier », seulement s'il existe au moins un groupe :
+  // « Sans groupe » puis les groupes, dans l'ordre de la liste.
+  void editGroup();
   void startPomodoro();
   // Ecrit les deux fichiers SD PUIS prend le verrou de rendu pour appliquer la
   // mutation en memoire : appendOp() ajoute une ligne et upsert() reserialise

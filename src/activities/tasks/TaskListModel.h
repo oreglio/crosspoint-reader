@@ -70,8 +70,14 @@ int taskListGroupJump(const std::vector<TaskListRow>& rows, int selected, int di
 
 // Pas de navigation du mode selection : ligne suivante (+1) ou precedente (-1)
 // qui n'est pas un GroupHeader, avec bouclage comme ButtonNavigator. -1 si
-// aucune ligne n'est un candidat.
+// aucune ligne n'est un candidat. `selected` hors liste (-1) part d'avant la
+// premiere ligne (+1) ou d'apres la derniere (-1).
 int taskListStepSkippingHeaders(const std::vector<TaskListRow>& rows, int selected, int direction);
+
+// Indices de `groups` dans l'ordre d'affichage (position, puis id), le meme
+// que celui des titres de la liste. `out` doit tenir MAX_GROUPS entrees ; rend
+// le nombre ecrit (au plus MAX_GROUPS).
+size_t taskGroupDisplayOrder(const std::vector<TaskGroup>& groups, uint8_t* out);
 
 // Taches qui suivent le titre `headerRow` jusqu'au prochain titre.
 int taskGroupOpenCount(const std::vector<TaskListRow>& rows, int headerRow);

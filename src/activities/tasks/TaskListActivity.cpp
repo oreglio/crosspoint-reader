@@ -16,6 +16,7 @@
 #include "activities/home/BookActions.h"
 #include "activities/tasks/TaskDetailActivity.h"
 #include "activities/tasks/TaskFontSizes.h"
+#include "activities/tasks/TaskGroupChoices.h"
 #include "activities/tasks/TaskPriorityChoices.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
@@ -110,6 +111,21 @@ int TaskListActivity::taskListFontId() {
   }
 }
 
+int TaskListActivity::groupTitleFontId() {
+  // Un cran sous la police des taches quand ce cran a un gras : la petite
+  // police d'interface (inter 8) n'en a pas, et un titre maigre ne se lirait
+  // plus comme un titre. En taille 10, le titre garde donc la taille des
+  // taches ; il s'en distingue par le gras, le filet et l'air au-dessus.
+  switch (SETTINGS.taskFontSize) {
+    case 1:
+      return UI_10_FONT_ID;
+    case 2:
+      return UI_12_FONT_ID;
+    default:
+      return UI_10_FONT_ID;
+  }
+}
+
 TaskListActivity::TaskListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     // Appui long tactile : les lignes portent InputLongPress (buildRows), qui
     // ouvre le menu de la tache comme l'appui long sur Confirmer.
@@ -136,6 +152,7 @@ void TaskListActivity::onEnter() {
   // Relu a chaque entree : un reglage change entre deux visites s'applique.
   listFontId = taskListFontId();
   uiTarget.setFont(fui::GfxRendererTarget::FONT_BODY, listFontId);
+  uiTarget.setFont(fui::GfxRendererTarget::FONT_LABEL, groupTitleFontId());
 
   view = TaskListView::Open;
   headerFocused = false;
@@ -217,6 +234,10 @@ void TaskListActivity::buildRows(UiScreen& screen) {
   // Les titres peuvent s'enrouler sur deux lignes plutot que d'etre tronques
   // -- une exigence de la maquette, pas une simplification.
   props.labelText.maxLines = 2;
+  // Seuls les titres de groupe portent un sous-titre (blanc) : sa police
+  // regle de combien leur ligne grandit (buildRows, drawGroupHeaders).
+  props.subtitleText = screen.theme().smallText;
+  props.subtitleText.font = fui::GfxRendererTarget::FONT_LABEL;
   // Taille native des pastilles : list() les pose en BitmapMode::Contain, donc
   // une iconSize differente les ferait redimensionner au plus proche voisin et
   // l'anneau prendrait une epaisseur irreguliere sur un panneau 1 bit.
@@ -270,8 +291,14 @@ void TaskListActivity::buildRows(UiScreen& screen) {
       // l'ajout passe par le bouton Gauche.
       item.label = tr(STR_TASK_ADD_ROW);
     } else if (row.kind == TaskRowKind::GroupHeader) {
-      // Provisoire : titre rendu comme une ligne simple (style et boutons : tache suivante).
-      item.label = TASK_STORE.groups()[static_cast<size_t>(row.groupIndex)].name;
+      // Ligne sans libelle ni pastille : list() en pose le fond, la selection
+      // et la zone tactile, drawGroupHeaders() y peint le titre. Le
+      // sous-titre blanc ne s'affiche pas : il reserve une ligne de la police
+      // des titres, dont list() grandit la ligne quand le libelle (vide) et
+      // lui ne tiennent pas dans la hauteur d'une tache. C'est le seul moyen
+      // d'agrandir UNE ligne sans toucher au SDK ; l'air gagne va au-dessus
+      // du titre, cale en bas.
+      item.subtitle = " ";
     } else {
       const TaskRecord& rec = records[static_cast<size_t>(row.recordIndex)];
       item.label = rec.title;
@@ -304,6 +331,121 @@ void TaskListActivity::buildRows(UiScreen& screen) {
   props.itemsWindowFirst = static_cast<uint16_t>(windowStart);
   props.itemsWindowCount = static_cast<uint16_t>(winItems.size());
   screen.list(props);
+  drawGroupHeaders(screen, props);
+}
+
+// Le titre de groupe de la maquette (petite police grasse, compteur a droite,
+// filet dessous, plus d'air au-dessus qu'entre deux taches) ne s'exprime pas
+// avec un fui::ListItem : la police du libelle vaut pour toute la liste, le
+// texte est toujours centre verticalement, et ListProps n'a pas de hauteur par
+// ligne. ListItem::isHeader (police et filet propres) n'est ni selectionnable
+// ni touchable, et le titre doit l'etre. Le titre garde donc une ligne de
+// liste ordinaire, vide, et son contenu est peint ici, cale en BAS de la
+// ligne : l'air libere passe au-dessus.
+//
+// La geometrie est celle de list() (list.h) : memes lignes depuis topIndex,
+// mesurees par le meme fui::measureListRow, avec les valeurs que
+// Screen::resolveListProps() substitue aux sentinelles que buildRows() laisse
+// au theme. Aucune ligne n'a de sectionHeading ni d'isHeader, et l'ecran ne
+// pose pas de ComponentStyle : list() recoit screen.body() tel quel.
+void TaskListActivity::drawGroupHeaders(UiScreen& screen, const fui::ListProps& props) const {
+  if (props.count == 0 || winItems.empty()) return;
+  const fui::ThemeTokens& theme = screen.theme();
+  const bool touch = screen.device().hasTouch;
+
+  fui::ListProps resolved = props;
+  if (resolved.sidePadding < 0) resolved.sidePadding = theme.listSidePadding;
+  if (resolved.rowInset < 0) resolved.rowInset = theme.listInset;
+  if (resolved.rowGap < 0) {
+    resolved.rowGap = theme.listRowGap;
+    if (touch && resolved.rowGap < theme.listTouchRowGap) resolved.rowGap = theme.listTouchRowGap;
+  }
+  const int16_t scrollW = resolved.scrollIndicatorWidth < 0 ? theme.listScrollWidth : resolved.scrollIndicatorWidth;
+  const int16_t scrollInset = resolved.scrollIndicatorInset < 0 ? theme.listScrollInset : resolved.scrollIndicatorInset;
+  const uint8_t scrollSide = resolved.scrollIndicatorSide == 0xFF ? theme.listScrollSide : resolved.scrollIndicatorSide;
+  const int16_t rowGap = resolved.rowGap;
+  const int16_t sidePad = resolved.sidePadding;
+  const int16_t rowInset = resolved.rowInset > 0 ? resolved.rowInset : 0;
+
+  // Bande des lignes : retrait du theme, puis la piste de l'indicateur de
+  // defilement, toujours reservee sur une liste geree par ListNav (props.nav).
+  fui::Rect area = screen.body();
+  area.x = static_cast<int16_t>(area.x + rowInset);
+  area.width = static_cast<int16_t>(area.width - rowInset * 2);
+  if (resolved.scrollIndicator && props.nav != nullptr && scrollW > 0) {
+    const int16_t needed = static_cast<int16_t>(scrollW + scrollInset + 2);
+    if (rowInset < needed) {
+      const int16_t cut = static_cast<int16_t>(needed - rowInset);
+      area.width = static_cast<int16_t>(area.width - cut);
+      if (scrollSide == 1) area.x = static_cast<int16_t>(area.x + cut);
+    }
+  }
+
+  // Couleurs de la ligne selon son etat, comme list() : le style de selection
+  // du theme etendu sur ses lignes de base (Screen::resolveListProps()).
+  fui::StyleSet styles = theme.listRow.unset() ? fui::defaultListRowStyles() : theme.listRow;
+  switch (theme.listSelectionStyle) {
+    case fui::SelectionStyle::LightPill:
+      styles.selected.background = fui::Paint::dither(fui::Color::LightGray);
+      styles.selected.foreground = fui::Paint::solid(fui::Color::Black);
+      styles.active = styles.selected;
+      break;
+    case fui::SelectionStyle::Underline:
+    case fui::SelectionStyle::Triangle:
+      styles.selected = styles.normal;
+      break;
+    case fui::SelectionStyle::InvertFill:
+      break;
+  }
+
+  fui::DrawTarget& target = screen.target();
+  fui::TextStyle nameBase = theme.smallText;
+  nameBase.font = fui::GfxRendererTarget::FONT_LABEL;
+  nameBase.bold = true;
+  fui::TextStyle countBase = nameBase;
+  countBase.bold = false;
+  countBase.align = fui::TextAlign::Right;
+  const int16_t textH = target.lineHeight(nameBase.font);
+  // Ecart entre le bas du texte et le filet.
+  const int16_t ruleGap = UiThemeTokensDetail::scaledListMetric(4);
+
+  const std::vector<TaskGroup>& groups = TASK_STORE.groups();
+  const int count = props.count;
+  const int top = std::min<int>(props.topIndex, count - 1);
+  const int windowEnd = props.itemsWindowFirst + static_cast<int>(winItems.size());
+  int16_t y = area.y;
+  for (int i = top; i < count && i < windowEnd && i >= props.itemsWindowFirst; ++i) {
+    if (y >= area.bottom()) break;
+    const fui::ListItem& item = winItems[static_cast<size_t>(i - props.itemsWindowFirst)];
+    const int16_t h = fui::measureListRow(target, screen.frame().assets(), area.width, resolved, item).height;
+    // list() s'arrete a la premiere ligne qui ne tient pas entiere.
+    if (y + h > area.bottom()) break;
+    const TaskListRow& row = rows[static_cast<size_t>(i)];
+    if (row.kind == TaskRowKind::GroupHeader && row.groupIndex >= 0 &&
+        static_cast<size_t>(row.groupIndex) < groups.size()) {
+      fui::State state = props.selectedIndex == i ? fui::StateSelected : fui::StateNormal;
+      state = screen.frame().stateFor(props.action, item.actionValue, state);
+      const fui::Paint ink = styles.resolve(state).foreground;
+      const fui::Rect content{static_cast<int16_t>(area.x + sidePad), y, static_cast<int16_t>(area.width - sidePad * 2),
+                              h};
+      // Le filet occupe la derniere ligne de pixels de la ligne, le texte se
+      // pose juste au-dessus : l'air de la ligne est au-dessus du titre.
+      const int16_t ruleY = static_cast<int16_t>(y + h - 1);
+      const int16_t textY = static_cast<int16_t>(std::max<int>(y, ruleY - ruleGap - textH));
+      char countText[8];
+      std::snprintf(countText, sizeof(countText), "%d", taskGroupOpenCount(rows, i));
+      const fui::TextStyle countStyle = fui::textStyleWithForeground(countBase, ink);
+      const int16_t countW = target.measureText(countStyle.font, countText, countStyle).width;
+      constexpr int16_t kCountGap = 8;
+      target.text(fui::Rect{content.x, textY, static_cast<int16_t>(content.width - countW - kCountGap), textH},
+                  groups[static_cast<size_t>(row.groupIndex)].name, fui::textStyleWithForeground(nameBase, ink));
+      target.text(fui::Rect{content.x, textY, content.width, textH}, countText, countStyle);
+      // Toujours noir : le filet se fond dans le fond d'une ligne selectionnee
+      // en video inverse, comme sur la maquette (.grp.sel).
+      target.fill(fui::Rect{content.x, ruleY, content.width, 1}, fui::Paint::solid(fui::Color::Black));
+    }
+    y = static_cast<int16_t>(y + h + rowGap);
+  }
 }
 
 void TaskListActivity::activateIndex(int index) {
@@ -320,6 +462,10 @@ void TaskListActivity::activateIndex(int index) {
       createTask();
       return;
     case TaskRowKind::GroupHeader:
+      // « Ajouter » dans ce groupe. Le mode selection ne s'arrete jamais sur
+      // un titre ; s'il y parvenait, rien a choisir.
+      if (!selecting)
+        createTask(TASK_STORE.groups()[static_cast<size_t>(rows[static_cast<size_t>(index)].groupIndex)].id);
       return;
   }
 }
@@ -370,15 +516,29 @@ bool TaskListActivity::handleCustomInput() {
       return true;
     }
   }
+  // Sur un titre de groupe, Gauche et Droite sautent au titre precedent ou
+  // suivant, sans boucler : rien au bout (le libelle y est vide).
+  const int header = focusedGroupHeader();
   if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-    // Sur le compteur, Droite n'a pas de tache dont ouvrir le detail.
-    if (!headerFocused) openDetailAt(activeNav().selected);
+    if (header >= 0) {
+      const int next = taskListGroupJump(rows, header, +1);
+      if (next >= 0) moveSelectionTo(next);
+    } else if (!headerFocused) {
+      // Sur le compteur, Droite n'a pas de tache dont ouvrir le detail.
+      openDetailAt(activeNav().selected);
+    }
     return true;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    if (header >= 0) {
+      const int previous = taskListGroupJump(rows, header, -1);
+      if (previous >= 0) moveSelectionTo(previous);
+      return true;
+    }
     // Ajouter, sur une liste peuplee comme sur une liste vide : une seule
     // regle. La ligne "+ Ajouter une tache" d'un index vide mene au meme
-    // endroit, pour qui ne cherche pas le bouton.
+    // endroit, pour qui ne cherche pas le bouton. Depuis une tache : sans
+    // groupe (« ajouter » sur un titre range la tache dans le groupe).
     createTask();
     return true;
   }
@@ -427,8 +587,8 @@ bool TaskListActivity::handleButtons() {
     }
     const int selected = activeNav().selected;
     if (selected < 0 || selected >= listCount()) return true;
-    // Sur « + Ajouter », un appui long fait l'action normale : le menu ne
-    // concerne qu'une tache.
+    // Sur « + Ajouter » ou un titre de groupe, un appui long fait l'action
+    // normale (ajouter) : le menu ne concerne qu'une tache.
     // En mode selection, un appui long choisit la ligne comme un appui court :
     // le menu n'y a pas cours.
     if (!selecting && mappedInput.getHeldTime() >= kHoldMs &&
@@ -443,7 +603,11 @@ bool TaskListActivity::handleButtons() {
 }
 
 void TaskListActivity::onRowLongPress(const int index) {
-  if (selecting) {
+  headerFocused = false;
+  // Hors tache (titre de groupe, ligne d'ajout) l'appui long vaut un toucher,
+  // comme l'appui long sur Confirmer (handleButtons()).
+  if (selecting || index < 0 || index >= static_cast<int>(rows.size()) ||
+      rows[static_cast<size_t>(index)].kind != TaskRowKind::Task) {
     activateIndex(index);
   } else {
     openTaskMenu(index);
@@ -451,6 +615,12 @@ void TaskListActivity::onRowLongPress(const int index) {
 }
 
 void TaskListActivity::onRowAction(const fui::ActionEvent& event) {
+  // En mode selection, un toucher sur un titre de groupe n'y pose pas le
+  // curseur : le mode saute les titres.
+  if (selecting && event.value >= 0 && event.value < static_cast<int>(rows.size()) &&
+      rows[static_cast<size_t>(event.value)].kind == TaskRowKind::GroupHeader) {
+    return;
+  }
   headerFocused = false;
   UiListActivity::onRowAction(event);
 }
@@ -471,6 +641,34 @@ void TaskListActivity::onBackButton() {
 
 bool TaskListActivity::hasHeaderCounter() const { return view == TaskListView::Done || doneCount > 0; }
 
+int TaskListActivity::stepFrom(const int from, const int direction) const {
+  const int count = listCount();
+  if (!selecting) {
+    return direction > 0 ? ButtonNavigator::nextIndex(from, count) : ButtonNavigator::previousIndex(from, count);
+  }
+  const int next = taskListStepSkippingHeaders(rows, from, direction);
+  return next >= 0 ? next : 0;
+}
+
+int TaskListActivity::firstCursorRow() const { return selecting ? stepFrom(-1, +1) : 0; }
+
+int TaskListActivity::cursorRowFor(const int index) const {
+  if (!selecting || index < 0 || index >= static_cast<int>(rows.size()) ||
+      rows[static_cast<size_t>(index)].kind != TaskRowKind::GroupHeader) {
+    return index;
+  }
+  // Un titre est toujours suivi d'au moins une de ses taches : le pas en
+  // avant ne boucle pas.
+  return stepFrom(index, +1);
+}
+
+int TaskListActivity::focusedGroupHeader() {
+  if (selecting || headerFocused) return -1;
+  const int selected = activeNav().selected;
+  if (selected < 0 || selected >= static_cast<int>(rows.size())) return -1;
+  return rows[static_cast<size_t>(selected)].kind == TaskRowKind::GroupHeader ? selected : -1;
+}
+
 void TaskListActivity::navigateButtons() {
   // Les memes quatre gestes que UiListActivity::navigateButtons(), chacun
   // appele une fois par passe : ButtonNavigator retient d'un appel a l'autre
@@ -479,36 +677,36 @@ void TaskListActivity::navigateButtons() {
   // ailleurs et rend le curseur a la liste.
   const int count = listCount();
   auto& n = activeNav();
-  buttonNavigator.onNextRelease([this, count, &n] {
+  buttonNavigator.onNextRelease([this, &n] {
     if (headerFocused) {
       headerFocused = false;
-      moveSelectionTo(0);
+      moveSelectionTo(firstCursorRow());
       return;
     }
-    moveSelectionTo(ButtonNavigator::nextIndex(n.selected, count));
+    moveSelectionTo(stepFrom(n.selected, +1));
   });
   buttonNavigator.onPreviousRelease([this, count, &n] {
     if (headerFocused) {
       // Comme Haut sur la premiere ligne d'une liste sans compteur : la
       // derniere ligne.
       headerFocused = false;
-      moveSelectionTo(count > 0 ? count - 1 : 0);
+      moveSelectionTo(selecting ? stepFrom(-1, -1) : (count > 0 ? count - 1 : 0));
       return;
     }
-    if (n.selected == 0 && hasHeaderCounter()) {
+    if (n.selected == firstCursorRow() && hasHeaderCounter()) {
       headerFocused = true;
       requestUpdate();
       return;
     }
-    moveSelectionTo(ButtonNavigator::previousIndex(n.selected, count));
+    moveSelectionTo(stepFrom(n.selected, -1));
   });
   buttonNavigator.onNextContinuous([this, count, &n] {
     headerFocused = false;
-    moveSelectionTo(ButtonNavigator::nextPageIndex(n.selected, count, n.pageRows()));
+    moveSelectionTo(cursorRowFor(ButtonNavigator::nextPageIndex(n.selected, count, n.pageRows())));
   });
   buttonNavigator.onPreviousContinuous([this, count, &n] {
     headerFocused = false;
-    moveSelectionTo(ButtonNavigator::previousPageIndex(n.selected, count, n.pageRows()));
+    moveSelectionTo(cursorRowFor(ButtonNavigator::previousPageIndex(n.selected, count, n.pageRows())));
   });
 }
 
@@ -523,16 +721,19 @@ void TaskListActivity::openTaskMenu(const int index) {
   // l'action, jamais sur un indice de ligne, donc deplacer une entree ne
   // decale pas les autres. Supprimer n'est jamais la selection par defaut ;
   // Synchroniser ferme la liste, qui redemarre l'appareil : en bas, a part.
-  // « Supprimer les faites » n'apparait que s'il y en a : le tableau est donc
-  // construit a chaque ouverture, pas constant.
-  enum class MenuAction : uint8_t { Tick, View, Edit, Select, DeleteDone, KeepAwake, TextSize, Delete, Sync };
-  constexpr size_t kMenuMax = 9;
+  // « Supprimer les faites » n'apparait que s'il y en a, « Groupe » que s'il
+  // existe au moins un groupe : le tableau est donc construit a chaque
+  // ouverture, pas constant.
+  enum class MenuAction : uint8_t { Tick, View, Edit, Group, Select, DeleteDone, KeepAwake, TextSize, Delete, Sync };
+  constexpr size_t kMenuMax = 10;
   std::array<MenuAction, kMenuMax> menu{};
   size_t menuCount = 0;
+  const bool hasGroups = !TASK_STORE.groups().empty();
   for (const MenuAction action :
-       {MenuAction::Tick, MenuAction::View, MenuAction::Edit, MenuAction::Select, MenuAction::DeleteDone,
-        MenuAction::KeepAwake, MenuAction::TextSize, MenuAction::Delete, MenuAction::Sync}) {
+       {MenuAction::Tick, MenuAction::View, MenuAction::Edit, MenuAction::Group, MenuAction::Select,
+        MenuAction::DeleteDone, MenuAction::KeepAwake, MenuAction::TextSize, MenuAction::Delete, MenuAction::Sync}) {
     if (action == MenuAction::DeleteDone && doneCount <= 0) continue;
+    if (action == MenuAction::Group && !hasGroups) continue;
     menu[menuCount++] = action;
   }
   std::vector<std::string> options;
@@ -547,6 +748,9 @@ void TaskListActivity::openTaskMenu(const int index) {
         break;
       case MenuAction::Edit:
         options.emplace_back(tr(STR_TASK_MENU_EDIT));
+        break;
+      case MenuAction::Group:
+        options.emplace_back(tr(STR_TASK_MENU_GROUP));
         break;
       case MenuAction::Select:
         options.emplace_back(tr(STR_TASK_MENU_SELECT));
@@ -584,6 +788,9 @@ void TaskListActivity::openTaskMenu(const int index) {
         break;
       case MenuAction::Edit:
         editTaskTitle(id);
+        break;
+      case MenuAction::Group:
+        chooseGroup(id);
         break;
       case MenuAction::Select:
         startSelection(id);
@@ -634,6 +841,7 @@ void TaskListActivity::chooseTextSize() {
           RenderLock lock(*this);
           listFontId = taskListFontId();
           uiTarget.setFont(fui::GfxRendererTarget::FONT_BODY, listFontId);
+          uiTarget.setFont(fui::GfxRendererTarget::FONT_LABEL, groupTitleFontId());
         }
         requestUpdate(true);
       });
@@ -719,6 +927,42 @@ void TaskListActivity::editTaskPriority(const std::string& id) {
       });
 }
 
+void TaskListActivity::chooseGroup(const std::string& taskId) {
+  const TaskRecord* rec = TASK_STORE.find(taskId.c_str());
+  if (rec == nullptr || TASK_STORE.groups().empty()) return;
+  TaskGroupChoices choices;
+  std::vector<std::string> labels;
+  const uint8_t selected = buildTaskGroupChoices(TASK_STORE.groups(), rec->group, choices, labels);
+  startActivityForResult(
+      std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "TaskGroup", StrId::STR_TASK_MENU_GROUP,
+                                                std::move(labels), selected),
+      [this, taskId, choices](const ActivityResult& result) {
+        const auto* choice = std::get_if<OptionSelectionResult>(&result.data);
+        if (result.isCancelled || choice == nullptr) return;
+        const char* group = taskGroupChoiceId(TASK_STORE.groups(), choices, choice->index);
+        const TaskRecord* current = TASK_STORE.find(taskId.c_str());
+        if (group == nullptr || current == nullptr || std::strcmp(group, current->group) == 0) return;
+
+        TaskRecord next = *current;
+        std::snprintf(next.group, sizeof(next.group), "%s", group);
+        // Au bout de sa bande dans le nouveau groupe, comme sur le serveur.
+        next.order = TASK_ORDER_UNSET;
+        TaskOp op{};
+        op.kind = TaskOpKind::Group;
+        std::snprintf(op.id, sizeof(op.id), "%s", next.id);
+        std::snprintf(op.group, sizeof(op.group), "%s", next.group);
+        // La file avant l'index, jamais l'inverse (voir toggleAt()).
+        if (!TASK_STORE.appendOp(op)) {
+          LOG_ERR(TAG, "Could not queue the group change for %s; nothing applied", next.id);
+          showNotice(StatusNotice::WriteFailed);
+          return;
+        }
+        pendingOps = true;
+        if (!TASK_STORE.upsert(next)) showNotice(StatusNotice::WriteFailed);
+        refreshAfterEdit(taskId.c_str());
+      });
+}
+
 void TaskListActivity::refreshAfterEdit(const char* id) {
   dirty = true;
   rebuildOrder();
@@ -798,7 +1042,10 @@ void TaskListActivity::startSelection(const std::string& id) {
   // La tache dont on a ouvert le menu est deja choisie : c'est presque
   // toujours la premiere qu'on voulait.
   if (row >= 0) toggleSelectionAt(row);
-  requestUpdate();
+  // Le curseur est deja sur cette tache (son menu vient d'elle) ; a defaut,
+  // jamais sur un titre de groupe, que le mode saute.
+  headerFocused = false;
+  moveSelectionTo(row >= 0 ? row : cursorRowFor(taskListClampSelection(rows, activeNav().selected)));
 }
 
 void TaskListActivity::stopSelection() {
@@ -940,8 +1187,8 @@ void TaskListActivity::switchView() {
   rebuildOrder();
   // Une autre liste : le curseur repart de sa premiere ligne, qui existe
   // toujours (la vue faites n'existe pas vide, la vue ouverte a au moins la
-  // ligne d'ajout).
-  moveSelectionTo(0);
+  // ligne d'ajout) ; en mode selection, de la premiere qui n'est pas un titre.
+  moveSelectionTo(firstCursorRow());
 }
 
 void TaskListActivity::toggleAt(int index) {
@@ -1044,7 +1291,7 @@ void TaskListActivity::openDetailAt(int index) {
                          });
 }
 
-void TaskListActivity::createTask() {
+void TaskListActivity::createTask(const char* groupId) {
   // Le plafond se verifie AVANT d'ouvrir le clavier, et non apres la saisie.
   // TaskStore::upsert() refuse l'enregistrement des que l'index est a
   // MAX_TASKS (stageUpsert()), alors que l'op Add serait deja en file : le
@@ -1085,19 +1332,22 @@ void TaskListActivity::createTask() {
 
   // minLength=1 : c'est le clavier qui refuse un titre vide, comme pour la
   // modification d'un titre existant (TaskDetailActivity::editTitle()).
+  // L'id du groupe, copie : `groupId` pointe dans TASK_STORE.groups(), et une
+  // std::string de 9 octets reste dans le tampon court (SSO), sans tas.
+  std::string group = groupId != nullptr ? groupId : "";
   startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_TASK_NEW), "",
                                                                  TASK_TITLE_MAX, InputType::Text, /*minLength=*/1),
-                         [this](const ActivityResult& result) {
+                         [this, group = std::move(group)](const ActivityResult& result) {
                            const auto* entered = std::get_if<KeyboardResult>(&result.data);
                            // Annulation : rien n'a ete ecrit, ni op ni index, et il n'y a donc
                            // rien a reconstruire. Le repaint est deja programme par le depilage
                            // (ActivityManager.cpp:400-406), comme au retour de l'ecran de detail.
                            if (result.isCancelled || entered == nullptr) return;
-                           askPriorityForNewTask(entered->text);
+                           askPriorityForNewTask(entered->text, group);
                          });
 }
 
-void TaskListActivity::askPriorityForNewTask(std::string title) {
+void TaskListActivity::askPriorityForNewTask(std::string title, std::string groupId) {
   // `labels` et non `rows` : ce dernier est le membre que le gestionnaire
   // ci-dessous reconstruit, et le masquer ici se relirait mal.
   std::vector<std::string> labels;
@@ -1109,7 +1359,7 @@ void TaskListActivity::askPriorityForNewTask(std::string title) {
   startActivityForResult(
       std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "TaskPriority", StrId::STR_TASK_PRIORITY,
                                                 std::move(labels), TASK_DEFAULT_PRIORITY_CHOICE),
-      [this, title = std::move(title)](const ActivityResult& result) {
+      [this, title = std::move(title), groupId = std::move(groupId)](const ActivityResult& result) {
         const auto* choice = std::get_if<OptionSelectionResult>(&result.data);
         // Annuler la priorite annule toute la creation. Rien n'a encore ete
         // ecrit a ce stade — ni op, ni index — donc il n'y a rien a defaire :
@@ -1129,12 +1379,15 @@ void TaskListActivity::askPriorityForNewTask(std::string title) {
         rec.noteBytes = 0;
         // Pas encore classee : au bout de sa priorite jusqu'a la sync.
         rec.order = TASK_ORDER_UNSET;
+        // Dans le groupe du titre ou l'on a fait « ajouter », sinon sans groupe.
+        std::snprintf(rec.group, sizeof(rec.group), "%s", groupId.c_str());
 
         TaskOp op{};
         op.kind = TaskOpKind::Add;
         std::memcpy(op.id, rec.id, sizeof(op.id));
         std::memcpy(op.title, rec.title, sizeof(op.title));
         op.priority = rec.priority;
+        std::memcpy(op.group, rec.group, sizeof(op.group));
 
         // La file d'ops AVANT l'index, comme toggleAt() et comme
         // TaskDetailActivity::appendAndApply(). Ce sont deux ecritures SD
@@ -1267,7 +1520,12 @@ void TaskListActivity::drawFooter() {
     // l'en-tete ne change que Confirmer.
     const bool picked = kind == TaskRowKind::Task && selected >= 0 && selected < static_cast<int>(rows.size()) &&
                         selection.test(static_cast<size_t>(rows[static_cast<size_t>(selected)].recordIndex));
-    confirmLabel = headerFocused ? tr(STR_TASK_SHOW) : picked ? tr(STR_TASK_UNPICK) : tr(STR_TASK_PICK);
+    // Un titre de groupe n'a rien a choisir (et le mode n'y pose jamais le
+    // curseur : cursorRowFor()).
+    confirmLabel = headerFocused                      ? tr(STR_TASK_SHOW)
+                   : kind == TaskRowKind::GroupHeader ? ""
+                   : picked                           ? tr(STR_TASK_UNPICK)
+                                                      : tr(STR_TASK_PICK);
     leftLabel = selectionCount > 0 ? tr(STR_TASK_ERASE_SHORT) : "";
     rightLabel = selectionCount > 0 ? tr(STR_TASK_TICK) : "";
   } else if (headerFocused) {
@@ -1276,8 +1534,11 @@ void TaskListActivity::drawFooter() {
     confirmLabel = tr(STR_TASK_SHOW);
     rightLabel = "";
   } else if (kind == TaskRowKind::GroupHeader) {
-    confirmLabel = "";
-    rightLabel = "";
+    // Sur un titre : ajouter dans ce groupe, et sauter au titre precedent ou
+    // suivant ; case vide au bout, pas de bouclage.
+    confirmLabel = tr(STR_TASK_NEW_SHORT);
+    leftLabel = taskListGroupJump(rows, selected, -1) >= 0 ? tr(STR_TASK_PREV_GROUP) : "";
+    rightLabel = taskListGroupJump(rows, selected, +1) >= 0 ? tr(STR_TASK_NEXT_GROUP) : "";
   } else if (kind == TaskRowKind::AddTask) {
     confirmLabel = tr(STR_TASK_NEW_SHORT);
     leftLabel = "";
