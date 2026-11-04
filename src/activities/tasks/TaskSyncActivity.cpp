@@ -505,6 +505,11 @@ void TaskSyncActivity::onHeader(void* ctx, const char* cursor, const bool more, 
   snprintf(self->roundCursor_, sizeof(self->roundCursor_), "%s", cursor);
   self->roundMore_ = more;
   self->roundSchema_ = schema;
+  // Un serveur redescendu en schema 1 renvoie des lignes sans groupe : les
+  // groupes ne sont plus a jour, le prochain tour repart d'un instantane. En RAM
+  // seulement : saveIndex() du tour l'ecrit, discardStaged() l'annule en cas
+  // d'echec.
+  if (schema < TASK_SYNC_REQUEST_SCHEMA) TASK_STORE.setGroupsSynced(false);
   // Sur reset, ou sur l'instantane complet d'une sync sans curseur, l'index
   // repart de zero AVANT la premiere ligne — groupes compris : stageReset()
   // les vide, et les lignes de groupe qui suivent les reposent. En RAM

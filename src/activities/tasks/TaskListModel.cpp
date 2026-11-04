@@ -155,3 +155,8 @@ size_t taskDoneTargets(const std::vector<TaskRecord>& records, uint8_t* out) {
   }
   return n;
 }
+
+int taskListCursorAfterRemoval(const std::vector<TaskListRow>& rows, int next) {
+  if (next < 0 || static_cast<size_t>(next) + 1 >= rows.size()) return next;
+  return rows[static_cast<size_t>(next)].kind == TaskRowKind::GroupHeader ? next + 1 : next;
+}

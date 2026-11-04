@@ -400,3 +400,24 @@ TEST(TaskGroupDisplayOrder, NoGroupsGivesNothing) {
   uint8_t out[MAX_GROUPS];
   EXPECT_EQ(taskGroupDisplayOrder({}, out), 0u);
 }
+
+// --- taskListCursorAfterRemoval ----------------------------------------------
+
+TEST(TaskListCursorAfterRemoval, LandingOnATitleMovesToTheFollowingTask) {
+  const auto rows = sample();  // T H T T H T
+  EXPECT_EQ(taskListCursorAfterRemoval(rows, 1), 2);
+  EXPECT_EQ(taskListCursorAfterRemoval(rows, 4), 5);
+}
+
+TEST(TaskListCursorAfterRemoval, LandingOnATaskIsUnchanged) {
+  const auto rows = sample();
+  EXPECT_EQ(taskListCursorAfterRemoval(rows, 0), 0);
+  EXPECT_EQ(taskListCursorAfterRemoval(rows, 3), 3);
+  EXPECT_EQ(taskListCursorAfterRemoval(rows, -1), -1);
+}
+
+TEST(TaskListCursorAfterRemoval, TitleAsLastRowDoesNotOverflow) {
+  const std::vector<TaskListRow> rows = {{TaskRowKind::Task, -1, 0}, {TaskRowKind::GroupHeader, 0, -1}};
+  EXPECT_EQ(taskListCursorAfterRemoval(rows, 1), 1);
+  EXPECT_EQ(taskListCursorAfterRemoval({}, 0), 0);
+}

@@ -91,6 +91,12 @@ int taskGroupOpenCount(const std::vector<TaskListRow>& rows, int headerRow);
 // quelle que soit sa nature. Rend -1 si `rows` est vide.
 int taskListClampSelection(const std::vector<TaskListRow>& rows, int selected);
 
+// Curseur `next` (deja dans les bornes) apres qu'une coche a retire une tache
+// de la vue : s'il tombe sur un GroupHeader, passe a la ligne suivante (un titre
+// est toujours suivi d'une de ses taches). Sans suivante, ou hors titre, rend
+// `next` tel quel.
+int taskListCursorAfterRemoval(const std::vector<TaskListRow>& rows, int next);
+
 // Mode selection de la liste : un bit par enregistrement de `records`, indexe
 // comme TaskListRow::recordIndex. 16 octets en membre, sans tas. Valable tant
 // que l'index ne change pas : le mode n'ecrit rien avant l'action finale, qui

@@ -1240,7 +1240,11 @@ void TaskListActivity::toggleAt(int index) {
   // Sauf quand la tache reste a l'ecran : la derniere faite decochee ramene
   // seule a la liste ouverte (rebuildOrder()), ou la selection la suit.
   const int moved = rowOfTask(id.c_str());
-  const int next = moved >= 0 ? moved : taskListClampSelection(rows, activeNav().selected);
+  int next = moved >= 0 ? moved : taskListClampSelection(rows, activeNav().selected);
+  // Cocher la derniere tache sans groupe laisse le curseur sur le titre du
+  // premier groupe : on passe a sa premiere tache, pour que Confirm continue de
+  // cocher plutot que d'ouvrir l'ajout dans le groupe.
+  if (moved < 0) next = taskListCursorAfterRemoval(rows, next);
   if (next >= 0) moveSelectionTo(next);
 }
 
