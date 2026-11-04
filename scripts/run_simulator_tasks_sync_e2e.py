@@ -22,7 +22,11 @@ La propriete verifiee sur chaque echec : RIEN de persiste ne change (index,
 notes, curseur, file d'ops, compteur d'acquittement, secret), a la seule
 exception documentee d'un 400, qui efface le curseur.
 
-  scripts/run_simulator_tasks_sync_e2e.py --crossdrop ../../crossdrop [--no-build] [--keep DIR]
+Groupes (schema 2) : --crossdrop doit etre sur feat/crosstasks-groups ; avec
+--crossdrop-schema1 <checkout de c83fe5e, avant les groupes>, le scenario
+« serveur schema 1 » tourne aussi. $PIO remplace `pio` pour la construction.
+
+  scripts/run_simulator_tasks_sync_e2e.py --crossdrop ../../crossdrop [--crossdrop-schema1 DIR] [--no-build] [--keep DIR]
 
 Sortie : PASS/FAIL par scenario ; code de sortie non nul si un seul echoue.
 """
@@ -54,7 +58,7 @@ PROGRAM = ROOT / ".pio" / "build" / "simulator" / "program"
 SIM_HW_KEY = bytes([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01])
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 SILENT_REBOOT_MAGIC = 0xC1EAB007  # src/main.cpp
-TASK_SYNC_TARGET = 9  # NetworkBootTarget::TASK_SYNC
+TASK_SYNC_TARGET = 33  # NetworkBootTarget::TASK_SYNC (src/SilentRestart.h)
 WEB_PASSWORD = "motdepasse-local-test"
 
 
@@ -119,6 +123,9 @@ class Crossdrop:
     def login(self) -> None:
         self.req("POST", "/web/login", {"password": WEB_PASSWORD})
 
+    def group(self, name: str) -> str:
+        return self.req("POST", "/web/api/groups", {"name": name})["id"]
+
     def pair(self, secret: str) -> None:
         self.req("POST", "/web/pair", {"secret": secret, "label": "simulateur"})
 
@@ -152,7 +159,7 @@ class FakeServer:
                 if m == "trunc-line":
                     return self._send(200, full[: full.index(b"w00000002")])
                 if m == "bad-schema":
-                    return self._send(200, full.replace(b'"schema": 1', b'"schema": 2'))
+                    return self._send(200, full.replace(b'"schema": 1', b'"schema": 7'))
                 if m == "short-close":
                     self.send_response(200)
                     self.send_header("content-length", str(len(full)))
@@ -193,10 +200,15 @@ def tasks_dir(fs: Path) -> Path:
     return fs / ".crosspoint" / "tasks"
 
 
-def seed_card(fs: Path, url: str, secret: str, tasks, ops_lines=(), cursor=None, notes=None, lang=None) -> None:
+def seed_card(fs: Path, url: str, secret: str, tasks, ops_lines=(), cursor=None, notes=None, lang=None,
+              groups=None, gs=False) -> None:
     t = tasks_dir(fs)
     (t / "n").mkdir(parents=True, exist_ok=True)
-    (t / "index.json").write_text(json.dumps({"schema": 1, "tasks": tasks}, ensure_ascii=False))
+    index = {"schema": 1, "tasks": tasks}
+    if groups is not None:
+        index["groups"] = groups
+        index["gs"] = gs
+    (t / "index.json").write_text(json.dumps(index, ensure_ascii=False))
     (t / "secret").write_text(obfuscate(secret))
     if ops_lines:
         (t / "ops.ndjson").write_text("".join(line + "\n" for line in ops_lines))
@@ -236,7 +248,9 @@ def card_hashes(fs: Path) -> dict:
 def card(fs: Path) -> dict:
     t = tasks_dir(fs)
     read = lambda name: (t / name).read_text() if (t / name).exists() else None  # noqa: E731
-    return {"tasks": {x["id"]: x for x in json.loads((t / "index.json").read_text())["tasks"]},
+    index = json.loads((t / "index.json").read_text())
+    return {"tasks": {x["id"]: x for x in index["tasks"]},
+            "groups": {g["id"]: g for g in index.get("groups", [])}, "gs": index.get("gs", False),
             "ops": read("ops.ndjson"), "cursor": read("cursor.txt"), "acked": read("acked.txt"),
             "secret": read("secret"),
             "notes": {p.name: p.read_bytes() for p in (t / "n").iterdir()},
@@ -403,6 +417,84 @@ def real_server_scenarios(r: Runner, srv: Crossdrop) -> None:
             lines)
 
 
+def group_scenarios(r: Runner, srv: Crossdrop) -> None:
+    """Groupes (schema 2) contre le vrai serveur de la branche feat/crosstasks-groups."""
+    srv.login()
+    secret = new_secret()
+    srv.pair(secret)
+    ga, gb = srv.group("ADMINISTRATIF"), srv.group("MAISON")
+    in_a = srv.req("POST", "/web/api/tasks", {"title": "Dans A", "priority": 1, "group": ga})["id"]
+    in_b = srv.req("POST", "/web/api/tasks", {"title": "Dans B", "priority": 1, "group": gb})["id"]
+    free = srv.req("POST", "/web/api/tasks", {"title": "Sans groupe", "priority": 1})["id"]
+
+    # (a) Curseur laisse par des syncs schema 1 : drapeau `gs` faux, aucun groupe
+    #     en carte. Un delta ne rendrait rien ; le curseur doit tomber, l'instantane
+    #     complet rend groupes et affectations, et l'op en file (ajout dans A) part.
+    work = r.fresh("groups-first-schema2")
+    fs = work / "fs_"
+    seed_card(fs, srv.base, secret, [], groups=[], gs=False)
+    run_sim(work, "prime")  # curseur reel du serveur
+    t = tasks_dir(fs)
+    idx = json.loads((t / "index.json").read_text())
+    idx["groups"], idx["gs"] = [], False
+    for x in idx["tasks"]:
+        x.pop("g", None)
+    (t / "index.json").write_text(json.dumps(idx))
+    (t / "ops.ndjson").write_text(
+        json.dumps({"op": "add", "id": "d0000a001", "title": "Ajoutee dans A", "priority": 1, "group": ga}) + "\n")
+    had_cursor = (t / "cursor.txt").exists()
+    lines = run_sim(work, "first-schema2")
+    c, web = card(fs), srv.tasks()
+    r.check("groups: first schema 2 sync with a cursor takes a full snapshot, groups and queued ops",
+            had_cursor and c["gs"] is True and set(c["groups"]) == {ga, gb}
+            and c["groups"][ga]["name"] == "ADMINISTRATIF" and c["tasks"][in_a].get("g") == ga
+            and c["tasks"][in_b].get("g") == gb and "g" not in c["tasks"][free]
+            and c["ops"] is None and web.get("d0000a001", {}).get("group") == ga and bool(c["cursor"])
+            and any("Groups not synced" in line for line in lines), lines)
+
+    # (b) Delta : le groupe A est renomme, B supprime (ses taches remontent).
+    srv.req("PATCH", f"/web/api/groups/{ga}", {"name": "PAPIERS"})
+    srv.req("DELETE", f"/web/api/groups/{gb}")
+    lines = run_sim(work, "rename-delete")
+    c = card(fs)
+    r.check("groups: rename and delete reach the card, tasks of a deleted group go ungrouped",
+            set(c["groups"]) == {ga} and c["groups"][ga]["name"] == "PAPIERS" and c["gs"] is True
+            and c["tasks"][in_b].get("g") in (None, "") and c["tasks"][in_a].get("g") == ga, lines,
+            f"in_b.g={c['tasks'][in_b].get('g')!r}")
+
+    # (c) Op `group` vers un groupe supprime entre-temps : sync OK, tache sans groupe.
+    gc = srv.group("ETE")
+    run_sim(work, "learn-c")
+    (t / "ops.ndjson").write_text(json.dumps({"op": "group", "id": free, "group": gc}) + "\n")
+    srv.req("DELETE", f"/web/api/groups/{gc}")
+    lines = run_sim(work, "op-to-deleted")
+    c, web = card(fs), srv.tasks()
+    r.check("groups: a group op aimed at a group deleted meanwhile still syncs, task stays ungrouped",
+            any("Sync complete" in line for line in lines) and c["ops"] is None
+            and web[free].get("group") is None and c["tasks"][free].get("g") in (None, "")
+            and gc not in c["groups"], lines, f"web.group={web[free].get('group')!r}")
+
+
+def schema1_scenario(r: Runner, srv: Crossdrop) -> None:
+    """Serveur d'avant les groupes (c83fe5e) : sync OK, `gs` reste faux."""
+    srv.login()
+    secret = new_secret()
+    srv.pair(secret)
+    a = srv.req("POST", "/web/api/tasks", {"title": "Tache serveur ancien", "priority": 0})["id"]
+    work = r.fresh("groups-schema1-server")
+    fs = work / "fs_"
+    seed_card(fs, srv.base, secret, [{"id": "d0000abcd", "t": "Locale", "p": 1, "d": False, "n": 0}],
+              ['{"op":"add","id":"d0000abcd","title":"Locale","priority":1}'], groups=[], gs=False)
+    lines = run_sim(work, "schema1")
+    c, web = card(fs), srv.tasks()
+    r.check("groups: a schema 1 server syncs fine and gs stays false",
+            any("Sync complete" in line for line in lines) and c["gs"] is False and not c["groups"]
+            and a in c["tasks"] and "d0000abcd" in web and c["ops"] is None and bool(c["cursor"]), lines)
+    lines = run_sim(work, "schema1-again")
+    r.check("groups: and again on the next sync (full list each time)",
+            any("Groups not synced" in line for line in lines) and card(fs)["gs"] is False, lines)
+
+
 def fake_server_scenarios(r: Runner, lang: str | None) -> None:
     secret = new_secret()
     fake = FakeServer(38491 if lang else 38490, secret)
@@ -417,7 +509,10 @@ def fake_server_scenarios(r: Runner, lang: str | None) -> None:
         fake.mode = mode
         work = r.fresh(f"fake{suffix}-{name}")
         fs = work / "fs_"
-        seed_card(fs, url, secret, card_tasks, card_ops, "Mg", {"w00000001": note_old}, lang)
+        # gs vrai : une liseuse deja passee en schema 2 ; sinon la sync efface le
+        # curseur avant meme de parler au serveur (voir group_scenarios).
+        seed_card(fs, url, secret, card_tasks, card_ops, "Mg", {"w00000001": note_old}, lang,
+                  groups=[], gs=True)
         before = card_hashes(fs)
         lines = run_sim(work, name)
         after = card_hashes(fs)
@@ -448,13 +543,16 @@ def fake_server_scenarios(r: Runner, lang: str | None) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--crossdrop", type=Path, help="crossdrop checkout (feat/crosstasks); omit to skip real-server runs")
+    ap.add_argument("--crossdrop-schema1", type=Path,
+                    help="crossdrop checkout from before the groups work (c83fe5e); omit to skip scenario (d)")
     ap.add_argument("--port", type=int, default=38471)
     ap.add_argument("--keep", type=Path, help="keep cards, logs and screenshots here")
     ap.add_argument("--no-build", action="store_true")
     args = ap.parse_args()
 
     if not args.no_build:
-        subprocess.run(["pio", "run", "-e", "simulator"], cwd=ROOT, check=True)
+        # PIO : chemin d'un autre binaire PlatformIO (ex. un venv dedie).
+        subprocess.run([os.environ.get("PIO", "pio"), "run", "-e", "simulator"], cwd=ROOT, check=True)
     out = args.keep or Path(tempfile.mkdtemp(prefix="tasks-sync-e2e-"))
     out.mkdir(parents=True, exist_ok=True)
     r = Runner(out)
@@ -466,8 +564,18 @@ def main() -> int:
         srv.start()
         try:
             real_server_scenarios(r, srv)
+            group_scenarios(r, srv)
         finally:
             srv.stop()
+    if args.crossdrop_schema1:
+        shutil.rmtree(out / "crossdrop-data-s1", ignore_errors=True)
+        old = Crossdrop(args.crossdrop_schema1.resolve(), args.port + 1, out / "crossdrop-data-s1",
+                        out / "crossdrop-s1.log")
+        old.start()
+        try:
+            schema1_scenario(r, old)
+        finally:
+            old.stop()
     fake_server_scenarios(r, None)
     fake_server_scenarios(r, "FR")
 

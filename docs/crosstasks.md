@@ -54,7 +54,8 @@ the task is done; that is the only priority marker. Long titles wrap over two li
   opens the task's menu. Tapping the count in the header switches the list.
 
 Holding **Confirm** on a task (about a second) opens its menu: **Tick** (or
-**Reopen**), **View**, **Edit** (title, then priority), **Select**,
+**Reopen**), **View**, **Edit** (title, then priority, then group), **Group**
+(only when groups exist), **Select**,
 **Delete done tasks (N)** (only when some are done), **Keep screen on**,
 **Task text size** (the same setting as in Settings, applied on the spot),
 **Delete** and, last, **Sync tasks**. **Keep screen on** stops the device from
@@ -89,6 +90,40 @@ for a moment over the list. If the device is too short of memory to add a
 task, **Left** shows *Not enough memory* instead of opening the keyboard;
 restart the device and try again.
 
+## Groups
+
+Tasks can be sorted into groups such as *ADMINISTRATIF* or *MAISON*. Groups are
+created, renamed, deleted and reordered on the server's web page only; the
+device shows them, adds tasks into them and moves tasks between them. Without a
+server, or while the server has no group, nothing changes in the list.
+
+- Open tasks that belong to no group come first, at the top; then each group,
+  in the order set on the web page, under its **title** (the group's name and
+  how many of its tasks are open). Within a group, tasks keep the priority
+  order described above. A group with no open task is hidden. Finished tasks
+  show no group.
+- A title is a row you can select with **Up** / **Down**. On a title the footer
+  reads **Back | add | previous | next**:
+
+| Button | On a group title |
+| --- | --- |
+| Up / Down | Move the selection |
+| Confirm (or a tap on the title) | Add a task into this group |
+| Left (**previous**) | Jump to the previous group's title (nothing at the first one; it does not wrap) |
+| Right (**next**) | Jump to the next group's title (nothing at the last one) |
+| Back | Leave Tasks |
+
+- **Left** (**add**) on an ordinary task still adds an ungrouped task. Adding
+  into a group asks for the title and the priority, as usual.
+- To move a task, hold **Confirm** on it and choose **Group**: pick **No group**
+  or one of the groups. The same choice is the third step of **Edit** (title,
+  then priority, then **Group**) and of **Left** on a task's page; that step
+  only appears when groups exist. A moved task goes to the end of its new group
+  until the next sync.
+- Deleting a group on the web page does not delete its tasks: they go back to
+  the ungrouped top of the list at the next sync.
+- In selection mode, the cursor skips the titles.
+
 ## A Task's Page
 
 The page shows the task's title, its note, and a pomodoro box.
@@ -97,7 +132,7 @@ The page shows the task's title, its note, and a pomodoro box.
 | --- | --- |
 | Up / Down | Turn the pages of a long note |
 | Confirm | Tick the task, or reopen it once finished |
-| Left | Edit the title, then the priority |
+| Left | Edit the title, then the priority, then the group (when groups exist) |
 | Right | Open the pomodoro timer for this task |
 | Back | Return to the list |
 
@@ -146,8 +181,33 @@ The failure screen says what went wrong: Wi-Fi not connected, no server URL
 set, device not paired (*Pair again from Settings*), server unreachable, a
 server error, not enough memory, or an incomplete response.
 
+### Groups and the Sync Protocol
+
+Groups need a server that speaks sync **schema 2** (a groups-aware CrossDrop).
+The device asks for it by sending `"schema": 2`, and the server answers with a
+header `{"schema":2,...}` followed by the usual task lines plus group lines,
+mixed in by change order:
+
+- `{"group":"<id>","name":"...","position":N}` creates or updates a group;
+- `{"group":"<id>","deleted":true}` removes one;
+- a task line carries `"group":"<id>"` when the task is in a group (the key is
+  absent otherwise).
+
+The device sends its group changes as ops: `{"op":"group","id":"<task>","group":"<group id>"}`
+(`"group":null` takes the task out of its group), and `{"op":"add",...}` may
+carry a `group`. An op aimed at a group the server deleted in the meantime is
+not an error: the sync completes and the task stays without a group.
+
+A server that only knows schema 1 still works. It answers in schema 1, sends
+no groups, and the device shows its tasks ungrouped. Until the server is
+upgraded to a groups-aware version, a groups-aware device asks for a full list
+at each sync: its cursor is cleared until it has done one complete schema 2
+sync, which is also what brings the groups and the task assignments made while
+it was syncing in schema 1. After that first complete schema 2 sync, syncs are
+incremental again.
+
 ## Where the Data Lives
 
 Everything is under `/.crosspoint/tasks/` on the SD card: the task index, the
-queue of changes not yet synced, the sync position, notes (one text file per
+queue of changes not yet synced, the sync position (with the groups, in the index), notes (one text file per
 task in `n/`), and the pairing code.

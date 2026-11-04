@@ -2,6 +2,7 @@
 
 ### Added
 
+- Sort Tasks into groups managed on the CrossDrop web page: the list shows ungrouped tasks first, then a selectable title per group with add, previous and next in the footer, adds a task into a group, and moves a task between groups from its menu or its edit flow. Syncing uses the new schema 2 and still works with servers that only know schema 1.
 - Discover and upload static `.otf` fonts on ESP32-S3 readers, including OpenType CFF fonts and CFF files named `.ttf`, from SD or the Fonts web upload. Variable fonts and font collections remain unsupported (CrossPoint #3646, #3717).
 - Assign Select Chapter to shortcuts, Quick Actions, or touch gestures to open the chapter list directly in EPUB and XTC books.
 - Track active reading seconds by local day, sync daily reading time to CrossPoint Sync, and show today's total and 7-day average on the This Device reading stats page.
