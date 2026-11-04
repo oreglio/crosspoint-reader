@@ -1300,7 +1300,12 @@ void TaskListActivity::openDetailAt(int index) {
                          });
 }
 
-void TaskListActivity::createTask(const char* groupId) {
+void TaskListActivity::createTask(const char* groupIdArg) {
+  // L'id du groupe, copie EN PREMIER : `groupIdArg` pointe dans
+  // TASK_STORE.groups(), et reserveFullCapacity() plus bas realloue ce vecteur
+  // (liberant le bloc pointe). Une std::string de 9 octets reste dans le tampon
+  // court (SSO), sans tas.
+  std::string group = groupIdArg != nullptr ? groupIdArg : "";
   // Le plafond se verifie AVANT d'ouvrir le clavier, et non apres la saisie.
   // TaskStore::upsert() refuse l'enregistrement des que l'index est a
   // MAX_TASKS (stageUpsert()), alors que l'op Add serait deja en file : le
@@ -1341,9 +1346,6 @@ void TaskListActivity::createTask(const char* groupId) {
 
   // minLength=1 : c'est le clavier qui refuse un titre vide, comme pour la
   // modification d'un titre existant (TaskDetailActivity::editTitle()).
-  // L'id du groupe, copie : `groupId` pointe dans TASK_STORE.groups(), et une
-  // std::string de 9 octets reste dans le tampon court (SSO), sans tas.
-  std::string group = groupId != nullptr ? groupId : "";
   startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_TASK_NEW), "",
                                                                  TASK_TITLE_MAX, InputType::Text, /*minLength=*/1),
                          [this, group = std::move(group)](const ActivityResult& result) {
