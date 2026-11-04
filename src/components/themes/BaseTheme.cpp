@@ -26,6 +26,7 @@
 #include "components/UIScale.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
+#include "components/UiAppHelpers.h"
 #include "fontIds.h"
 
 // Internal constants
@@ -410,6 +411,36 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
   }
 }
 
+namespace {
+// Decalage vertical du titre de drawHeader() : sous la batterie quand le theme
+// la detache de la ligne du titre. Partage avec headerRightLabelRect(), qui
+// doit retrouver la meme ligne de titre.
+int16_t headerTitleOffsetY(const freeink::ui::GfxRendererTarget& target, const freeink::ui::ThemeTokens& tokens,
+                           const int bandHeight) {
+  if (!UITheme::getInstance().getMetrics().headerBatteryDetached) return 0;
+  const int titleLineHeight = target.lineHeight(freeink::ui::GfxRendererTarget::FONT_TITLE);
+  const int titleTop = bandHeight - tokens.headerUnderline - tokens.spaceMd - titleLineHeight;
+  return static_cast<int16_t>(titleTop - (bandHeight - titleLineHeight) / 2);
+}
+}  // namespace
+
+Rect BaseTheme::headerRightLabelRect(const GfxRenderer& renderer, const Rect rect, const char* label) const {
+  // Meme geometrie que la branche rightLabel de fui::header() (freeink-sdk,
+  // components/controls/header.h) appelee par drawHeader() sans reserve ni
+  // statut : bord droit du contenu (bande moins headerSidePadding), bas cale
+  // sur la ligne du titre.
+  namespace fui = freeink::ui;
+  if (label == nullptr) return Rect{};
+  fui::GfxRendererTarget target = makeUiTarget(renderer);
+  const fui::ThemeTokens tokens = uiThemeTokens(target);
+  target.setFont(fui::GfxRendererTarget::FONT_SMALL, SMALL_FONT_ID);
+  const int sidePad = tokens.headerSidePadding < 0 ? 6 : tokens.headerSidePadding;
+  const fui::Size size = target.measureText(tokens.smallText.font, label, tokens.smallText);
+  const int titleLh = target.lineHeight(tokens.titleText.font);
+  const int titleTop = rect.y + headerTitleOffsetY(target, tokens, rect.height) + (rect.height - titleLh) / 2;
+  return Rect{rect.x + rect.width - sidePad - size.width, titleTop + titleLh - size.height, size.width, size.height};
+}
+
 void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle,
                            const bool readerContext, const bool showStatus, const bool filenameTitle) const {
   namespace fui = freeink::ui;
@@ -417,7 +448,6 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   fui::GfxRendererFrame<1> ui(renderer, spec.smallFontId, spec.bodyFontId, spec.titleFontId);
   const fui::ThemeTokens tokens = uiThemeTokens(ui.target);
   ui.target.setFont(fui::GfxRendererTarget::FONT_SMALL, SMALL_FONT_ID);
-  const ThemeMetrics& metrics = UITheme::getInstance().getMetrics();
   const fui::Rect band{static_cast<int16_t>(rect.x), static_cast<int16_t>(rect.y), static_cast<int16_t>(rect.width),
                        static_cast<int16_t>(rect.height)};
 
@@ -431,12 +461,7 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   props.subtitleText = tokens.smallText;
   props.styles = tokens.popup;
   props.sidePadding = tokens.headerSidePadding;
-  const bool batteryDetached = metrics.headerBatteryDetached;
-  if (batteryDetached) {
-    const int titleLineHeight = ui.target.lineHeight(fui::GfxRendererTarget::FONT_TITLE);
-    const int titleTop = static_cast<int>(band.height) - tokens.headerUnderline - tokens.spaceMd - titleLineHeight;
-    props.titleOffsetY = static_cast<int16_t>(titleTop - (static_cast<int>(band.height) - titleLineHeight) / 2);
-  }
+  props.titleOffsetY = headerTitleOffsetY(ui.target, tokens, band.height);
   if (title != nullptr && props.styles.normal.border.kind == fui::PaintKind::None && tokens.headerUnderline > 0) {
     props.styles.normal.border = fui::Paint::solid(fui::Color::Black);
     props.styles.normal.borderWidth = tokens.headerUnderline;

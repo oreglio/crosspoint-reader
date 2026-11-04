@@ -23,30 +23,35 @@ each open task can be dragged by its handle (never into another priority). A
 task added or moved to another priority on the device goes to the end of its
 group until the next sync.
 
-The header shows how many tasks are still open, with **↻** at its right end while changes
-made on the device are waiting for the next sync. Open tasks are sorted high
+The header shows how many tasks are still open and, at its right end, how many
+are done (**N done**), followed by **↻** while changes made on the device are
+waiting for the next sync (**3 done ↻**). Open tasks are sorted high
 priority first, then normal, then low. High-priority titles are in bold until
 the task is done; that is the only priority marker. Long titles wrap over two lines.
 
 | Button | Action |
 | --- | --- |
-| Up / Down | Move the selection |
+| Up / Down | Move the selection; Up from the first task reaches **N done** |
 | Confirm | Tick the selected task, or reopen a finished one |
 | Hold Confirm | Open the task's menu |
 | Left | Add a task |
 | Right | Open the selected task |
-| Back | Leave Tasks |
+| Back | Leave Tasks (from the finished tasks: back to the open ones) |
 
 - A task you tick moves straight into the finished ones, and the selection
   stays put, on the task that took its place.
-- Finished tasks gather in an **N done** row below the open ones. Select it and
-  press **Confirm** to expand or collapse it; the button hint says which.
+- **Up** from the first task reaches **N done** in the header, highlighted like a
+  selected row; **Confirm** (its hint reads **view**) or a tap on it shows the
+  finished tasks instead of the open ones. The header then reads **Done (N)**
+  with **M to do** on the right: the same gesture, or **Back**, comes back to
+  the open tasks. Reopening the last finished task comes back by itself. With
+  nothing done, there is no count and **Up** works as usual.
 - **Settings > System > Tasks > Task text size** sets the list's text:
   **10** (the default), **12** or **14** (Lexend Deca, the notes' typeface). **Task spacing** puts more room
   between the rows: **Compact** (the default), **Comfortable** or **Spacious**.
 - An empty list shows a **+ Add a task** row; **Confirm** on it adds a task.
 - On touch devices, tapping a row does what **Confirm** does, and a long press
-  opens the task's menu.
+  opens the task's menu. Tapping the count in the header switches the list.
 
 Holding **Confirm** on a task (about a second) opens its menu: **Tick** (or
 **Reopen**), **View**, **Edit** (title, then priority), **Select**,
@@ -63,14 +68,14 @@ the title reads **Selection (N)**, and the task you held starts out selected.
 
 | Button | In selection |
 | --- | --- |
-| Confirm (or a tap) | Select or deselect the task; on **N done**, expand or collapse |
+| Confirm (or a tap) | Select or deselect the task; on the header count, switch the list |
 | Right | Tick every selected task (finished ones stay as they are) |
 | Left | Delete every selected task, after a confirmation |
 | Back | Leave the selection without changing anything |
 
-Collapsing **N done** deselects the finished tasks, so an action never touches a
-row you can no longer see. **Delete done tasks (N)** deletes every finished task
-at once, after a confirmation. Either way, the next sync applies the change on the
+Switching between open and finished tasks deselects the tasks that leave the
+screen, so an action never touches a row you can no longer see. **Delete done
+tasks (N)** deletes every finished task at once, after a confirmation. Either way, the next sync applies the change on the
 server too. The server's web page has the same tools above its list: **Select**
 (with **All**, **Tick**, **Delete**) and **Clear done**, each deletion confirmed first.
 

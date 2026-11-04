@@ -27,8 +27,8 @@ PROGRAM = ROOT / ".pio" / "build" / "simulator" / "program"
 
 START_MS, PERIOD_MS, SHOT_OFFSET_MS = 3500, 1300, 1000
 STEPS = [
-    "00-pair-cold-boot", "01-list", "move-down", "02-ticked-sinks", "move-up", "03-done-row-selected",
-    "04-done-expanded", "reopen", "05-detail-with-note", "05b-detail-ticked", "back-to-list",
+    "00-pair-cold-boot", "01-list", "move-down", "02-ticked-sinks", "move-up", "03-counter-focused",
+    "04-done-view", "04b-done-view-back", "reopen", "05-detail-with-note", "05b-detail-ticked", "back-to-list",
     "13-task-menu", "menu-down-1", "menu-down-2", "menu-down-3", "menu-down-4", "menu-down-5",
     "menu-down-6", "14-menu-delete-selected",
     "15-delete-confirm", "confirm-down", "16-deleted", "menu-again", "menu-edit-1", "17-menu-edit-selected",
@@ -37,13 +37,14 @@ STEPS = [
     "21-two-picked", "22-selection-delete-confirm", "selection-confirm-down", "23-selection-deleted",
     "menu-select-2", "select2-down-1", "select2-down-2", "select2-down-3", "select2-enter", "select2-move",
     "select2-pick", "24-selection-ticked",
-    "done-up", "menu-done", "done-down-1", "done-down-2", "done-down-3", "25-menu-delete-done-selected",
+    "menu-done", "done-down-1", "done-down-2", "done-down-3", "25-menu-delete-done-selected",
     "26-delete-done-confirm", "done-confirm-down", "27-done-deleted",
-    "06-all-done", "07-empty", "08-add-keyboard", "09-pair", "10-pair-confirm",
+    "06-all-done", "06b-all-done-counter-focused", "06c-all-done-view", "all-done-reopen-1",
+    "all-done-reopen-2", "06d-last-reopened-back-to-open", "07-empty", "08-add-keyboard", "09-pair", "10-pair-confirm",
     "11-pair-cancelled", "ask-again", "pick-confirm", "12-pair-renewed", "end",
 ]
 THEMES = {"classic": 0, "lyra": 1, "minimal": 5}
-LANGS = {"en": 0, "fr": 2}
+LANGS = {"en": "EN", "fr": "FR"}  # codes de lib/I18n/languages.json (I18N.begin)
 
 NOTE_ID = "d00000001"
 NOTE = (
@@ -106,12 +107,26 @@ def run_theme(name: str, lang: str, out: Path, spacing: int = 0, font: int = 0) 
     schedule = ";".join(
         f"{START_MS + i * PERIOD_MS + SHOT_OFFSET_MS}:{work / f'{s}.bmp'}" for i, s in shots
     )
-    env = dict(os.environ, SDL_VIDEODRIVER="dummy", CROSSINK_SIMULATOR_TASKS_TOUR="1",
+    # Rendu logiciel : sans lui, le pilote video « dummy » n'a pas de renderer
+    # SDL a relire et le simulateur ne sauve aucune capture, sans erreur.
+    env = dict(os.environ, SDL_VIDEODRIVER="dummy", SDL_RENDER_DRIVER="software", CROSSINK_SIMULATOR_TASKS_TOUR="1",
                CROSSINK_SIMULATOR_TASKS_THEME=str(THEMES[name]), CROSSINK_SIMULATOR_TASKS_LANG=str(LANGS[lang]),
                CROSSINK_SIMULATOR_TASKS_SPACING=str(spacing), CROSSINK_SIMULATOR_TASKS_FONT=str(font),
                CROSSPOINT_SIM_SCREENSHOTS=schedule)
     timeout = (START_MS + len(STEPS) * PERIOD_MS) / 1000 + 15
     log = work / "run.log"
+    if LANGS[lang] != "EN":
+        # La langue se choisit au demarrage (I18N.begin) : un premier lancement
+        # court l'enregistre dans les reglages (etape 0), le parcours la trouve
+        # au suivant. Puis on resseme la carte, au cas ou.
+        prime = dict(env)
+        prime.pop("CROSSPOINT_SIM_SCREENSHOTS")
+        try:
+            subprocess.run([str(PROGRAM)], cwd=work, env=prime, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=START_MS / 1000 + 2)
+        except subprocess.TimeoutExpired:
+            pass
+        seed(work / "fs_")
     with log.open("w") as fh:
         proc = subprocess.run([str(PROGRAM)], cwd=work, env=env, stdout=fh, stderr=subprocess.STDOUT,
                               timeout=timeout)

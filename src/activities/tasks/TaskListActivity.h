@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -8,6 +9,7 @@
 #include "activities/tasks/TaskKeepAwake.h"
 #include "activities/tasks/TaskListModel.h"
 #include "components/OptionPopup.h"
+#include "components/themes/BaseTheme.h"
 #include "tasks/TaskRecord.h"
 
 // Ecran principal des taches. Derive de UiListActivity (pas d'Activity nue) :
@@ -15,9 +17,9 @@
 // (clearScreen / chrome / renderUi / boucle de reconstruction / hints /
 // displayBuffer) viennent de la meme fabrique que la quarantaine d'ecrans de
 // liste du depot (CONTEXT.md) — cet ecran ne reimplemente que ce qui lui est
-// propre : quelles lignes montrer etant donne la bascule "terminees"
-// (TaskListModel.h), plus drawChrome() / drawFooter() pour son titre et ses
-// libelles de boutons.
+// propre : quelles lignes montrer etant donne la vue ouvertes / faites
+// (TaskListModel.h), plus drawChrome() / drawFooter() pour son titre, son
+// compteur d'en-tete et ses libelles de boutons.
 //
 // Ne detient AUCUNE copie de l'index : `order` et TaskListRow::recordIndex
 // indexent directement TASK_STORE.all(). Une copie membre doublait le pic a
@@ -61,10 +63,17 @@ class TaskListActivity final : public UiListActivity {
   // Appui long tactile sur une ligne : le meme menu (en mode selection :
   // choisir la ligne, comme un toucher).
   void onRowLongPress(int index) override;
-  // Retour (bouton ou fleche de l'en-tete) quitte d'abord le mode selection.
+  // Un toucher sur une ligne rend le curseur a la liste.
+  void onRowAction(const freeink::ui::ActionEvent& event) override;
+  // Retour (bouton ou fleche de l'en-tete) quitte d'abord le mode selection,
+  // puis la vue des faites, puis l'ecran.
   void onBackButton() override;
-  // En-tete (compteur + marque d'envoi en attente), rejoue par la base a chaque passe de
-  // reconstruction ; pieds : les quatre libelles propres a cet ecran.
+  // Haut depuis la ligne 0 monte sur le compteur de l'en-tete ; Bas ou Haut
+  // depuis le compteur redescend dans la liste. Le reste comme la base.
+  void navigateButtons() override;
+  // En-tete (titre de la vue, compteur de l'autre vue + marque d'envoi en
+  // attente), rejoue par la base a chaque passe de reconstruction ; pieds :
+  // les quatre libelles propres a cet ecran.
   void drawChrome() override;
   void drawFooter() override;
 
@@ -72,8 +81,16 @@ class TaskListActivity final : public UiListActivity {
   void rebuildOrder();
   void buildRows(UiScreen& screen);
   void toggleAt(int index);
-  // Confirmer (ou un toucher) sur la ligne "N faites" : accordeon.
-  void toggleDoneSection();
+  // Confirmer sur le compteur de l'en-tete (ou un toucher dessus) : remplace
+  // la liste par l'autre vue. Les taches qui quittent l'ecran quittent aussi
+  // la selection ; le curseur revient sur la ligne 0.
+  void switchView();
+  // Le compteur de l'en-tete existe : en vue faites toujours (il ramene a la
+  // liste ouverte), en vue ouverte s'il y a au moins une tache faite.
+  bool hasHeaderCounter() const;
+  // Libelle droit de l'en-tete : « 3 faites », « 2 a faire », suivi de U+21BB
+  // si une op attend le serveur (U+21BB seul sans compteur). Vide sinon.
+  void formatHeaderRight(char* out, size_t size) const;
   void openDetailAt(int index);
   // Menu d'une tache : cocher/rouvrir, voir, modifier, selectionner,
   // supprimer les faites (s'il y en a), garder l'ecran allume, taille du
@@ -128,7 +145,14 @@ class TaskListActivity final : public UiListActivity {
   std::vector<TaskListRow> rows;
   int openCount = 0;
   int doneCount = 0;
-  bool showDone = false;
+  // Vue exclusive : les taches ouvertes ou les faites, jamais les deux.
+  TaskListView view = TaskListView::Open;
+  // Le curseur est sur le compteur de l'en-tete, hors de la liste fui : aucune
+  // ligne n'est alors surlignee, et la selection de la liste reste sur 0.
+  bool headerFocused = false;
+  // Zone tactile du compteur, posee par drawChrome() sous le verrou de rendu
+  // et relue sous ce meme verrou par handleButtons().
+  Rect counterTouchRect;
   // Police de la liste, choisie par le reglage « Taille du texte des taches ».
   int listFontId = 0;
   static int taskListFontId();
@@ -152,9 +176,6 @@ class TaskListActivity final : public UiListActivity {
   // Fenetre de ListItem materialisee pour la page visible seulement (comme
   // LibraryListActivity::winItems), pas un tableau de la taille totale.
   std::vector<freeink::ui::ListItem> winItems;
-  // Stockage stable pour le libelle "N faites" tant qu'il est reference par un
-  // ListItem::label (un seul a la fois, la ligne est unique).
-  std::string doneRowLabel;
 
   OptionPopup popup;
 };

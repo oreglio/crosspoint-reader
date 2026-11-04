@@ -299,6 +299,10 @@ class BaseTheme {
                         bool showSelection = true) const;
   virtual void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle = nullptr,
                           bool readerContext = false, bool showStatus = true, bool filenameTitle = false) const;
+  // Ou drawHeader() pose `subtitle` (le libelle droit de la ligne du titre)
+  // dans la bande `rect` : boite de la ligne de texte, pour un ecran qui le
+  // surligne ou le rend touchable. A garder en phase avec drawHeader().
+  virtual Rect headerRightLabelRect(const GfxRenderer& renderer, Rect rect, const char* label) const;
   virtual void drawSubHeader(const GfxRenderer& renderer, Rect rect, const char* label,
                              const char* rightLabel = nullptr) const;
   virtual void drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,

@@ -51,9 +51,13 @@ constexpr TourStep kSteps[] = {
     {"01-list", Act::OpenList, Button::Confirm},
     {"move-down", Act::Tap, Button::Down},
     {"02-ticked-sinks", Act::Tap, Button::Confirm},
+    // « N faites » a droite de l'en-tete : Haut depuis la premiere tache le
+    // surligne, Confirmer remplace la liste par les faites, Retour ramene a la
+    // liste ouverte.
     {"move-up", Act::Tap, Button::Up},
-    {"03-done-row-selected", Act::Tap, Button::Up},
-    {"04-done-expanded", Act::Tap, Button::Confirm},
+    {"03-counter-focused", Act::Tap, Button::Up},
+    {"04-done-view", Act::Tap, Button::Confirm},
+    {"04b-done-view-back", Act::Tap, Button::Back},
     {"reopen", Act::OpenList, Button::Confirm},
     {"05-detail-with-note", Act::Tap, Button::Right},
     // Tache haute priorite cochee depuis son detail : le titre perd le gras,
@@ -103,8 +107,7 @@ constexpr TourStep kSteps[] = {
     {"select2-pick", Act::Tap, Button::Confirm},
     {"24-selection-ticked", Act::Tap, Button::Right},
     // « Supprimer les faites (N) », au milieu du menu, confirme. La coche a
-    // laisse le curseur sur « N faites » : remonter sur la derniere ouverte.
-    {"done-up", Act::Tap, Button::Up},
+    // laisse le curseur sur une tache ouverte : son menu suffit.
     {"menu-done", Act::Hold, Button::Confirm},
     {"done-down-1", Act::Tap, Button::Down},
     {"done-down-2", Act::Tap, Button::Down},
@@ -113,7 +116,15 @@ constexpr TourStep kSteps[] = {
     {"26-delete-done-confirm", Act::Tap, Button::Confirm},
     {"done-confirm-down", Act::Tap, Button::Down},
     {"27-done-deleted", Act::Tap, Button::Confirm},
+    // Tout est fait : la liste ouverte n'a que la ligne d'ajout, le compteur
+    // reste atteignable. Rouvrir la derniere faite ramene seul a la liste
+    // ouverte.
     {"06-all-done", Act::SeedAllDone, Button::Confirm},
+    {"06b-all-done-counter-focused", Act::Tap, Button::Up},
+    {"06c-all-done-view", Act::Tap, Button::Confirm},
+    {"all-done-reopen-1", Act::Tap, Button::Confirm},
+    {"all-done-reopen-2", Act::Tap, Button::Confirm},
+    {"06d-last-reopened-back-to-open", Act::Tap, Button::Confirm},
     {"07-empty", Act::SeedEmpty, Button::Confirm},
     {"08-add-keyboard", Act::Tap, Button::Left},
     {"09-pair", Act::OpenPair, Button::Confirm},

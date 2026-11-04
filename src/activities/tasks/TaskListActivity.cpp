@@ -60,14 +60,6 @@ static const uint8_t TASK_BULLET_DONE[] = {
     0x3f, 0xff, 0xc0, 0x1f, 0xff, 0x80, 0x0f, 0xff, 0x00, 0x03, 0xfc, 0x00, 0x00, 0x00, 0x00,
 };
 
-// Marque d'etat de la ligne "N faites" : U+203A replie, U+00BB deplie. Toutes
-// deux presentes dans les polices integrees (scripts/measure_label.py) ; la
-// maquette montrait U+25B8, absent, qui aurait ete saute en silence. Aucun
-// triangle vers le bas n'y figure, d'ou deux chevrons plutot que la paire
-// droite/bas habituelle — le pied de page dit deplier/replier en toutes lettres.
-constexpr char DONE_ROW_COLLAPSED_MARK[] = "\u203A";
-constexpr char DONE_ROW_EXPANDED_MARK[] = "\u00BB";
-
 // Seuil de l'appui long sur Confirmer : celui de la Library, pour que le geste
 // se ressente pareil d'un ecran a l'autre.
 constexpr unsigned long kHoldMs = 800;
@@ -145,7 +137,8 @@ void TaskListActivity::onEnter() {
   listFontId = taskListFontId();
   uiTarget.setFont(fui::GfxRendererTarget::FONT_BODY, listFontId);
 
-  showDone = false;
+  view = TaskListView::Open;
+  headerFocused = false;
   selecting = false;
   selection.reset();
   selectionCount = 0;
@@ -168,8 +161,6 @@ void TaskListActivity::onExit() {
   rows.shrink_to_fit();
   winItems.clear();
   winItems.shrink_to_fit();
-  doneRowLabel.clear();
-  doneRowLabel.shrink_to_fit();
   // L'index lui-meme appartient au store, pas a l'activite : sans cet appel
   // ses ~26 Ko, charges par onEnter(), survivraient a l'ecran pour toute la
   // session. Cet ecran est le seul detenteur d'indices dedans, et ils viennent
@@ -182,8 +173,13 @@ void TaskListActivity::rebuildOrder() {
   if (!dirty) return;
   const std::vector<TaskRecord>& records = TASK_STORE.all();
   buildTaskOrder(records, order, openCount);
-  buildTaskListRows(order, openCount, showDone, rows);
   doneCount = static_cast<int>(records.size()) - openCount;
+  // La vue faites s'est videe (derniere decochee, faites supprimees) : retour
+  // seul a la liste ouverte, plutot qu'une liste vide sans rien a y faire.
+  if (view == TaskListView::Done && doneCount == 0) view = TaskListView::Open;
+  // Plus de compteur, plus de focus dessus.
+  if (!hasHeaderCounter()) headerFocused = false;
+  buildTaskListRows(order, openCount, view, rows);
   dirty = false;
 }
 
@@ -203,8 +199,8 @@ void TaskListActivity::buildScreen(UiScreen& screen) {
       static_cast<int16_t>(metrics.topPadding + TouchHeaderBackButton::height(metrics, mappedInput) + airTop), 0,
       static_cast<int16_t>(metrics.buttonHintsHeight + metrics.verticalSpacing), 0});
 
-  // Jamais vide : un index vide donne la ligne d'ajout, un index tout fait la
-  // ligne "N faites".
+  // Jamais vide : une vue ouverte sans tache donne la ligne d'ajout, et la vue
+  // faites n'existe que tant qu'il en reste une (rebuildOrder()).
   buildRows(screen);
 }
 
@@ -249,6 +245,15 @@ void TaskListActivity::buildRows(UiScreen& screen) {
       static_cast<int16_t>(renderer.getLineHeight(listFontId) - renderer.getLineHeight(uiScaleSpec().bodyFontId));
   syncListViewport(screen, props, /*hasSubtitle=*/false, UiThemeTokensDetail::scaledListMetric(kSpacingPx[spacing]),
                    fontDelta);
+  if (headerFocused) {
+    // Le curseur est sur le compteur de l'en-tete : aucune ligne surlignee
+    // (list() ne peint la selection que sur selectedIndex). La selection de
+    // nav reste sur 0, ou la remettront Bas. Pas de suivi en attente : il
+    // chercherait une ligne selectionnee jamais dessinee et redemanderait des
+    // passes de reconstruction (ListNav::onListRendered).
+    props.selectedIndex = -1;
+    nav.followPending = false;
+  }
 
   const size_t cap = static_cast<size_t>(nav.visibleRows > 0 ? nav.visibleRows : 1);
   if (winItems.capacity() < cap) winItems.reserve(cap);
@@ -260,19 +265,7 @@ void TaskListActivity::buildRows(UiScreen& screen) {
     const TaskListRow& row = rows[static_cast<size_t>(i)];
     fui::ListItem item;
     item.actionValue = static_cast<int16_t>(i);
-    if (row.kind == TaskRowKind::DoneSection) {
-      // Ligne ordinaire et non ListItem::isHeader : le SDK dessine une en-tete
-      // non selectionnable et n'enregistre pas son action (list.h:442), or cet
-      // accordeon doit se selectionner et se toucher. Ce qui la distingue d'une
-      // tache est l'absence de pastille (son texte s'aligne sur la colonne des
-      // pastilles) et sa marque d'etat ; hauteur, selection et zone tactile
-      // restent celles de list().
-      char buf[32];
-      std::snprintf(buf, sizeof(buf), "%s %d %s", showDone ? DONE_ROW_EXPANDED_MARK : DONE_ROW_COLLAPSED_MARK,
-                    doneCount, tr(STR_TASK_DONE_COUNT));
-      doneRowLabel = buf;
-      item.label = doneRowLabel.c_str();
-    } else if (row.kind == TaskRowKind::AddTask) {
+    if (row.kind == TaskRowKind::AddTask) {
       // Index vide seulement (buildTaskListRows()) : sur une liste peuplee,
       // l'ajout passe par le bouton Gauche.
       item.label = tr(STR_TASK_ADD_ROW);
@@ -319,9 +312,6 @@ void TaskListActivity::activateIndex(int index) {
       } else {
         toggleAt(index);
       }
-      return;
-    case TaskRowKind::DoneSection:
-      toggleDoneSection();
       return;
     case TaskRowKind::AddTask:
       createTask();
@@ -376,7 +366,8 @@ bool TaskListActivity::handleCustomInput() {
     }
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-    openDetailAt(activeNav().selected);
+    // Sur le compteur, Droite n'a pas de tache dont ouvrir le detail.
+    if (!headerFocused) openDetailAt(activeNav().selected);
     return true;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
@@ -407,11 +398,32 @@ bool TaskListActivity::handleButtons() {
     onBackButton();
     return true;
   }
+  // Toucher le compteur de l'en-tete bascule la vue, comme Confirmer dessus.
+  // Avant le routage des lignes : sa zone reste dans la bande de l'en-tete,
+  // donc un toucher sur une ligne ne bascule jamais.
+  int tapX = 0;
+  int tapY = 0;
+  if (mappedInput.hasTouchHardware() && hasHeaderCounter() && mappedInput.wasScreenTapped(tapX, tapY)) {
+    Rect hit;
+    {
+      RenderLock lock(*this);
+      hit = counterTouchRect;
+    }
+    if (tapX >= hit.x && tapX < hit.x + hit.width && tapY >= hit.y && tapY < hit.y + hit.height) {
+      switchView();
+      return true;
+    }
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    // Sur le compteur, appui court ou long : la bascule, jamais un menu.
+    if (headerFocused) {
+      switchView();
+      return true;
+    }
     const int selected = activeNav().selected;
     if (selected < 0 || selected >= listCount()) return true;
-    // Sur « + Ajouter » et « N faites », un appui long fait l'action normale :
-    // le menu ne concerne qu'une tache.
+    // Sur « + Ajouter », un appui long fait l'action normale : le menu ne
+    // concerne qu'une tache.
     // En mode selection, un appui long choisit la ligne comme un appui court :
     // le menu n'y a pas cours.
     if (!selecting && mappedInput.getHeldTime() >= kHoldMs &&
@@ -433,12 +445,66 @@ void TaskListActivity::onRowLongPress(const int index) {
   }
 }
 
+void TaskListActivity::onRowAction(const fui::ActionEvent& event) {
+  headerFocused = false;
+  UiListActivity::onRowAction(event);
+}
+
 void TaskListActivity::onBackButton() {
   if (selecting) {
     stopSelection();
     return;
   }
+  // La vue faites s'ouvre comme une sous-vue : Retour ramene a la liste
+  // ouverte, pas hors de Tasks.
+  if (view == TaskListView::Done) {
+    switchView();
+    return;
+  }
   finish();
+}
+
+bool TaskListActivity::hasHeaderCounter() const { return view == TaskListView::Done || doneCount > 0; }
+
+void TaskListActivity::navigateButtons() {
+  // Les memes quatre gestes que UiListActivity::navigateButtons(), chacun
+  // appele une fois par passe : ButtonNavigator retient d'un appel a l'autre
+  // qu'un maintien a deja agi, pour que sa relache ne rejoue pas un pas. Seuls
+  // les pas simples connaissent le compteur ; un maintien pagine comme
+  // ailleurs et rend le curseur a la liste.
+  const int count = listCount();
+  auto& n = activeNav();
+  buttonNavigator.onNextRelease([this, count, &n] {
+    if (headerFocused) {
+      headerFocused = false;
+      moveSelectionTo(0);
+      return;
+    }
+    moveSelectionTo(ButtonNavigator::nextIndex(n.selected, count));
+  });
+  buttonNavigator.onPreviousRelease([this, count, &n] {
+    if (headerFocused) {
+      // Comme Haut sur la premiere ligne d'une liste sans compteur : la
+      // derniere ligne.
+      headerFocused = false;
+      moveSelectionTo(count > 0 ? count - 1 : 0);
+      return;
+    }
+    if (n.selected == 0 && hasHeaderCounter()) {
+      headerFocused = true;
+      requestUpdate();
+      return;
+    }
+    moveSelectionTo(ButtonNavigator::previousIndex(n.selected, count));
+  });
+  buttonNavigator.onNextContinuous([this, count, &n] {
+    headerFocused = false;
+    moveSelectionTo(ButtonNavigator::nextPageIndex(n.selected, count, n.pageRows()));
+  });
+  buttonNavigator.onPreviousContinuous([this, count, &n] {
+    headerFocused = false;
+    moveSelectionTo(ButtonNavigator::previousPageIndex(n.selected, count, n.pageRows()));
+  });
 }
 
 void TaskListActivity::openTaskMenu(const int index) {
@@ -849,14 +915,17 @@ void TaskListActivity::applyBatch(const BatchAction action, const uint8_t* targe
   requestUpdate();
 }
 
-void TaskListActivity::toggleDoneSection() {
-  showDone = !showDone;
-  // Replier en mode selection deselectionne les taches faites : une action
-  // ne porte jamais sur une ligne qu'on ne voit plus.
-  if (selecting && !showDone) {
+void TaskListActivity::switchView() {
+  view = view == TaskListView::Open ? TaskListView::Done : TaskListView::Open;
+  headerFocused = false;
+  // En mode selection, les taches de l'autre vue quittent la selection : une
+  // action ne porte jamais sur une ligne qu'on ne voit plus. Vers la vue
+  // ouverte partent les faites, et inversement.
+  if (selecting) {
+    const bool leavingDone = view == TaskListView::Open;
     const std::vector<TaskRecord>& records = TASK_STORE.all();
     for (size_t i = 0; i < records.size() && i < MAX_TASKS; ++i) {
-      if (records[i].done && selection.test(i)) {
+      if (records[i].done == leavingDone && selection.test(i)) {
         selection.reset(i);
         --selectionCount;
       }
@@ -864,12 +933,10 @@ void TaskListActivity::toggleDoneSection() {
   }
   dirty = true;
   rebuildOrder();
-  // Ne s'execute que selection SUR la ligne "N faites" (activateIndex()).
-  // Cette ligne suit les taches ouvertes, que la bascule ne touche pas : son
-  // indice ne bouge pas et la selection y reste. Le clamp n'est qu'une garde
-  // de bornes, pas un cas attendu.
-  const int next = taskListClampSelection(rows, activeNav().selected);
-  if (next >= 0) moveSelectionTo(next);
+  // Une autre liste : le curseur repart de sa premiere ligne, qui existe
+  // toujours (la vue faites n'existe pas vide, la vue ouverte a au moins la
+  // ligne d'ajout).
+  moveSelectionTo(0);
 }
 
 void TaskListActivity::toggleAt(int index) {
@@ -913,15 +980,14 @@ void TaskListActivity::toggleAt(int index) {
 
   dirty = true;
   rebuildOrder();
-  // La selection suit la TACHE, pas l'indice. Decocher une tache de la section
-  // depliee la fait remonter parmi les ouvertes, et "N faites" glisse a son
-  // ancien indice : garder l'indice ferait replier la section au Confirmer
-  // suivant, au lieu d'agir sur la tache qu'on vient de toucher.
+  // Une coche ou une decoche fait quitter la vue a la tache : la selection
+  // reste a son indice, donc sur la tache qui a pris sa place. On coche ainsi
+  // une liste de haut en bas (et on rouvre les faites) sans jamais deplacer le
+  // curseur.
   //
-  // Sauf pour une coche : la tache coule dans la section terminees, et la
-  // selection reste a son indice, donc sur la tache qui a pris sa place. On
-  // coche ainsi une liste de haut en bas sans jamais deplacer le curseur.
-  const int moved = rec.done ? -1 : rowOfTask(id.c_str());
+  // Sauf quand la tache reste a l'ecran : la derniere faite decochee ramene
+  // seule a la liste ouverte (rebuildOrder()), ou la selection la suit.
+  const int moved = rowOfTask(id.c_str());
   const int next = moved >= 0 ? moved : taskListClampSelection(rows, activeNav().selected);
   if (next >= 0) moveSelectionTo(next);
 }
@@ -942,7 +1008,7 @@ void TaskListActivity::openDetailAt(int index) {
                          [this, id](const ActivityResult& result) {
                            // Rien ne rappelle onEnter() sur une activite depilee : ActivityManager
                            // la restaure par std::move et ne fait tourner que ce gestionnaire
-                           // (chemin Pop). `order`, `rows`, `openCount` et `showDone`
+                           // (chemin Pop). `order`, `rows`, `openCount` et `view`
                            // sont donc exactement ceux d'avant la visite — ce qu'on
                            // veut pour l'etat d'affichage, mais ce qui afficherait un titre ou une
                            // priorite perimes si le detail a modifie la tache. C'est ici ou nulle
@@ -964,7 +1030,7 @@ void TaskListActivity::openDetailAt(int index) {
                            dirty = true;
                            rebuildOrder();
                            // La tache a pu changer de place (priorite, coche) : la selection la
-                           // suit. Si elle a quitte l'ecran (cochee, section repliee), le clamp
+                           // suit. Si elle a quitte l'ecran (cochee ou rouverte : l'autre vue), le clamp
                            // garde un indice valide.
                            const int moved = rowOfTask(id.c_str());
                            const int next = moved >= 0 ? moved : taskListClampSelection(rows, activeNav().selected);
@@ -1003,6 +1069,10 @@ void TaskListActivity::createTask() {
     showNotice(StatusNotice::LowMemory);
     return;
   }
+
+  // Le curseur revient a la liste : au retour, la selection suit la tache creee
+  // (ou reste en place sur une annulation), jamais le compteur de l'en-tete.
+  headerFocused = false;
 
   // Un toucher sur "+ Ajouter une tache" quitte l'ecran : sans cela un flash de
   // toucher residuel griserait la ligne 0 au retour (UiListActivity.h:41-43).
@@ -1081,6 +1151,9 @@ void TaskListActivity::askPriorityForNewTask(std::string title) {
         // Rien ne rappelle onEnter() sur une activite depilee : sans cette
         // reconstruction la tache existe sur la carte mais n'apparait dans
         // aucune ligne. Meme quatuor qu'au retour de l'ecran de detail.
+        // Ajoutee depuis la vue faites, la tache neuve (ouverte) n'y serait
+        // pas : on revient a la liste ouverte pour la montrer.
+        view = TaskListView::Open;
         dirty = true;
         rebuildOrder();
         const int created = rowOfTask(rec.id);
@@ -1102,24 +1175,63 @@ int TaskListActivity::rowOfTask(const char* id) const {
   return -1;
 }
 
+void TaskListActivity::formatHeaderRight(char* out, const size_t size) const {
+  // U+21BB (une op attend le serveur) suit le compteur dans le meme libelle :
+  // les deux occupent le bord droit de la ligne du titre. inter_8_regular le
+  // porte (scripts/measure_label.py) ; « 120 a faire ↻ » mesure 100 px, sous
+  // les 200 px du pire theme. Rien quand tout est envoye et sans compteur :
+  // l'etat normal ne se signale pas.
+  const char* pendingMark = pendingOps ? "\u21BB" : "";
+  if (!hasHeaderCounter()) {
+    std::snprintf(out, size, "%s", pendingMark);
+    return;
+  }
+  // En vue ouverte, combien de faites ; en vue faites, combien a faire : le
+  // compteur nomme toujours l'autre vue, celle ou il mene.
+  const bool doneView = view == TaskListView::Done;
+  std::snprintf(out, size, "%d %s%s%s", doneView ? openCount : doneCount,
+                doneView ? tr(STR_TASK_TODO_COUNT) : tr(STR_TASK_DONE_COUNT), pendingOps ? " " : "", pendingMark);
+}
+
 void TaskListActivity::drawChrome() {
   const Rect header = TouchHeaderBackButton::headerRect(renderer, mappedInput);
   char title[48];
   if (selecting) {
     std::snprintf(title, sizeof(title), "%s (%d)", tr(STR_TASK_SELECTION), selectionCount);
+  } else if (view == TaskListView::Done) {
+    std::snprintf(title, sizeof(title), "%s (%d)", tr(STR_TASK_DONE_TITLE), doneCount);
   } else {
     std::snprintf(title, sizeof(title), "%s (%d)", tr(STR_TASK_TITLE), openCount);
   }
-  // Une op attend le serveur : une fleche circulaire au bord droit de la ligne
-  // du titre. Passee comme `subtitle`, que les themes placent a droite, alignee
-  // sur la ligne de base du titre, dans la petite police (inter_8_regular porte
-  // U+21BB, scripts/measure_label.py). Rien quand tout est envoye : l'etat
-  // normal ne se signale pas.
-  const char* pendingMark = pendingOps ? "\u21BB" : nullptr;
+  // Libelle droit passe comme `subtitle`, que les themes placent au bord droit,
+  // cale sur le bas de la ligne du titre, dans la petite police.
+  char right[48];
+  formatHeaderRight(right, sizeof(right));
+  const char* subtitle = right[0] != '\0' ? right : nullptr;
   if (mappedInput.hasTouchHardware()) {
-    TouchHeaderBackButton::draw(renderer, uiTarget, header, title, false, 0, pendingMark);
+    TouchHeaderBackButton::draw(renderer, uiTarget, header, title, false, 0, subtitle);
   } else {
-    GUI.drawHeader(renderer, header, title, pendingMark);
+    GUI.drawHeader(renderer, header, title, subtitle);
+  }
+  if (!hasHeaderCounter()) {
+    counterTouchRect = Rect{};
+    return;
+  }
+  // La ou le theme vient de poser le libelle (headerRightLabelRect), pour le
+  // surligner et le toucher sans redeviner sa position theme par theme.
+  const Rect label = GUI.headerRightLabelRect(renderer, header, right);
+  // Toute la hauteur de la bande, et un peu de marge a gauche : une cible
+  // tactile plus large que le texte, qui ne descend jamais sur la premiere
+  // ligne de la liste.
+  constexpr int kTouchPadX = 12;
+  const int touchX = std::max(header.x, label.x - kTouchPadX);
+  counterTouchRect = Rect{touchX, header.y, header.x + header.width - touchX, header.height};
+  if (headerFocused) {
+    // Video inverse, comme une ligne selectionnee : rectangle plein et texte
+    // blanc, en inversant la boite du texte avec une petite marge.
+    constexpr int kPadX = 4;
+    constexpr int kPadY = 1;
+    renderer.invertRect(label.x - kPadX, label.y - kPadY, label.width + 2 * kPadX, label.height + 2 * kPadY);
   }
 }
 
@@ -1136,7 +1248,7 @@ void TaskListActivity::drawFooter() {
   const TaskRowKind kind = selected >= 0 && selected < static_cast<int>(rows.size())
                                ? rows[static_cast<size_t>(selected)].kind
                                : TaskRowKind::Task;
-  // Sur une tache deja faite, Confirmer la decoche : le libelle le dit.
+  // Sur une tache deja faite (vue faites), Confirmer la rouvre : le libelle le dit.
   const bool selectedDone = kind == TaskRowKind::Task && selected >= 0 && selected < static_cast<int>(rows.size()) &&
                             TASK_STORE.all()[static_cast<size_t>(rows[static_cast<size_t>(selected)].recordIndex)].done;
   const char* confirmLabel = selectedDone ? tr(STR_TASK_UNTICK) : tr(STR_TASK_TICK);
@@ -1145,15 +1257,18 @@ void TaskListActivity::drawFooter() {
   if (selecting) {
     // Mode selection : Confirmer choisit, Droite coche, Gauche efface
     // (« supprimer » depasse la case de 8 px en francais, measure_label.py),
-    // Retour sort du mode. Rien de choisi : ni cocher ni effacer.
+    // Retour sort du mode. Rien de choisi : ni cocher ni effacer. Droite et
+    // Gauche portent sur la selection, pas sur le curseur : le compteur de
+    // l'en-tete ne change que Confirmer.
     const bool picked = kind == TaskRowKind::Task && selected >= 0 && selected < static_cast<int>(rows.size()) &&
                         selection.test(static_cast<size_t>(rows[static_cast<size_t>(selected)].recordIndex));
-    confirmLabel = picked ? tr(STR_TASK_UNPICK) : tr(STR_TASK_PICK);
-    if (kind == TaskRowKind::DoneSection) confirmLabel = showDone ? tr(STR_TASK_COLLAPSE) : tr(STR_TASK_EXPAND);
+    confirmLabel = headerFocused ? tr(STR_TASK_SHOW) : picked ? tr(STR_TASK_UNPICK) : tr(STR_TASK_PICK);
     leftLabel = selectionCount > 0 ? tr(STR_TASK_ERASE_SHORT) : "";
     rightLabel = selectionCount > 0 ? tr(STR_TASK_TICK) : "";
-  } else if (kind == TaskRowKind::DoneSection) {
-    confirmLabel = showDone ? tr(STR_TASK_COLLAPSE) : tr(STR_TASK_EXPAND);
+  } else if (headerFocused) {
+    // Sur le compteur : Confirmer montre l'autre vue, Gauche ajoute toujours,
+    // Droite n'a pas de detail a ouvrir.
+    confirmLabel = tr(STR_TASK_SHOW);
     rightLabel = "";
   } else if (kind == TaskRowKind::AddTask) {
     confirmLabel = tr(STR_TASK_NEW_SHORT);

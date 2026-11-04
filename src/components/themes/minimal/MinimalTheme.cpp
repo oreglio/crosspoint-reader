@@ -414,6 +414,23 @@ void drawBookCover(const GfxRenderer& renderer, const Rect& coverRect, const Rec
 }
 }  // namespace
 
+namespace {
+constexpr int kHeaderTitleInsetX = 12;
+int headerTitleY(const Rect& rect) { return rect.y + UITheme::getInstance().getMetrics().batteryBarHeight + 3; }
+}  // namespace
+
+Rect MinimalTheme::headerRightLabelRect(const GfxRenderer& renderer, const Rect rect, const char* label) const {
+  // Le sous-titre se range au bord droit de la ligne du titre, cale sur le
+  // bas du titre comme dans BaseTheme::drawHeader. Le titre est toujours en
+  // UI 12 ici : un titre de nom de fichier (filenameTitle) n'a pas de
+  // sous-titre a surligner.
+  if (label == nullptr) return Rect{};
+  const int width = renderer.getTextWidth(SMALL_FONT_ID, label);
+  const int height = renderer.getLineHeight(SMALL_FONT_ID);
+  return Rect{rect.x + rect.width - kHeaderTitleInsetX - width,
+              headerTitleY(rect) + renderer.getLineHeight(UI_12_FONT_ID) - height, width, height};
+}
+
 void MinimalTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle,
                               const bool readerContext, const bool showStatus, const bool filenameTitle) const {
   (void)readerContext;
@@ -421,8 +438,8 @@ void MinimalTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char
 
   if (title) {
     const int titleFontId = filenameTitle ? renderer.filenameFontId(UI_12_FONT_ID) : UI_12_FONT_ID;
-    constexpr int titleInsetX = 12;
-    const int titleY = rect.y + UITheme::getInstance().getMetrics().batteryBarHeight + 3;
+    constexpr int titleInsetX = kHeaderTitleInsetX;
+    const int titleY = headerTitleY(rect);
     const int titleRight = rect.x + rect.width - 12;
     int maxTitleWidth = titleRight - rect.x - titleInsetX - MinimalMetrics::values.contentSidePadding;
     // Le sous-titre se range au bord droit de la ligne du titre, cale sur le
