@@ -21,7 +21,7 @@ when you ask.
 Within a priority, tasks follow the order set on the server's web page, where
 each open task can be dragged by its handle (never into another priority). A
 task added or moved to another priority on the device goes to the end of its
-group until the next sync.
+priority until the next sync.
 
 The header shows how many tasks are still open and, at its right end, how many
 are done (**N done**), followed by **↻** while changes made on the device are
@@ -31,7 +31,7 @@ the task is done; that is the only priority marker. Long titles wrap over two li
 
 | Button | Action |
 | --- | --- |
-| Up / Down | Move the selection; Up from the first task reaches **N done** |
+| Up / Down | Move the selection; Up from the first row reaches **N done** |
 | Confirm | Tick the selected task, or reopen a finished one |
 | Hold Confirm | Open the task's menu |
 | Left | Add a task |
@@ -40,7 +40,7 @@ the task is done; that is the only priority marker. Long titles wrap over two li
 
 - A task you tick moves straight into the finished ones, and the selection
   stays put, on the task that took its place.
-- **Up** from the first task reaches **N done** in the header, highlighted like a
+- **Up** from the first row reaches **N done** in the header, highlighted like a
   selected row; **Confirm** (its hint reads **view**) or a tap on it shows the
   finished tasks instead of the open ones. The header then reads **Done (N)**
   with **M to do** on the right: the same gesture, or **Back**, comes back to
@@ -54,7 +54,7 @@ the task is done; that is the only priority marker. Long titles wrap over two li
   opens the task's menu. Tapping the count in the header switches the list.
 
 Holding **Confirm** on a task (about a second) opens its menu: **Tick** (or
-**Reopen**), **View**, **Edit** (title, then priority, then group), **Group**
+**Reopen**), **View**, **Edit** (title, then priority), **Group**
 (only when groups exist), **Select**,
 **Delete done tasks (N)** (only when some are done), **Keep screen on**,
 **Task text size** (the same setting as in Settings, applied on the spot),
@@ -116,10 +116,10 @@ server, or while the server has no group, nothing changes in the list.
 - **Left** (**add**) on an ordinary task still adds an ungrouped task. Adding
   into a group asks for the title and the priority, as usual.
 - To move a task, hold **Confirm** on it and choose **Group**: pick **No group**
-  or one of the groups. The same choice is the third step of **Edit** (title,
-  then priority, then **Group**) and of **Left** on a task's page; that step
-  only appears when groups exist. A moved task goes to the end of its new group
-  until the next sync.
+  or one of the groups. On a task's page, **Left** edits the title, then the
+  priority, then offers the same choice as a third step (only when groups
+  exist). From the list, **Edit** stops after the priority. A moved task goes to
+  the end of its new group until the next sync.
 - Deleting a group on the web page does not delete its tasks: they go back to
   the ungrouped top of the list at the next sync.
 - In selection mode, the cursor skips the titles.
@@ -208,6 +208,6 @@ incremental again.
 
 ## Where the Data Lives
 
-Everything is under `/.crosspoint/tasks/` on the SD card: the task index, the
-queue of changes not yet synced, the sync position (with the groups, in the index), notes (one text file per
+Everything is under `/.crosspoint/tasks/` on the SD card: the task index (which also holds the groups), the
+queue of changes not yet synced, the sync position, notes (one text file per
 task in `n/`), and the pairing code.
