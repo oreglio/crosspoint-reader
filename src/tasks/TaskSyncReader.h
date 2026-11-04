@@ -60,7 +60,7 @@ struct TaskSyncCallbacks {
 // de note sont relayés sans être stockés.
 class TaskSyncReader {
  public:
-  // Une ligne de métadonnées vaut au pire ~480 octets (titre échappé + champs).
+  // Une ligne de métadonnées vaut au pire ~507 octets (titre échappé + champs ; voir taskOps.ts de crossdrop).
   static constexpr size_t LINE_BUF_SIZE = 640;
 
   explicit TaskSyncReader(const TaskSyncCallbacks& callbacks) : cb_(callbacks) {}

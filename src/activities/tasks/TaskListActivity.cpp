@@ -1150,7 +1150,7 @@ void TaskListActivity::applyBatch(const BatchAction action, const uint8_t* targe
     // chaque effacement laisse valides celles qui restent.
     RenderLock lock(*this);
     for (size_t i = 0; i < queued; ++i) {
-      // Copie (216 octets de pile) : stageUpsert() ecrit dans le vecteur
+      // Copie (228 octets de pile) : stageUpsert() ecrit dans le vecteur
       // qu'on lit, et stageRemove() efface l'element dont on lirait l'id.
       TaskRecord rec = TASK_STORE.all()[targets[i]];
       if (action == BatchAction::Delete) {
@@ -1201,7 +1201,7 @@ void TaskListActivity::toggleAt(int index) {
   const TaskListRow row = rows[static_cast<size_t>(index)];
   if (row.kind != TaskRowKind::Task) return;
 
-  // Copie (216 octets de pile, sous le seuil de 256 du CLAUDE.md) et non une
+  // Copie (228 octets de pile, sous le seuil de 256 du CLAUDE.md) et non une
   // reference : upsert() peut push_back et donc reallouer le vecteur du store.
   // Invariant du jour : l'id existe deja dans l'index (il vient de la), donc
   // upsert() prend la branche "remplace en place" et ne realloue pas — mais

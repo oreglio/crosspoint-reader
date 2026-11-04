@@ -9,8 +9,8 @@
 #include "tasks/TaskRecord.h"
 
 // Logique pure de CONTENU pour l'ecran de liste des taches : quelles lignes
-// l'ecran montre, dans quel ordre, etant donne l'etat de la bascule
-// "terminees".
+// l'ecran montre, dans quel ordre, etant donne la vue (ouvertes ou faites) et
+// les groupes.
 //
 // Ce fichier ne fait PAS de geometrie : ni hauteur de ligne, ni defilement, ni
 // pagination. UiListActivity (via fui::ListNav / syncListViewport / list())
@@ -19,14 +19,11 @@
 // premiere. Extrait pour rester testable a l'hote sans renderer ni TaskStore.
 
 // Une ligne d'ecran est une tache ou la ligne "+ Ajouter une tache" d'un
-// index vide. Les deux sont selectionnables : aucune n'est un
-// fui::ListItem::isHeader, que le SDK dessine non selectionnable et sans
-// action (list.h:442). Il n'y a donc aucune ligne a sauter, et la navigation
-// de base (ButtonNavigator) sert telle quelle.
-//
-// GroupHeader fait exception : titre de groupe, selectionnable (il porte les
-// actions du groupe) mais sans tache ; la navigation du mode selection le saute
-// (taskListStepSkippingHeaders).
+// index vide, ou un titre de groupe (GroupHeader). Toutes sont selectionnables :
+// aucune n'est un fui::ListItem::isHeader, que le SDK dessine non selectionnable
+// et sans action (list.h:442). La navigation de base (ButtonNavigator) sert donc
+// telle quelle, sauf en mode selection, qui saute les titres (ils portent les
+// actions du groupe, pas une tache : taskListStepSkippingHeaders).
 enum class TaskRowKind : uint8_t { Task, AddTask, GroupHeader };
 
 // Vue exclusive de l'ecran : les taches ouvertes OU les taches faites, jamais
@@ -50,7 +47,7 @@ static_assert(sizeof(TaskListRow) == 4, "TaskListRow must stay packed to 4 bytes
 // groupe ou groupe inconnu = avant tout, puis `position` du groupe, puis son
 // id), puis le comparateur canonique taskOrderBefore (Tache 1) — jamais
 // re-derive ici. Les faites suivent, triees par taskOrderBefore seul : le
-// groupe est ignore. Une tache cochee coule aussitot en fin de liste.
+// groupe est ignore. Une tache cochee quitte la vue ouverte pour la vue des faites.
 // `openCount` recoit le nombre de taches ouvertes en tete de `order`.
 void buildTaskOrder(const std::vector<TaskRecord>& records, const std::vector<TaskGroup>& groups,
                     std::vector<int>& order, int& openCount);

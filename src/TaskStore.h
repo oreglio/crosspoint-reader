@@ -96,7 +96,7 @@ class TaskStore : public PersistableStore<TaskStore> {
   // « aucun groupe » de « serveur qui n'en connait pas encore ».
   bool groupsSynced() const { return groupsSyncedFlag; }
   void setGroupsSynced(bool synced) { groupsSyncedFlag = synced; }
-  // Rend vraiment la memoire de l'index (jusqu'a 120 x 218 octets = ~26 Ko,
+  // Rend vraiment la memoire de l'index (jusqu'a 120 x 228 octets = ~26 Ko,
   // 7 % de la RAM d'un C3) et arme le prochain ensureLoaded() pour qu'il
   // relise la carte. Seul TaskListActivity::onExit() l'appelle : c'est le seul
   // detenteur d'indices dans ce vecteur.

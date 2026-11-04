@@ -17,13 +17,13 @@
 // (clearScreen / chrome / renderUi / boucle de reconstruction / hints /
 // displayBuffer) viennent de la meme fabrique que la quarantaine d'ecrans de
 // liste du depot (CONTEXT.md) — cet ecran ne reimplemente que ce qui lui est
-// propre : quelles lignes montrer etant donne la vue ouvertes / faites
-// (TaskListModel.h), plus drawChrome() / drawFooter() pour son titre, son
+// propre : quelles lignes montrer etant donne la vue ouvertes / faites et les
+// titres de groupe (TaskListModel.h), plus drawChrome() / drawFooter() pour son titre, son
 // compteur d'en-tete et ses libelles de boutons.
 //
 // Ne detient AUCUNE copie de l'index : `order` et TaskListRow::recordIndex
 // indexent directement TASK_STORE.all(). Une copie membre doublait le pic a
-// ~52 Ko (2 x 120 x 218 octets) pendant la visite. onEnter() charge le store
+// ~52 Ko (2 x 120 x 228 octets) pendant la visite. onEnter() charge le store
 // (rien ne le charge a un demarrage normal) et onExit() appelle
 // TaskStore::unload(), donc apres la sortie de l'ecran l'index ne reste pas
 // resident, pendant la lecture d'un livre comprise.
@@ -53,15 +53,17 @@ class TaskListActivity final : public UiListActivity {
   void activateIndex(int index) override;
   // La popup d'abord (elle possede tous les boutons tant qu'elle est ouverte),
   // puis Right (detail, ou cocher la selection) et Left (ajouter, ou effacer
-  // la selection), hors du contrat de base.
+  // la selection), hors du contrat de base. Confirmer sur un titre de groupe
+  // ajoute une tache dans ce groupe ; le mode selection saute les titres.
   bool handleCustomInput() override;
   // Confirmer se lit au RELACHEMENT, pas au front d'appui comme dans la base :
   // la duree de l'appui choisit entre l'action de la ligne et son menu. Meme
   // idiome et meme seuil que la Library (dispatch a la relache selon
   // getHeldTime()).
   bool handleButtons() override;
-  // Appui long tactile sur une ligne : le meme menu (en mode selection :
-  // choisir la ligne, comme un toucher).
+  // Appui long tactile sur une tache : son menu (en mode selection : choisir la
+  // ligne, comme un toucher). Sur un titre de groupe ou la ligne d'ajout : un
+  // toucher.
   void onRowLongPress(int index) override;
   // Un toucher sur une ligne rend le curseur a la liste.
   void onRowAction(const freeink::ui::ActionEvent& event) override;
@@ -109,8 +111,8 @@ class TaskListActivity final : public UiListActivity {
   // si une op attend le serveur (U+21BB seul sans compteur). Vide sinon.
   void formatHeaderRight(char* out, size_t size) const;
   void openDetailAt(int index);
-  // Menu d'une tache : cocher/rouvrir, voir, modifier, selectionner,
-  // supprimer les faites (s'il y en a), garder l'ecran allume, taille du
+  // Menu d'une tache : cocher/rouvrir, voir, modifier, groupe (s'il y en a),
+  // selectionner, supprimer les faites (s'il y en a), garder l'ecran allume, taille du
   // texte, supprimer, synchroniser. Les choix retrouvent la ligne par l'id de la
   // tache, jamais par un indice retenu : l'ordre peut avoir change entre
   // l'ouverture et le choix.

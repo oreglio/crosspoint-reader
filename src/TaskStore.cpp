@@ -247,8 +247,8 @@ void TaskStore::toJson(JsonDocument& doc) const {
     // Absent tant que le serveur n'a pas classe la tache : un index sans "o"
     // (y compris d'avant l'ordre manuel) se relit en TASK_ORDER_UNSET.
     if (rec.order != TASK_ORDER_UNSET) obj["o"] = rec.order;
-    // Absent pour une tache sans groupe : l'index d'avant les groupes reste
-    // identique octet pour octet.
+    // Absent pour une tache sans groupe ; l'index porte toutefois toujours
+    // "groups" et "gs", que l'ancien format n'avait pas.
     if (rec.group[0] != '\0') obj["g"] = rec.group;
   }
   JsonArray groupArr = doc["groups"].to<JsonArray>();
