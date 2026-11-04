@@ -15,7 +15,8 @@ void buildTaskOrder(const std::vector<TaskRecord>& records, std::vector<int>& or
   }
 }
 
-void buildTaskListRows(const std::vector<int>& order, int openCount, TaskListView view, std::vector<TaskListRow>& rows) {
+void buildTaskListRows(const std::vector<int>& order, int openCount, TaskListView view,
+                       std::vector<TaskListRow>& rows) {
   rows.clear();
   const int total = static_cast<int>(order.size());
   if (total == 0) {
