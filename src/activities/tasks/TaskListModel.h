@@ -23,7 +23,11 @@
 // fui::ListItem::isHeader, que le SDK dessine non selectionnable et sans
 // action (list.h:442). Il n'y a donc aucune ligne a sauter, et la navigation
 // de base (ButtonNavigator) sert telle quelle.
-enum class TaskRowKind : uint8_t { Task, AddTask };
+//
+// GroupHeader fait exception : titre de groupe, selectionnable (il porte les
+// actions du groupe) mais sans tache ; la navigation du mode selection le saute
+// (taskListStepSkippingHeaders).
+enum class TaskRowKind : uint8_t { Task, AddTask, GroupHeader };
 
 // Vue exclusive de l'ecran : les taches ouvertes OU les taches faites, jamais
 // les deux dans la meme liste.
@@ -34,24 +38,43 @@ struct TaskListRow {
   // Indice dans `records` (le tableau passe a buildTaskOrder) ; non
   // significatif quand kind != Task.
   int recordIndex = -1;
+  // Indice dans `groups` pour un GroupHeader ; -1 sinon.
+  int groupIndex = -1;
 };
 
-// Trie les indices de `records` avec le comparateur canonique taskOrderBefore
-// (Tache 1) — jamais re-derive ici. Une tache cochee coule aussitot dans la
-// section terminees : l'utilisateur voit sa coche prendre effet, et la rouvrir
-// passe par cette section ou par le menu de la tache. `openCount` recoit le
-// nombre de taches ouvertes en tete de `order`.
-void buildTaskOrder(const std::vector<TaskRecord>& records, std::vector<int>& order, int& openCount);
+// Trie les indices de `records`. Les ouvertes d'abord : rang de groupe (sans
+// groupe ou groupe inconnu = avant tout, puis `position` du groupe, puis son
+// id), puis le comparateur canonique taskOrderBefore (Tache 1) — jamais
+// re-derive ici. Les faites suivent, triees par taskOrderBefore seul : le
+// groupe est ignore. Une tache cochee coule aussitot en fin de liste.
+// `openCount` recoit le nombre de taches ouvertes en tete de `order`.
+void buildTaskOrder(const std::vector<TaskRecord>& records, const std::vector<TaskGroup>& groups,
+                    std::vector<int>& order, int& openCount);
 
 // Aplati `order` en lignes d'ecran selon la vue :
-//  - Open : les `openCount` premieres taches, ou une seule ligne AddTask s'il
-//    n'y en a aucune ;
-//  - Done : le reste de `order` (deja trie par priorite/id), vide s'il n'y a
-//    aucune tache faite ; la ligne AddTask n'apparait que si l'index entier
-//    est vide.
+//  - Open : les taches sans groupe (sans titre), puis, pour chaque groupe ayant
+//    au moins une tache ouverte, un GroupHeader suivi de ses taches ; une seule
+//    ligne AddTask s'il n'y a aucune tache ouverte ;
+//  - Done : le reste de `order` (deja trie par priorite/id), sans titre, vide
+//    s'il n'y a aucune tache faite ; la ligne AddTask n'apparait que si l'index
+//    entier est vide.
 // La ligne 0 est la selection par defaut (UiListActivity::onEnter() remet la
-// selection a 0) : la premiere tache de la vue, ou la ligne AddTask.
-void buildTaskListRows(const std::vector<int>& order, int openCount, TaskListView view, std::vector<TaskListRow>& rows);
+// selection a 0) : la premiere ligne de la vue.
+void buildTaskListRows(const std::vector<int>& order, int openCount, TaskListView view,
+                       const std::vector<TaskRecord>& records, const std::vector<TaskGroup>& groups,
+                       std::vector<TaskListRow>& rows);
+
+// Indice du GroupHeader precedent (direction -1) ou suivant (+1) depuis
+// `selected`, -1 s'il n'y en a pas (pas de bouclage).
+int taskListGroupJump(const std::vector<TaskListRow>& rows, int selected, int direction);
+
+// Pas de navigation du mode selection : ligne suivante (+1) ou precedente (-1)
+// qui n'est pas un GroupHeader, avec bouclage comme ButtonNavigator. -1 si
+// aucune ligne n'est un candidat.
+int taskListStepSkippingHeaders(const std::vector<TaskListRow>& rows, int selected, int direction);
+
+// Taches qui suivent le titre `headerRow` jusqu'au prochain titre.
+int taskGroupOpenCount(const std::vector<TaskListRow>& rows, int headerRow);
 
 // Ramene `selected` dans les bornes de `rows` apres une reconstruction (une
 // coche ou un repli peut raccourcir la liste). Aucune ligne n'est sautee,

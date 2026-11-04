@@ -172,14 +172,14 @@ void TaskListActivity::onExit() {
 void TaskListActivity::rebuildOrder() {
   if (!dirty) return;
   const std::vector<TaskRecord>& records = TASK_STORE.all();
-  buildTaskOrder(records, order, openCount);
+  buildTaskOrder(records, TASK_STORE.groups(), order, openCount);
   doneCount = static_cast<int>(records.size()) - openCount;
   // La vue faites s'est videe (derniere decochee, faites supprimees) : retour
   // seul a la liste ouverte, plutot qu'une liste vide sans rien a y faire.
   if (view == TaskListView::Done && doneCount == 0) view = TaskListView::Open;
   // Plus de compteur, plus de focus dessus.
   if (!hasHeaderCounter()) headerFocused = false;
-  buildTaskListRows(order, openCount, view, rows);
+  buildTaskListRows(order, openCount, view, records, TASK_STORE.groups(), rows);
   dirty = false;
 }
 
@@ -269,6 +269,9 @@ void TaskListActivity::buildRows(UiScreen& screen) {
       // Index vide seulement (buildTaskListRows()) : sur une liste peuplee,
       // l'ajout passe par le bouton Gauche.
       item.label = tr(STR_TASK_ADD_ROW);
+    } else if (row.kind == TaskRowKind::GroupHeader) {
+      // Provisoire : titre rendu comme une ligne simple (style et boutons : tache suivante).
+      item.label = TASK_STORE.groups()[static_cast<size_t>(row.groupIndex)].name;
     } else {
       const TaskRecord& rec = records[static_cast<size_t>(row.recordIndex)];
       item.label = rec.title;
@@ -315,6 +318,8 @@ void TaskListActivity::activateIndex(int index) {
       return;
     case TaskRowKind::AddTask:
       createTask();
+      return;
+    case TaskRowKind::GroupHeader:
       return;
   }
 }
@@ -1269,6 +1274,9 @@ void TaskListActivity::drawFooter() {
     // Sur le compteur : Confirmer montre l'autre vue, Gauche ajoute toujours,
     // Droite n'a pas de detail a ouvrir.
     confirmLabel = tr(STR_TASK_SHOW);
+    rightLabel = "";
+  } else if (kind == TaskRowKind::GroupHeader) {
+    confirmLabel = "";
     rightLabel = "";
   } else if (kind == TaskRowKind::AddTask) {
     confirmLabel = tr(STR_TASK_NEW_SHORT);

@@ -17,6 +17,22 @@ TaskRecord make(const char* id, const char* title, uint8_t priority, bool done =
   return r;
 }
 
+std::vector<TaskRecord> blank(size_t n) { return std::vector<TaskRecord>(n, TaskRecord{}); }
+
+TaskGroup grp(const char* id, const char* name, uint16_t position) {
+  TaskGroup g{};
+  std::snprintf(g.id, sizeof(g.id), "%s", id);
+  std::snprintf(g.name, sizeof(g.name), "%s", name);
+  g.position = position;
+  return g;
+}
+
+TaskRecord inGroup(const char* id, uint8_t priority, const char* group, bool done = false) {
+  TaskRecord r = make(id, id, priority, done);
+  std::snprintf(r.group, sizeof(r.group), "%s", group);
+  return r;
+}
+
 }  // namespace
 
 // --- buildTaskOrder ---------------------------------------------------------
@@ -31,7 +47,7 @@ TEST(BuildTaskOrder, OpenFirstByPriorityThenId) {
   };
   std::vector<int> order;
   int openCount = 0;
-  buildTaskOrder(records, order, openCount);
+  buildTaskOrder(records, {}, order, openCount);
 
   ASSERT_EQ(order.size(), 3u);
   EXPECT_EQ(openCount, 3);
@@ -47,7 +63,7 @@ TEST(BuildTaskOrder, DoneTasksSinkAfterOpenOnesAndOpenCountExcludesThem) {
   };
   std::vector<int> order;
   int openCount = 0;
-  buildTaskOrder(records, order, openCount);
+  buildTaskOrder(records, {}, order, openCount);
 
   ASSERT_EQ(order.size(), 2u);
   EXPECT_EQ(openCount, 1);
@@ -59,7 +75,7 @@ TEST(BuildTaskOrder, EqualPriorityFallsBackToId) {
   std::vector<TaskRecord> records = {make("w2", "b", 1), make("w1", "a", 1)};
   std::vector<int> order;
   int openCount = 0;
-  buildTaskOrder(records, order, openCount);
+  buildTaskOrder(records, {}, order, openCount);
   EXPECT_EQ(order[0], 1);  // w1 < w2
   EXPECT_EQ(order[1], 0);
 }
@@ -71,7 +87,7 @@ TEST(BuildTaskOrder, EqualPriorityFallsBackToId) {
 TEST(BuildTaskListRows, OpenViewListsOnlyOpenTasks) {
   std::vector<int> order = {2, 0, 1};
   std::vector<TaskListRow> rows;
-  buildTaskListRows(order, /*openCount=*/2, TaskListView::Open, rows);
+  buildTaskListRows(order, /*openCount=*/2, TaskListView::Open, blank(8), {}, rows);
 
   ASSERT_EQ(rows.size(), 2u);
   EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
@@ -83,7 +99,7 @@ TEST(BuildTaskListRows, OpenViewListsOnlyOpenTasks) {
 TEST(BuildTaskListRows, DoneViewListsOnlyDoneTasksInOrder) {
   std::vector<int> order = {2, 0, 1};
   std::vector<TaskListRow> rows;
-  buildTaskListRows(order, /*openCount=*/1, TaskListView::Done, rows);
+  buildTaskListRows(order, /*openCount=*/1, TaskListView::Done, blank(8), {}, rows);
 
   ASSERT_EQ(rows.size(), 2u);
   EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
@@ -96,7 +112,7 @@ TEST(BuildTaskListRows, EmptyIndexIsSingleAddRowInBothViews) {
   std::vector<int> order;
   std::vector<TaskListRow> rows;
   for (const TaskListView view : {TaskListView::Open, TaskListView::Done}) {
-    buildTaskListRows(order, /*openCount=*/0, view, rows);
+    buildTaskListRows(order, /*openCount=*/0, view, blank(8), {}, rows);
     ASSERT_EQ(rows.size(), 1u);
     EXPECT_EQ(rows[0].kind, TaskRowKind::AddTask);
   }
@@ -105,7 +121,7 @@ TEST(BuildTaskListRows, EmptyIndexIsSingleAddRowInBothViews) {
 TEST(BuildTaskListRows, AllDoneOpenViewShowsAddRow) {
   std::vector<int> order = {0, 1};
   std::vector<TaskListRow> rows;
-  buildTaskListRows(order, /*openCount=*/0, TaskListView::Open, rows);
+  buildTaskListRows(order, /*openCount=*/0, TaskListView::Open, blank(8), {}, rows);
   ASSERT_EQ(rows.size(), 1u);
   EXPECT_EQ(rows[0].kind, TaskRowKind::AddTask);
 }
@@ -113,7 +129,7 @@ TEST(BuildTaskListRows, AllDoneOpenViewShowsAddRow) {
 TEST(BuildTaskListRows, DoneViewWithNoDoneTasksIsEmpty) {
   std::vector<int> order = {0};
   std::vector<TaskListRow> rows;
-  buildTaskListRows(order, /*openCount=*/1, TaskListView::Done, rows);
+  buildTaskListRows(order, /*openCount=*/1, TaskListView::Done, blank(8), {}, rows);
   EXPECT_TRUE(rows.empty());
 }
 
@@ -122,12 +138,12 @@ TEST(BuildTaskListRows, RowZeroIsTheDefaultSelectionInOpenView) {
   // ou la ligne d'ajout quand il n'y en a aucune.
   std::vector<TaskListRow> rows;
 
-  buildTaskListRows(/*order=*/{4, 2, 7}, /*openCount=*/1, TaskListView::Open, rows);
+  buildTaskListRows(/*order=*/{4, 2, 7}, /*openCount=*/1, TaskListView::Open, blank(8), {}, rows);
   ASSERT_FALSE(rows.empty());
   EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
   EXPECT_EQ(rows[0].recordIndex, 4);
 
-  buildTaskListRows(/*order=*/{}, /*openCount=*/0, TaskListView::Open, rows);
+  buildTaskListRows(/*order=*/{}, /*openCount=*/0, TaskListView::Open, blank(8), {}, rows);
   ASSERT_FALSE(rows.empty());
   EXPECT_EQ(rows[0].kind, TaskRowKind::AddTask);
 }
@@ -213,4 +229,147 @@ TEST(TaskDoneTargets, NothingDoneGivesNothing) {
   std::vector<TaskRecord> records = {make("w1", "a", 1), make("w2", "b", 1)};
   uint8_t out[MAX_TASKS];
   EXPECT_EQ(taskDoneTargets(records, out), 0u);
+}
+
+// --- groupes -----------------------------------------------------------------
+
+TEST(BuildTaskOrderGroups, UngroupedThenGroupsByPositionThenPriority) {
+  std::vector<TaskGroup> groups = {grp("ga", "A", 5), grp("gb", "B", 2)};
+  std::vector<TaskRecord> records = {
+      inGroup("t1", 0, "ga"),  // groupe A (position 5)
+      inGroup("t2", 2, "gb"),  // groupe B basse
+      inGroup("t3", 0, "gb"),  // groupe B haute
+      inGroup("t4", 2, ""),    // sans groupe
+  };
+  std::vector<int> order;
+  int openCount = 0;
+  buildTaskOrder(records, groups, order, openCount);
+  ASSERT_EQ(openCount, 4);
+  EXPECT_EQ(order, (std::vector<int>{3, 2, 1, 0}));
+}
+
+TEST(BuildTaskOrderGroups, EqualPositionFallsBackToGroupId) {
+  std::vector<TaskGroup> groups = {grp("gz", "Z", 1), grp("ga", "A", 1)};
+  std::vector<TaskRecord> records = {inGroup("t1", 0, "gz"), inGroup("t2", 0, "ga")};
+  std::vector<int> order;
+  int openCount = 0;
+  buildTaskOrder(records, groups, order, openCount);
+  EXPECT_EQ(order, (std::vector<int>{1, 0}));
+}
+
+TEST(BuildTaskOrderGroups, UnknownGroupIsTreatedAsUngrouped) {
+  std::vector<TaskGroup> groups = {grp("ga", "A", 1)};
+  std::vector<TaskRecord> records = {inGroup("t1", 0, "ga"), inGroup("t2", 1, "gone")};
+  std::vector<int> order;
+  int openCount = 0;
+  buildTaskOrder(records, groups, order, openCount);
+  EXPECT_EQ(order, (std::vector<int>{1, 0}));
+
+  std::vector<TaskListRow> rows;
+  buildTaskListRows(order, openCount, TaskListView::Open, records, groups, rows);
+  ASSERT_EQ(rows.size(), 3u);
+  EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
+  EXPECT_EQ(rows[0].recordIndex, 1);
+  EXPECT_EQ(rows[1].kind, TaskRowKind::GroupHeader);
+  EXPECT_EQ(rows[1].groupIndex, 0);
+  EXPECT_EQ(rows[2].recordIndex, 0);
+}
+
+TEST(BuildTaskOrderGroups, DoneTasksIgnoreGroup) {
+  std::vector<TaskGroup> groups = {grp("ga", "A", 1)};
+  std::vector<TaskRecord> records = {inGroup("t2", 1, "ga", true), inGroup("t1", 0, "", true), inGroup("t3", 0, "ga")};
+  std::vector<int> order;
+  int openCount = 0;
+  buildTaskOrder(records, groups, order, openCount);
+  EXPECT_EQ(openCount, 1);
+  EXPECT_EQ(order, (std::vector<int>{2, 1, 0}));  // faites : priorite puis id, groupe ignore
+
+  std::vector<TaskListRow> rows;
+  buildTaskListRows(order, openCount, TaskListView::Done, records, groups, rows);
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
+  EXPECT_EQ(rows[1].kind, TaskRowKind::Task);
+}
+
+TEST(BuildTaskListRowsGroups, HeaderOnlyForGroupsWithOpenTasks) {
+  std::vector<TaskGroup> groups = {grp("ga", "A", 1), grp("gb", "B", 2), grp("gc", "C", 3)};
+  std::vector<TaskRecord> records = {inGroup("t1", 0, "gb"), inGroup("t2", 0, "ga", true), inGroup("t3", 0, ""),
+                                     inGroup("t4", 1, "gb")};
+  std::vector<int> order;
+  int openCount = 0;
+  buildTaskOrder(records, groups, order, openCount);
+  std::vector<TaskListRow> rows;
+  buildTaskListRows(order, openCount, TaskListView::Open, records, groups, rows);
+  ASSERT_EQ(rows.size(), 4u);
+  EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
+  EXPECT_EQ(rows[0].groupIndex, -1);
+  EXPECT_EQ(rows[1].kind, TaskRowKind::GroupHeader);
+  EXPECT_EQ(rows[1].groupIndex, 1);
+  EXPECT_EQ(rows[2].recordIndex, 0);
+  EXPECT_EQ(rows[3].recordIndex, 3);
+  EXPECT_EQ(taskGroupOpenCount(rows, 1), 2);
+}
+
+TEST(BuildTaskListRowsGroups, DoneViewHasNoHeaders) {
+  std::vector<TaskGroup> groups = {grp("ga", "A", 1)};
+  std::vector<TaskRecord> records = {inGroup("t1", 0, "ga", true)};
+  std::vector<int> order;
+  int openCount = 0;
+  buildTaskOrder(records, groups, order, openCount);
+  std::vector<TaskListRow> rows;
+  buildTaskListRows(order, openCount, TaskListView::Done, records, groups, rows);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
+}
+
+namespace {
+std::vector<TaskListRow> sample() {
+  // T H T T H T
+  std::vector<TaskListRow> r;
+  r.push_back({TaskRowKind::Task, 0, -1});
+  r.push_back({TaskRowKind::GroupHeader, -1, 0});
+  r.push_back({TaskRowKind::Task, 1, -1});
+  r.push_back({TaskRowKind::Task, 2, -1});
+  r.push_back({TaskRowKind::GroupHeader, -1, 1});
+  r.push_back({TaskRowKind::Task, 3, -1});
+  return r;
+}
+}  // namespace
+
+TEST(TaskListGroupJump, ForwardAndBackwardWithoutWrap) {
+  const auto rows = sample();
+  EXPECT_EQ(taskListGroupJump(rows, 0, +1), 1);
+  EXPECT_EQ(taskListGroupJump(rows, 1, +1), 4);
+  EXPECT_EQ(taskListGroupJump(rows, 4, +1), -1);
+  EXPECT_EQ(taskListGroupJump(rows, 5, -1), 4);
+  EXPECT_EQ(taskListGroupJump(rows, 4, -1), 1);
+  EXPECT_EQ(taskListGroupJump(rows, 1, -1), -1);
+  EXPECT_EQ(taskListGroupJump(rows, 0, -1), -1);
+}
+
+TEST(TaskListStepSkippingHeaders, NeverLandsOnHeaderAndWraps) {
+  const auto rows = sample();
+  for (int dir : {-1, +1}) {
+    for (int s = 0; s < static_cast<int>(rows.size()); ++s) {
+      const int n = taskListStepSkippingHeaders(rows, s, dir);
+      ASSERT_GE(n, 0);
+      EXPECT_EQ(rows[n].kind, TaskRowKind::Task);
+    }
+  }
+  EXPECT_EQ(taskListStepSkippingHeaders(rows, 0, +1), 2);
+  EXPECT_EQ(taskListStepSkippingHeaders(rows, 3, +1), 5);
+  EXPECT_EQ(taskListStepSkippingHeaders(rows, 5, +1), 0);
+  EXPECT_EQ(taskListStepSkippingHeaders(rows, 0, -1), 5);
+  EXPECT_EQ(taskListStepSkippingHeaders(rows, 2, -1), 0);
+}
+
+TEST(TaskListStepSkippingHeaders, OnlyHeadersReturnsMinusOne) {
+  std::vector<TaskListRow> r = {{TaskRowKind::GroupHeader, -1, 0}};
+  EXPECT_EQ(taskListStepSkippingHeaders(r, 0, +1), -1);
+}
+
+TEST(TaskGroupOpenCount, CountsUntilNextHeader) {
+  const auto rows = sample();
+  EXPECT_EQ(taskGroupOpenCount(rows, 1), 2);
+  EXPECT_EQ(taskGroupOpenCount(rows, 4), 1);
 }
