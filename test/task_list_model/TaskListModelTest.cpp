@@ -65,114 +65,69 @@ TEST(BuildTaskOrder, EqualPriorityFallsBackToId) {
 }
 
 // --- buildTaskListRows -------------------------------------------------------
-// The "N faites" row is an accordion: it must be present whenever something is
-// done, collapsed or expanded, and the add row exists only for an empty index.
-// Each test below was checked by mutation on a scratch copy outside the git
-// tree: it fails when the rule it names is broken, and passes again once
-// restored.
+// Vue exclusive Open / Done : la ligne d'ajout n'existe que quand la vue
+// ouverte n'a rien a montrer (index vide ou tout fait) ou que l'index est vide.
 
-TEST(BuildTaskListRows, CollapsedStillShowsTheDoneRowButNotTheDoneTasks) {
-  // Avant la refonte, la ligne n'existait qu'une fois la section ouverte :
-  // replie, rien ne permettait de l'ouvrir au doigt ni a Confirmer.
-  std::vector<int> order = {0, 1, 2};
+TEST(BuildTaskListRows, OpenViewListsOnlyOpenTasks) {
+  std::vector<int> order = {2, 0, 1};
   std::vector<TaskListRow> rows;
-  buildTaskListRows(order, /*openCount=*/2, /*showDone=*/false, rows);
+  buildTaskListRows(order, /*openCount=*/2, TaskListView::Open, rows);
 
-  ASSERT_EQ(rows.size(), 3u);
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
+  EXPECT_EQ(rows[0].recordIndex, 2);
+  EXPECT_EQ(rows[1].kind, TaskRowKind::Task);
+  EXPECT_EQ(rows[1].recordIndex, 0);
+}
+
+TEST(BuildTaskListRows, DoneViewListsOnlyDoneTasksInOrder) {
+  std::vector<int> order = {2, 0, 1};
+  std::vector<TaskListRow> rows;
+  buildTaskListRows(order, /*openCount=*/1, TaskListView::Done, rows);
+
+  ASSERT_EQ(rows.size(), 2u);
   EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
   EXPECT_EQ(rows[0].recordIndex, 0);
   EXPECT_EQ(rows[1].kind, TaskRowKind::Task);
   EXPECT_EQ(rows[1].recordIndex, 1);
-  EXPECT_EQ(rows[2].kind, TaskRowKind::DoneSection);
 }
 
-TEST(BuildTaskListRows, ExpandedPutsTheDoneRowBeforeTheDoneTail) {
-  std::vector<int> order = {0, 1, 2, 3};
-  std::vector<TaskListRow> rows;
-  buildTaskListRows(order, /*openCount=*/2, /*showDone=*/true, rows);
-
-  ASSERT_EQ(rows.size(), 5u);
-  EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
-  EXPECT_EQ(rows[1].kind, TaskRowKind::Task);
-  EXPECT_EQ(rows[2].kind, TaskRowKind::DoneSection);
-  EXPECT_EQ(rows[3].kind, TaskRowKind::Task);
-  EXPECT_EQ(rows[3].recordIndex, 2);
-  EXPECT_EQ(rows[4].kind, TaskRowKind::Task);
-  EXPECT_EQ(rows[4].recordIndex, 3);
-}
-
-TEST(BuildTaskListRows, NoDoneRowWhenNothingIsDoneInEitherState) {
-  std::vector<int> order = {0, 1};
-  std::vector<TaskListRow> rows;
-  for (const bool showDone : {false, true}) {
-    buildTaskListRows(order, /*openCount=*/2, showDone, rows);
-    ASSERT_EQ(rows.size(), 2u) << "showDone=" << showDone;
-    for (const auto& row : rows) EXPECT_EQ(row.kind, TaskRowKind::Task) << "showDone=" << showDone;
-  }
-}
-
-TEST(BuildTaskListRows, UntickingTheLastDoneTaskDropsTheCollapsedDoneRow) {
-  // La TRANSITION, section repliee : openCount passe de 1 a 2 parce que la
-  // derniere tache terminee vient d'etre decochee (depuis le detail). La ligne
-  // est la au premier appel et doit avoir disparu au second, sans rester
-  // orpheline sur un compte "0 faites". Deux appels : sans le premier, le test
-  // ne serait qu'un doublon de NoDoneRowWhenNothingIsDoneInEitherState.
-  std::vector<int> order = {0, 1};
-  std::vector<TaskListRow> rows;
-
-  buildTaskListRows(order, /*openCount=*/1, /*showDone=*/false, rows);
-  ASSERT_EQ(rows.size(), 2u);
-  EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
-  EXPECT_EQ(rows[1].kind, TaskRowKind::DoneSection);
-
-  buildTaskListRows(order, /*openCount=*/2, /*showDone=*/false, rows);
-  ASSERT_EQ(rows.size(), 2u);
-  EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
-  EXPECT_EQ(rows[1].kind, TaskRowKind::Task);
-}
-
-TEST(BuildTaskListRows, EmptyIndexYieldsExactlyTheAddRow) {
+TEST(BuildTaskListRows, EmptyIndexIsSingleAddRowInBothViews) {
   std::vector<int> order;
   std::vector<TaskListRow> rows;
-  for (const bool showDone : {false, true}) {
-    buildTaskListRows(order, /*openCount=*/0, showDone, rows);
-    ASSERT_EQ(rows.size(), 1u) << "showDone=" << showDone;
-    EXPECT_EQ(rows[0].kind, TaskRowKind::AddTask) << "showDone=" << showDone;
+  for (const TaskListView view : {TaskListView::Open, TaskListView::Done}) {
+    buildTaskListRows(order, /*openCount=*/0, view, rows);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0].kind, TaskRowKind::AddTask);
   }
 }
 
-TEST(BuildTaskListRows, NoAddRowOnceTheIndexHoldsAnything) {
-  // "Tout est fait" n'est PAS un index vide : aucune tache ouverte, mais la
-  // ligne "N faites" est la et l'ajout passe par le bouton Gauche. Seul un
-  // index reellement vide porte la ligne d'ajout — choix explicite de
-  // l'utilisateur contre une ligne toujours presente.
+TEST(BuildTaskListRows, AllDoneOpenViewShowsAddRow) {
+  std::vector<int> order = {0, 1};
   std::vector<TaskListRow> rows;
-
-  buildTaskListRows(/*order=*/{0, 1}, /*openCount=*/0, /*showDone=*/false, rows);
+  buildTaskListRows(order, /*openCount=*/0, TaskListView::Open, rows);
   ASSERT_EQ(rows.size(), 1u);
-  EXPECT_EQ(rows[0].kind, TaskRowKind::DoneSection);
-
-  buildTaskListRows(/*order=*/{0, 1}, /*openCount=*/0, /*showDone=*/true, rows);
-  ASSERT_EQ(rows.size(), 3u);
-  for (const auto& row : rows) EXPECT_NE(row.kind, TaskRowKind::AddTask);
-
-  buildTaskListRows(/*order=*/{0, 1}, /*openCount=*/1, /*showDone=*/false, rows);
-  for (const auto& row : rows) EXPECT_NE(row.kind, TaskRowKind::AddTask);
+  EXPECT_EQ(rows[0].kind, TaskRowKind::AddTask);
 }
 
-TEST(BuildTaskListRows, RowZeroIsTheDefaultSelectionForEveryState) {
-  // UiListActivity::onEnter() remet la selection a 0 et l'ecran s'ouvre
-  // replie : la ligne 0 EST la selection par defaut. Elle doit etre la
-  // premiere tache quand il y en a une d'ouverte, la ligne d'ajout sur un
-  // index vide - jamais la ligne "N faites" devant des taches ouvertes.
+TEST(BuildTaskListRows, DoneViewWithNoDoneTasksIsEmpty) {
+  std::vector<int> order = {0};
+  std::vector<TaskListRow> rows;
+  buildTaskListRows(order, /*openCount=*/1, TaskListView::Done, rows);
+  EXPECT_TRUE(rows.empty());
+}
+
+TEST(BuildTaskListRows, RowZeroIsTheDefaultSelectionInOpenView) {
+  // UiListActivity::onEnter() remet la selection a 0 : premiere tache ouverte,
+  // ou la ligne d'ajout quand il n'y en a aucune.
   std::vector<TaskListRow> rows;
 
-  buildTaskListRows(/*order=*/{4, 2, 7}, /*openCount=*/1, /*showDone=*/false, rows);
+  buildTaskListRows(/*order=*/{4, 2, 7}, /*openCount=*/1, TaskListView::Open, rows);
   ASSERT_FALSE(rows.empty());
   EXPECT_EQ(rows[0].kind, TaskRowKind::Task);
   EXPECT_EQ(rows[0].recordIndex, 4);
 
-  buildTaskListRows(/*order=*/{}, /*openCount=*/0, /*showDone=*/false, rows);
+  buildTaskListRows(/*order=*/{}, /*openCount=*/0, TaskListView::Open, rows);
   ASSERT_FALSE(rows.empty());
   EXPECT_EQ(rows[0].kind, TaskRowKind::AddTask);
 }
@@ -194,25 +149,10 @@ TEST(TaskListClampSelection, ClampsOutOfRangeIndex) {
   EXPECT_EQ(taskListClampSelection(addOnly, 1), 0);
 }
 
-TEST(TaskListClampSelection, StaysOnTheDoneRow) {
-  // Confirmer sur "N faites" deplie la section puis reconstruit : la selection
-  // doit rester sur la ligne qu'on vient d'activer, pas glisser sur la
-  // premiere tache terminee.
-  std::vector<TaskListRow> rows = {
-      {TaskRowKind::Task, 0},
-      {TaskRowKind::DoneSection, -1},
-      {TaskRowKind::Task, 1},
-  };
-  EXPECT_EQ(taskListClampSelection(rows, 1), 1);
-}
-
-TEST(TaskListClampSelection, AStaleIndexPastTheEndLandsOnTheLastRowWhateverItsKind) {
-  // Garde de bornes pure, sans scenario d'ecran derriere : un indice perime
-  // au-dela de la fin atterrit sur la derniere ligne telle qu'elle est — ici
-  // "N faites" ou la ligne d'ajout — sans chercher une tache. (Le repli de la
-  // section ne produit pas ce cas : il ne s'execute que selection sur
-  // "N faites", dont l'indice ne bouge pas.)
-  std::vector<TaskListRow> rows = {{TaskRowKind::Task, 0}, {TaskRowKind::DoneSection, -1}};
+TEST(TaskListClampSelection, AStaleIndexPastTheEndLandsOnTheLastRow) {
+  // Garde de bornes pure : un indice perime au-dela de la fin atterrit sur la
+  // derniere ligne telle qu'elle est, sans chercher une tache.
+  std::vector<TaskListRow> rows = {{TaskRowKind::Task, 0}, {TaskRowKind::Task, 1}};
   EXPECT_EQ(taskListClampSelection(rows, 4), 1);
 
   std::vector<TaskListRow> addOnly = {{TaskRowKind::AddTask, -1}};

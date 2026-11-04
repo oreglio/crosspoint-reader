@@ -18,13 +18,16 @@
 // implementation a maintenir en plus des ~40 ecrans qui partagent la
 // premiere. Extrait pour rester testable a l'hote sans renderer ni TaskStore.
 
-// Une ligne d'ecran est une tache, la ligne "N faites" qui deplie ou replie la
-// section terminees, ou la ligne "+ Ajouter une tache" d'un index vide. Les
-// trois sont selectionnables : aucune n'est un fui::ListItem::isHeader, que le
-// SDK dessine non selectionnable et sans action (list.h:442). Il n'y a donc
-// plus aucune ligne a sauter, et la navigation de base (ButtonNavigator) sert
-// telle quelle.
-enum class TaskRowKind : uint8_t { Task, DoneSection, AddTask };
+// Une ligne d'ecran est une tache ou la ligne "+ Ajouter une tache" d'un
+// index vide. Les deux sont selectionnables : aucune n'est un
+// fui::ListItem::isHeader, que le SDK dessine non selectionnable et sans
+// action (list.h:442). Il n'y a donc aucune ligne a sauter, et la navigation
+// de base (ButtonNavigator) sert telle quelle.
+enum class TaskRowKind : uint8_t { Task, AddTask };
+
+// Vue exclusive de l'ecran : les taches ouvertes OU les taches faites, jamais
+// les deux dans la meme liste.
+enum class TaskListView : uint8_t { Open, Done };
 
 struct TaskListRow {
   TaskRowKind kind = TaskRowKind::Task;
@@ -40,16 +43,15 @@ struct TaskListRow {
 // nombre de taches ouvertes en tete de `order`.
 void buildTaskOrder(const std::vector<TaskRecord>& records, std::vector<int>& order, int& openCount);
 
-// Aplati `order` en lignes d'ecran :
-//  - index vide : une seule ligne AddTask, rien d'autre ;
-//  - sinon les `openCount` premieres taches, puis - des qu'il reste au moins
-//    une tache terminee, section repliee OU depliee - la ligne DoneSection,
-//    suivie du reste (deja trie par priorite/id) seulement si showDone.
-// La ligne 0 est donc la premiere tache ouverte s'il y en a une, la ligne
-// AddTask si l'index est vide, et la ligne DoneSection si tout est fait :
-// c'est la selection par defaut, puisque UiListActivity::onEnter() remet la
-// selection a 0.
-void buildTaskListRows(const std::vector<int>& order, int openCount, bool showDone, std::vector<TaskListRow>& rows);
+// Aplati `order` en lignes d'ecran selon la vue :
+//  - Open : les `openCount` premieres taches, ou une seule ligne AddTask s'il
+//    n'y en a aucune ;
+//  - Done : le reste de `order` (deja trie par priorite/id), vide s'il n'y a
+//    aucune tache faite ; la ligne AddTask n'apparait que si l'index entier
+//    est vide.
+// La ligne 0 est la selection par defaut (UiListActivity::onEnter() remet la
+// selection a 0) : la premiere tache de la vue, ou la ligne AddTask.
+void buildTaskListRows(const std::vector<int>& order, int openCount, TaskListView view, std::vector<TaskListRow>& rows);
 
 // Ramene `selected` dans les bornes de `rows` apres une reconstruction (une
 // coche ou un repli peut raccourcir la liste). Aucune ligne n'est sautee,
