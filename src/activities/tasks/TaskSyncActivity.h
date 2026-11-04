@@ -79,11 +79,13 @@ class TaskSyncActivity final : public Activity {
   void fail(Failure failure);
   void closeNoteFile();
 
-  static void onHeader(void* ctx, const char* cursor, bool more, bool reset);
+  static void onHeader(void* ctx, const char* cursor, bool more, bool reset, long schema);
   static void onTask(void* ctx, const TaskRecord& rec);
   static void onDeleted(void* ctx, const char* id);
   static void onNoteChunk(void* ctx, const char* id, const char* data, size_t len, bool last);
   static void onRejected(void* ctx, const char* id, const char* reason);
+  static void onGroup(void* ctx, const TaskGroup& g);
+  static void onGroupDeleted(void* ctx, const char* id);
 
   State state_ = State::WIFI_SELECTION;
   Failure failure_ = Failure::None;
@@ -105,12 +107,19 @@ class TaskSyncActivity final : public Activity {
   Rejection rejections_[kMaxShownRejections] = {};
   size_t shownRejections_ = 0;
   int rejectedCount_ = 0;
+  // Faux des qu'un tour valide a ete servi en schema 1 : les groupes ne sont
+  // alors pas livres, et la liseuse ne doit pas se dire synchronisee.
+  bool everyRoundSchema2_ = true;
+  // Vrai si un tour valide de cette sync a remplace l'index entier (reset ou
+  // instantane sans curseur) : seul un tel tour a pu reposer TOUS les groupes.
+  bool fullSnapshotCommitted_ = false;
 
   // Etat du tour en cours ; jete si le tour echoue.
   char roundCursor_[TASK_SYNC_CURSOR_MAX + 1] = {};
   bool roundMore_ = false;
   bool roundReset_ = false;
   bool roundFullSnapshot_ = false;
+  long roundSchema_ = 0;
   int roundReceived_ = 0;
   size_t roundShownStart_ = 0;
   int roundRejectedStart_ = 0;

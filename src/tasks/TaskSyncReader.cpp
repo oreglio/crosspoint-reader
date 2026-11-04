@@ -29,6 +29,19 @@ bool isValidTaskId(const char* id) {
   return true;
 }
 
+// Meme regle que TaskStore (isValidGroupId) : 1 a TASK_ID_LEN octets, sans
+// caractere de controle ni '"'. Le format serveur ('g' + 8 hex) n'est pas fige,
+// mais l'id atterrit dans un tableau fixe et repart dans une op JSON.
+bool isValidGroupId(const char* id) {
+  const size_t len = std::strlen(id);
+  if (len == 0 || len > TASK_ID_LEN) return false;
+  for (size_t i = 0; i < len; i++) {
+    const unsigned char c = static_cast<unsigned char>(id[i]);
+    if (c < 0x20 || c == 0x7F || c == '"') return false;
+  }
+  return true;
+}
+
 // Le curseur repart tel quel dans le corps de la requête suivante, assemblé par
 // snprintf : hors de cet alphabet il y injecterait de la syntaxe JSON. Le `=`
 // est toléré par choix — le serveur ne padde pas (le base64url de Node est sans
@@ -69,7 +82,11 @@ struct FieldSink {
   char id[TASK_ID_LEN + 1] = {};
   char title[TASK_TITLE_MAX + 1] = {};
   char cursor[TASK_SYNC_CURSOR_MAX + 1] = {};
+  // Schema 2 : id de groupe (ligne de groupe, ou groupe d'une tache) et nom.
+  char group[TASK_ID_LEN + 1] = {};
+  char name[TASK_GROUP_NAME_MAX + 1] = {};
   long schema = -1;
+  long position = 0;
   long priority = TASK_PRIORITY_NORMAL;
   long noteBytes = 0;
   long order = TASK_ORDER_UNSET;
@@ -77,6 +94,12 @@ struct FieldSink {
   bool deleted = false;
   bool more = false;
   bool reset = false;
+  // Cles vues au premier niveau, quelle que soit leur valeur : `group` sans
+  // `id` designe une ligne de groupe.
+  bool sawIdKey = false;
+  bool sawGroupKey = false;
+  // `group` present mais hors gabarit : la tache passe sans groupe.
+  bool groupMalformed = false;
 
   // Valeur hors contrat (curseur trop long ou hors alphabet, nombre aberrant,
   // octet nul dans une chaîne) : la ligne entière est refusée.
@@ -111,6 +134,10 @@ void sinkKey(void* ctx, const char* k, size_t len) {
   const size_t n = len < sizeof(f->key) - 1 ? len : sizeof(f->key) - 1;
   std::memcpy(f->key, k, n);
   f->key[n] = '\0';
+  if (atTopLevel(f)) {
+    if (keyIs(f, "id")) f->sawIdKey = true;
+    if (keyIs(f, "group")) f->sawGroupKey = true;
+  }
 }
 
 void sinkString(void* ctx, const char* v, size_t len) {
@@ -140,6 +167,20 @@ void sinkString(void* ctx, const char* v, size_t len) {
       std::memcpy(f->title, v, n);
       f->title[n] = '\0';
     }
+  } else if (keyIs(f, "group")) {
+    // Tronquer un id de groupe le ramenerait peut-etre a celui d'un autre.
+    if (!copyBounded(f->group, sizeof(f->group), v, len) || !isValidGroupId(f->group)) {
+      f->group[0] = '\0';
+      f->groupMalformed = true;
+    }
+  } else if (keyIs(f, "name")) {
+    if (std::memchr(v, '\0', len) != nullptr) {
+      f->badValue = true;
+    } else {
+      const size_t n = utf8TruncateLen(v, len, TASK_GROUP_NAME_MAX);
+      std::memcpy(f->name, v, n);
+      f->name[n] = '\0';
+    }
   } else if (keyIs(f, "cursor")) {
     // Raccourcir un curseur serait une perte de données silencieuse à la
     // synchro suivante : on refuse la réponse plutôt que de le tronquer.
@@ -162,11 +203,13 @@ void sinkNumber(void* ctx, const char* v, size_t len) {
       slot = &f->order;
     else if (keyIs(f, "schema"))
       slot = &f->schema;
+    else if (keyIs(f, "position"))
+      slot = &f->position;
   }
   f->key[0] = '\0';
   // Les autres nombres ne nous servent pas : `count` est informatif, et refuser
   // la réponse parce qu'il serait écrit autrement casserait la synchro pour
-  // rien. Seuls les quatre champs dont on se sert doivent être des entiers.
+  // rien. Seuls les champs dont on se sert doivent être des entiers.
   if (slot == nullptr) return;
   char buf[16];
   if (!copyBounded(buf, sizeof(buf), v, len)) {
@@ -334,7 +377,7 @@ void TaskSyncReader::parseHeaderLine(size_t len) {
     error_ = true;
     return;
   }
-  if (sink.schema != TASK_SYNC_SCHEMA) {
+  if (sink.schema < TASK_SYNC_SCHEMA_MIN || sink.schema > TASK_SYNC_SCHEMA_MAX) {
     TASK_LOG_ERR("sync: unsupported schema %ld", sink.schema);
     error_ = true;
     return;
@@ -352,7 +395,7 @@ void TaskSyncReader::parseHeaderLine(size_t len) {
     return;
   }
   sawHeader_ = true;
-  if (cb_.onHeader != nullptr) cb_.onHeader(cb_.ctx, sink.cursor, sink.more, sink.reset);
+  if (cb_.onHeader != nullptr) cb_.onHeader(cb_.ctx, sink.cursor, sink.more, sink.reset, sink.schema);
 }
 
 void TaskSyncReader::parseTaskLine(size_t len) {
@@ -370,6 +413,14 @@ void TaskSyncReader::parseTaskLine(size_t len) {
     return;
   }
   const size_t noteBytes = static_cast<size_t>(sink.noteBytes);
+
+  if (sink.sawGroupKey && !sink.sawIdKey) {
+    emitGroupLine(sink.group, sink.name, sink.position, sink.deleted);
+    // Le serveur n'en annonce jamais, mais le cadrage doit tenir quoi qu'il
+    // arrive.
+    beginNoteBlock(nullptr, noteBytes);
+    return;
+  }
 
   if (!isValidTaskId(sink.id)) {
     TASK_LOG_ERR("sync: task line with a malformed id skipped");
@@ -392,9 +443,31 @@ void TaskSyncReader::parseTaskLine(size_t len) {
   rec.noteBytes = static_cast<uint16_t>(noteBytes);
   // Hors de 0..65534 (ou absent : serveur d'avant l'ordre manuel) : pas classee.
   rec.order = (sink.order >= 0 && sink.order < TASK_ORDER_UNSET) ? static_cast<uint16_t>(sink.order) : TASK_ORDER_UNSET;
+  // Cle absente (schema 1, ou tache sans groupe en schema 2) : sans groupe. Un
+  // groupe encore inconnu reste reference ; l'ecran range la tache sans groupe
+  // jusqu'a ce que sa ligne arrive.
+  if (sink.groupMalformed) TASK_LOG_ERR("sync: task %s has a malformed group id; kept without a group", rec.id);
+  std::snprintf(rec.group, sizeof(rec.group), "%s", sink.group);
   if (cb_.onTask != nullptr) cb_.onTask(cb_.ctx, rec);
 
   beginNoteBlock(rec.id, noteBytes);
+}
+
+void TaskSyncReader::emitGroupLine(const char* id, const char* name, const long position, const bool deleted) {
+  if (!isValidGroupId(id)) {
+    TASK_LOG_ERR("sync: group line with a malformed id skipped");
+    return;
+  }
+  if (deleted) {
+    if (cb_.onGroupDeleted != nullptr) cb_.onGroupDeleted(cb_.ctx, id);
+    return;
+  }
+  TaskGroup g{};
+  std::snprintf(g.id, sizeof(g.id), "%s", id);
+  std::snprintf(g.name, sizeof(g.name), "%s", name);
+  // Cle de tri seulement, jamais un indice : bornee plutot que repliee.
+  g.position = position < 0 ? 0 : (position > UINT16_MAX ? UINT16_MAX : static_cast<uint16_t>(position));
+  if (cb_.onGroup != nullptr) cb_.onGroup(cb_.ctx, g);
 }
 
 void TaskSyncReader::beginNoteBlock(const char* id, size_t bytes) {

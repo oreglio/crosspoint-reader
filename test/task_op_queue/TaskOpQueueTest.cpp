@@ -266,3 +266,109 @@ TEST(TaskOpQueue, OutOfRangePriorityFallsBackToNormal) {
   EXPECT_EQ(back.kind, TaskOpKind::Prio);
   EXPECT_EQ(back.priority, TASK_PRIORITY_NORMAL);
 }
+
+// --- Groupes (schema 2) ---
+
+namespace {
+TaskOp groupOp(const char* id, const char* group) {
+  TaskOp op{};
+  op.kind = TaskOpKind::Group;
+  std::snprintf(op.id, sizeof(op.id), "%s", id);
+  std::snprintf(op.group, sizeof(op.group), "%s", group);
+  return op;
+}
+}  // namespace
+
+// Sans groupe, la ligne d'un ajout reste celle d'avant les groupes, octet pour
+// octet : un serveur schema 1 la lit comme avant.
+TEST(TaskOpQueue, AddWithoutAGroupCarriesNoGroupKey) {
+  char line[TASK_OP_LINE_MAX];
+  const size_t n = taskOpToLine(addOp("d0000abc1", "Cafe", 0), line, sizeof(line));
+  ASSERT_GT(n, 0u);
+  EXPECT_STREQ(line, "{\"op\":\"add\",\"id\":\"d0000abc1\",\"title\":\"Cafe\",\"priority\":0}");
+  TaskOp back{};
+  ASSERT_TRUE(taskOpFromLine(line, n, back));
+  EXPECT_STREQ(back.group, "");
+}
+
+TEST(TaskOpQueue, AddWithAGroupRoundTrips) {
+  TaskOp op = addOp("d0000abc1", "Cafe", 0);
+  std::snprintf(op.group, sizeof(op.group), "g1a2b3c4");
+  char line[TASK_OP_LINE_MAX];
+  const size_t n = taskOpToLine(op, line, sizeof(line));
+  ASSERT_GT(n, 0u);
+  EXPECT_STREQ(line, "{\"op\":\"add\",\"id\":\"d0000abc1\",\"title\":\"Cafe\",\"priority\":0,\"group\":\"g1a2b3c4\"}");
+
+  TaskOp back{};
+  ASSERT_TRUE(taskOpFromLine(line, n, back));
+  EXPECT_EQ(back.kind, TaskOpKind::Add);
+  EXPECT_STREQ(back.title, "Cafe");
+  EXPECT_STREQ(back.group, "g1a2b3c4");
+}
+
+TEST(TaskOpQueue, GroupOpWithAnIdRoundTrips) {
+  char line[TASK_OP_LINE_MAX];
+  const size_t n = taskOpToLine(groupOp("w17ab93c2", "g1a2b3c4"), line, sizeof(line));
+  ASSERT_GT(n, 0u);
+  EXPECT_STREQ(line, "{\"op\":\"group\",\"id\":\"w17ab93c2\",\"group\":\"g1a2b3c4\"}");
+
+  TaskOp back{};
+  ASSERT_TRUE(taskOpFromLine(line, n, back));
+  EXPECT_EQ(back.kind, TaskOpKind::Group);
+  EXPECT_STREQ(back.id, "w17ab93c2");
+  EXPECT_STREQ(back.group, "g1a2b3c4");
+}
+
+// Le serveur lit une cle `group` absente comme « rien a faire » : retirer une
+// tache de son groupe doit donc envoyer `null`, jamais omettre la cle.
+TEST(TaskOpQueue, GroupOpWithoutAGroupSendsNull) {
+  char line[TASK_OP_LINE_MAX];
+  const size_t n = taskOpToLine(groupOp("w17ab93c2", ""), line, sizeof(line));
+  ASSERT_GT(n, 0u);
+  EXPECT_STREQ(line, "{\"op\":\"group\",\"id\":\"w17ab93c2\",\"group\":null}");
+
+  TaskOp back{};
+  std::snprintf(back.group, sizeof(back.group), "stale");
+  ASSERT_TRUE(taskOpFromLine(line, n, back));
+  EXPECT_EQ(back.kind, TaskOpKind::Group);
+  EXPECT_STREQ(back.group, "");
+}
+
+// Une op group sans sa cle ne vient pas de taskOpToLine : la rejouer en
+// `null` retirerait la tache de son groupe pour une ligne corrompue.
+TEST(TaskOpQueue, RejectsAGroupOpLineWithoutItsGroupKey) {
+  const char line[] = "{\"op\":\"group\",\"id\":\"w17ab93c2\"}";
+  TaskOp back{};
+  EXPECT_FALSE(taskOpFromLine(line, sizeof(line) - 1, back));
+}
+
+TEST(TaskOpQueue, RejectsAGroupIdLongerThanTheField) {
+  const char line[] = "{\"op\":\"group\",\"id\":\"w17ab93c2\",\"group\":\"g1a2b3c4ffff\"}";
+  TaskOp back{};
+  EXPECT_FALSE(taskOpFromLine(line, sizeof(line) - 1, back));
+}
+
+TEST(TaskOpQueue, AsksForSchemaTwo) {
+  char body[256];
+  const size_t n = taskOpsToRequestBody(nullptr, 0, "MQ", body, sizeof(body));
+  ASSERT_GT(n, 0u);
+  EXPECT_EQ(std::string(body, n).rfind("{\"schema\":2,", 0), 0u);
+}
+
+// Pire ligne que la file puisse ecrire : un ajout au titre de 200 octets qui
+// s'echappent tous en deux, et un groupe de 9 octets qui en font autant. Elle
+// doit tenir dans le tampon de relecture du decoupeur, sinon l'op serait
+// ecrite puis sautee a chaque lecture.
+TEST(TaskOpQueue, TheWorstLineFitsTheReadBackBuffer) {
+  TaskOp op = addOp("d0000abc1", std::string(TASK_TITLE_MAX, '"').c_str(), 2);
+  std::snprintf(op.group, sizeof(op.group), "%s", std::string(TASK_ID_LEN, '\\').c_str());
+  char record[TASK_OP_RECORD_MAX];
+  const size_t n = taskOpToRecord(op, record, sizeof(record));
+  ASSERT_GT(n, 0u);
+  EXPECT_LT(n - 2, TASK_OP_LINE_MAX);
+
+  const std::vector<TaskOp> back = splitQueue(std::string(record, n));
+  ASSERT_EQ(back.size(), 1u);
+  EXPECT_STREQ(back[0].title, op.title);
+  EXPECT_STREQ(back[0].group, op.group);
+}

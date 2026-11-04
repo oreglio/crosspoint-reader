@@ -6,6 +6,7 @@
 #include <new>
 
 #include "StreamingJsonParser.h"
+#include "TaskSyncReader.h"
 
 namespace {
 
@@ -21,6 +22,8 @@ const char* kindName(const TaskOpKind kind) {
       return "title";
     case TaskOpKind::Del:
       return "del";
+    case TaskOpKind::Group:
+      return "group";
   }
   return "add";
 }
@@ -44,6 +47,10 @@ bool kindFromName(const char* name, TaskOpKind& out) {
   }
   if (std::strcmp(name, "del") == 0) {
     out = TaskOpKind::Del;
+    return true;
+  }
+  if (std::strcmp(name, "group") == 0) {
+    out = TaskOpKind::Group;
     return true;
   }
   return false;
@@ -84,9 +91,13 @@ struct OpSink {
   char op[12] = {};
   char id[TASK_ID_LEN + 1] = {};
   char title[TASK_TITLE_MAX + 1] = {};
+  char group[TASK_ID_LEN + 1] = {};
   long priority = TASK_PRIORITY_NORMAL;
   bool done = false;
   bool sawOp = false;
+  // Une op group porte toujours sa cle (id ou null) : sans elle, la ligne ne
+  // vient pas de taskOpToLine.
+  bool sawGroup = false;
   // Valeur hors gabarit (id ou titre trop long, nombre illisible) : la ligne
   // entiere est refusee plutot que tronquee.
   bool badValue = false;
@@ -128,6 +139,15 @@ void opString(void* ctx, const char* v, size_t len) {
       std::memcpy(s->title, v, len);
       s->title[len] = '\0';
     }
+  } else if (std::strcmp(s->key, "group") == 0) {
+    // Meme raison que pour l'id : tronquer viserait peut-etre un autre groupe.
+    if (len > TASK_ID_LEN) {
+      s->badValue = true;
+    } else {
+      std::memcpy(s->group, v, len);
+      s->group[len] = '\0';
+      s->sawGroup = true;
+    }
   }
   s->key[0] = '\0';
 }
@@ -162,7 +182,15 @@ void opBool(void* ctx, bool value) {
   s->key[0] = '\0';
 }
 
-void opNull(void* ctx) { static_cast<OpSink*>(ctx)->key[0] = '\0'; }
+void opNull(void* ctx) {
+  auto* s = static_cast<OpSink*>(ctx);
+  // `"group":null` : retirer la tache de son groupe.
+  if (s->objDepth == 1 && std::strcmp(s->key, "group") == 0) {
+    s->group[0] = '\0';
+    s->sawGroup = true;
+  }
+  s->key[0] = '\0';
+}
 
 void opObjectStart(void* ctx) {
   auto* s = static_cast<OpSink*>(ctx);
@@ -210,6 +238,23 @@ size_t taskOpToLine(const TaskOp& op, char* out, size_t outSize) {
     const int d = std::snprintf(out + pos, outSize - pos, ",\"done\":%s", op.done ? "true" : "false");
     if (d < 0 || pos + static_cast<size_t>(d) >= outSize) return 0;
     pos += static_cast<size_t>(d);
+  }
+  // Add : cle omise sans groupe, la ligne reste celle d'avant les groupes.
+  // Group : TOUJOURS la cle — le serveur lit son absence comme « rien a
+  // faire », donc retirer du groupe s'ecrit null.
+  const bool withGroup = (op.kind == TaskOpKind::Add && op.group[0] != '\0') || op.kind == TaskOpKind::Group;
+  if (withGroup) {
+    const bool isNull = op.group[0] == '\0';
+    const int lead = std::snprintf(out + pos, outSize - pos, isNull ? ",\"group\":null" : ",\"group\":\"");
+    if (lead < 0 || pos + static_cast<size_t>(lead) >= outSize) return 0;
+    pos += static_cast<size_t>(lead);
+    if (!isNull) {
+      // TaskStore ne garde que des ids sans '"' ni controle ; echapper quand
+      // meme ne coute rien et garde la ligne valide quoi qu'on lui passe.
+      if (!appendEscaped(op.group, out, outSize, pos)) return 0;
+      if (pos + 1 >= outSize) return 0;
+      out[pos++] = '"';
+    }
   }
   if (pos + 2 > outSize) return 0;
   out[pos++] = '}';
@@ -279,10 +324,12 @@ bool taskOpFromLine(void* parserStorage, const char* line, const size_t len, Tas
 
   TaskOpKind kind{};
   if (!kindFromName(sink.op, kind)) return false;
+  if (kind == TaskOpKind::Group && !sink.sawGroup) return false;
   out = TaskOp{};
   out.kind = kind;
   std::snprintf(out.id, sizeof(out.id), "%s", sink.id);
   std::snprintf(out.title, sizeof(out.title), "%s", sink.title);
+  std::snprintf(out.group, sizeof(out.group), "%s", sink.group);
   out.priority = (sink.priority == TASK_PRIORITY_HIGH || sink.priority == TASK_PRIORITY_LOW)
                      ? static_cast<uint8_t>(sink.priority)
                      : TASK_PRIORITY_NORMAL;
@@ -299,7 +346,7 @@ size_t taskOpsToRequestBody(const TaskOp* ops, const size_t count, const char* c
   // croire que tout est parti.
   if (count > TASK_MAX_OPS_PER_SYNC) return 0;
 
-  const int head = std::snprintf(out, outSize, "{\"schema\":1,\"cursor\":\"");
+  const int head = std::snprintf(out, outSize, "{\"schema\":%ld,\"cursor\":\"", TASK_SYNC_REQUEST_SCHEMA);
   if (head < 0 || static_cast<size_t>(head) >= outSize) return 0;
   size_t pos = static_cast<size_t>(head);
 

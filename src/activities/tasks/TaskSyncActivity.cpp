@@ -36,9 +36,9 @@ constexpr uint32_t MIN_MAX_ALLOC_HEAP_FOR_TLS = 20000;
 // tranche de TASK_MAX_OPS_PER_SYNC ops. 20 tours = 1000 ops en attente, bien
 // au-dela d'un usage hors ligne plausible, sans boucle infinie possible.
 constexpr int MAX_ROUNDS = 20;
-// Borne d'une ligne d'op serialisee (voir TASK_OP_LINE_BUF dans TaskStore.cpp),
+// Borne d'une ligne d'op serialisee (pire cas epingle sous TASK_OP_LINE_MAX),
 // pour dimensionner le corps au plus juste plutot qu'a 12 Ko d'office.
-constexpr size_t OP_LINE_BOUND = 512;
+constexpr size_t OP_LINE_BOUND = TASK_OP_LINE_MAX;
 constexpr size_t BODY_ENVELOPE = 128;
 #ifdef SIMULATOR
 // Le client HTTP du simulateur n'a pas d'API de flux : le corps arrive entier,
@@ -194,6 +194,20 @@ void TaskSyncActivity::runSync() {
   }
 
   Storage.mkdir(TaskStore::stagedNotesDir());
+
+  // Premier passage en schema 2 (spec CrossTasks groupes, partie 2) : tant que
+  // la liseuse synchronisait en schema 1, son curseur a depasse les `seq` des
+  // groupes et affectations crees entre-temps, qu'un delta ne rendrait jamais.
+  // Sans curseur, le premier tour est un instantane complet qui remplace tout,
+  // groupes compris (roundFullSnapshot_ -> stageReset). Aucune op n'est perdue :
+  // le serveur les applique avant de calculer l'instantane. Le drapeau n'est
+  // pose qu'a la fin d'une sync complete servie en schema 2 ; d'ici la, chaque
+  // sync recommence ainsi.
+  if (!TASK_STORE.groupsSynced()) {
+    LOG_INF(TAG, "Groups not synced yet; dropping the cursor for a full snapshot");
+    TASK_STORE.clearCursor();
+  }
+
   const std::string url = base + "/api/v1/tasks/sync";
   freeink::SecureHttpClient http;
   http.setCACert(ISRG_ROOT_X1_PEM);
@@ -223,6 +237,20 @@ void TaskSyncActivity::runSync() {
   }
   http.end();
 
+  // Chaque tour a deja sauvegarde l'index : ce saveIndex() n'ajoute que le
+  // drapeau. Pose apres la DERNIERE page, jamais au milieu d'un instantane en
+  // plusieurs pages, et seulement si un instantane complet a bien eu lieu (un
+  // clearCursor() refuse par la carte aurait laisse un simple delta). S'il ne
+  // s'ecrit pas, la sync suivante refait un instantane complet : cout de bande
+  // passante, aucune perte.
+  if (allOpsSent && everyRoundSchema2_ && fullSnapshotCommitted_ && !TASK_STORE.groupsSynced()) {
+    TASK_STORE.setGroupsSynced(true);
+    if (!TASK_STORE.saveIndex()) {
+      LOG_ERR(TAG, "Could not save the groups-synced flag; the next sync takes a full snapshot again");
+      TASK_STORE.setGroupsSynced(false);
+    }
+  }
+
   // DERNIERE ecriture de la sync, apres que chaque tour a ete accepte : c'est
   // l'ordre inverse d'un echec, ou la file n'est jamais touchee.
   if (allOpsSent) {
@@ -249,7 +277,7 @@ TaskSyncActivity::Failure TaskSyncActivity::runRound(freeink::SecureHttpClient& 
   char cursor[TASK_CURSOR_BUF];
   if (!TASK_STORE.readCursor(cursor, sizeof(cursor))) cursor[0] = '\0';
 
-  // Les deux tampons sont sur le tas : 50 ops font ~10,7 Ko et le corps
+  // Les deux tampons sont sur le tas : 50 ops font ~11,2 Ko et le corps
   // jusqu'a 12 Ko, bien trop pour la pile de 8 Ko de la boucle principale. Les
   // ops sont rendues des que le corps est assemble, avant la connexion TLS.
   std::unique_ptr<char[]> body;
@@ -288,7 +316,8 @@ TaskSyncActivity::Failure TaskSyncActivity::runRound(freeink::SecureHttpClient& 
   }
 
   // Le lecteur porte un tampon de ligne de 640 octets : sur le tas aussi.
-  const TaskSyncCallbacks callbacks{this, onHeader, onTask, onDeleted, onNoteChunk, onRejected};
+  const TaskSyncCallbacks callbacks{this,        onHeader,   onTask,  onDeleted,
+                                    onNoteChunk, onRejected, onGroup, onGroupDeleted};
   auto reader = makeUniqueNoThrow<TaskSyncReader>(callbacks);
   if (!reader) {
     LOG_ERR(TAG, "OOM: sync reader");
@@ -310,6 +339,7 @@ TaskSyncActivity::Failure TaskSyncActivity::runRound(freeink::SecureHttpClient& 
   // comme sur un reset. Sinon une tache supprimee sur le web pendant que le
   // curseur manquait resterait sur la liseuse pour toujours.
   roundFullSnapshot_ = cursor[0] == '\0';
+  roundSchema_ = 0;
   roundReceived_ = 0;
   roundShownStart_ = shownRejections_;
   roundRejectedStart_ = rejectedCount_;
@@ -446,6 +476,8 @@ TaskSyncActivity::Failure TaskSyncActivity::runRound(freeink::SecureHttpClient& 
     TASK_STORE.clearCursor();
     return Failure::StorageFailed;
   }
+  if (roundSchema_ != TASK_SYNC_REQUEST_SCHEMA) everyRoundSchema2_ = false;
+  if (roundReset_) fullSnapshotCommitted_ = true;
   return Failure::None;
 }
 
@@ -468,13 +500,15 @@ void TaskSyncActivity::resolveRejectionTitles() {
 
 // ------------------------------------------------------------ rappels du lecteur
 
-void TaskSyncActivity::onHeader(void* ctx, const char* cursor, const bool more, const bool reset) {
+void TaskSyncActivity::onHeader(void* ctx, const char* cursor, const bool more, const bool reset, const long schema) {
   auto* self = static_cast<TaskSyncActivity*>(ctx);
   snprintf(self->roundCursor_, sizeof(self->roundCursor_), "%s", cursor);
   self->roundMore_ = more;
+  self->roundSchema_ = schema;
   // Sur reset, ou sur l'instantane complet d'une sync sans curseur, l'index
-  // repart de zero AVANT la premiere ligne. En RAM seulement : la carte ne
-  // change qu'au commit du tour.
+  // repart de zero AVANT la premiere ligne — groupes compris : stageReset()
+  // les vide, et les lignes de groupe qui suivent les reposent. En RAM
+  // seulement : la carte ne change qu'au commit du tour.
   self->roundReset_ = reset || self->roundFullSnapshot_;
   if (self->roundReset_) TASK_STORE.stageReset();
 }
@@ -489,6 +523,21 @@ void TaskSyncActivity::onDeleted(void* ctx, const char* id) {
   auto* self = static_cast<TaskSyncActivity*>(ctx);
   TASK_STORE.stageRemove(id);
   self->roundReceived_++;
+}
+
+// Les groupes ne comptent pas dans `received` : le resume parle de taches.
+// Au-dela de MAX_GROUPS, upsertGroup() refuse avec un LOG_ERR, et les taches
+// de ce groupe s'affichent sans groupe (spec : on garde les 16 premiers).
+void TaskSyncActivity::onGroup(void* ctx, const TaskGroup& g) {
+  (void)ctx;
+  TASK_STORE.upsertGroup(g);
+}
+
+// removeGroup() vide aussi `group` des taches qui le portent : si la
+// tombstone arrive avant les taches, aucune ne garde de reference morte.
+void TaskSyncActivity::onGroupDeleted(void* ctx, const char* id) {
+  (void)ctx;
+  TASK_STORE.removeGroup(id);
 }
 
 void TaskSyncActivity::onNoteChunk(void* ctx, const char* id, const char* data, const size_t len, const bool last) {

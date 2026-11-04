@@ -6,10 +6,14 @@
 #include "StreamingJsonParser.h"
 #include "TaskRecord.h"
 
-// Version de cadrage que ce lecteur sait lire. Un en-tête qui annonce autre
+// Versions de cadrage que ce lecteur sait lire. Un en-tête qui annonce autre
 // chose peut cadrer différemment : mieux vaut refuser la réponse que relire une
-// note comme si c'était du JSON.
-inline constexpr long TASK_SYNC_SCHEMA = 1;
+// note comme si c'était du JSON. La liseuse demande le schema 2 (groupes) ; un
+// serveur d'avant les groupes répond 1, sans aucune donnée de groupe, et la
+// sync continue de marcher contre lui.
+inline constexpr long TASK_SYNC_SCHEMA_MIN = 1;
+inline constexpr long TASK_SYNC_SCHEMA_MAX = 2;
+inline constexpr long TASK_SYNC_REQUEST_SCHEMA = 2;
 
 // Le curseur est opaque et base64url ; la spec le plafonne à 32 caractères et
 // le pire cas mesuré côté serveur en fait 22.
@@ -17,7 +21,9 @@ inline constexpr size_t TASK_SYNC_CURSOR_MAX = 32;
 
 struct TaskSyncCallbacks {
   void* ctx;
-  void (*onHeader)(void* ctx, const char* cursor, bool more, bool reset);
+  // `schema` : celui que le serveur a réellement servi (1 ou 2). Seul un
+  // schema 2 livre les groupes.
+  void (*onHeader)(void* ctx, const char* cursor, bool more, bool reset, long schema);
   void (*onTask)(void* ctx, const TaskRecord& rec);
   void (*onDeleted)(void* ctx, const char* id);
   // Émis par morceaux au fil de l'arrivée réseau ; `last` marque le dernier.
@@ -30,6 +36,11 @@ struct TaskSyncCallbacks {
   // jeter les rejets accumulés dès que hasError() est vrai, sinon l'écran de
   // résumé nommera une tâche refusée pour une réponse qu'on a jetée.
   void (*onRejected)(void* ctx, const char* id, const char* reason);
+  // Schema 2 : une ligne qui porte la clé `group` et pas de clé `id` décrit un
+  // groupe, vivant ou supprimé. Les lignes de tâches peuvent précéder leur
+  // groupe : la tâche garde l'id de son groupe même s'il est encore inconnu.
+  void (*onGroup)(void* ctx, const TaskGroup& g);
+  void (*onGroupDeleted)(void* ctx, const char* id);
 };
 
 // Lit le corps cadré de POST /api/v1/tasks/sync.
@@ -55,7 +66,8 @@ class TaskSyncReader {
   explicit TaskSyncReader(const TaskSyncCallbacks& callbacks) : cb_(callbacks) {}
 
   // Chaque fin de ligne coûte une pointe de pile transitoire : le collecteur
-  // de champs (576 octets avec TaskRecord), plus les cadres d'appel. Mesurée à
+  // de champs (~650 octets avec TaskRecord, mesuré sur hôte 64 bits depuis les
+  // groupes ; un peu moins sur le C3), plus les cadres d'appel. Mesurée à
   // ~1424 octets quand le parseur était lui aussi local (672) ; il vit
   // désormais dans parserStorage_, cet objet étant alloué sur le tas, car son
   // tampon de jeton est passé à 2048 octets dans le SDK (~2,2 Ko au total).
@@ -76,6 +88,7 @@ class TaskSyncReader {
   void consumeLine(size_t len, bool dropped);
   void parseHeaderLine(size_t len);
   void parseTaskLine(size_t len);
+  void emitGroupLine(const char* id, const char* name, long position, bool deleted);
   void beginNoteBlock(const char* id, size_t bytes);
 
   TaskSyncCallbacks cb_;

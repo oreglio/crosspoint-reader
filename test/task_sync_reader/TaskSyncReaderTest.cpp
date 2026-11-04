@@ -17,7 +17,13 @@ struct Capture {
   bool more = false;
   bool reset = false;
   bool header = false;
+  long schema = -1;
   std::vector<TaskRecord> tasks;
+  std::vector<TaskGroup> groups;
+  std::vector<std::string> groupsDeleted;
+  // Ordre d'arrivee des lignes, pour prouver qu'une tache peut preceder son
+  // groupe : "t:<id>" pour une tache, "g:<id>" pour un groupe.
+  std::vector<std::string> events;
   std::vector<std::string> deleted;
   std::vector<std::pair<std::string, std::string>> notes;  // id -> corps accumulé
   std::vector<std::pair<std::string, std::string>> rejected;
@@ -25,14 +31,25 @@ struct Capture {
   size_t lastFlags = 0;
 };
 
-void onHeader(void* ctx, const char* cursor, bool more, bool reset) {
+void onHeader(void* ctx, const char* cursor, bool more, bool reset, long schema) {
   auto* c = static_cast<Capture*>(ctx);
   c->cursor = cursor;
   c->more = more;
   c->reset = reset;
+  c->schema = schema;
   c->header = true;
 }
-void onTask(void* ctx, const TaskRecord& rec) { static_cast<Capture*>(ctx)->tasks.push_back(rec); }
+void onTask(void* ctx, const TaskRecord& rec) {
+  auto* c = static_cast<Capture*>(ctx);
+  c->tasks.push_back(rec);
+  c->events.push_back(std::string("t:") + rec.id);
+}
+void onGroup(void* ctx, const TaskGroup& g) {
+  auto* c = static_cast<Capture*>(ctx);
+  c->groups.push_back(g);
+  c->events.push_back(std::string("g:") + g.id);
+}
+void onGroupDeleted(void* ctx, const char* id) { static_cast<Capture*>(ctx)->groupsDeleted.emplace_back(id); }
 void onDeleted(void* ctx, const char* id) { static_cast<Capture*>(ctx)->deleted.emplace_back(id); }
 void onNoteChunk(void* ctx, const char* id, const char* data, size_t len, bool last) {
   auto* c = static_cast<Capture*>(ctx);
@@ -45,7 +62,9 @@ void onRejected(void* ctx, const char* id, const char* reason) {
   static_cast<Capture*>(ctx)->rejected.emplace_back(id, reason);
 }
 
-TaskSyncCallbacks callbacks(Capture& cap) { return {&cap, onHeader, onTask, onDeleted, onNoteChunk, onRejected}; }
+TaskSyncCallbacks callbacks(Capture& cap) {
+  return {&cap, onHeader, onTask, onDeleted, onNoteChunk, onRejected, onGroup, onGroupDeleted};
+}
 
 // Alimente le lecteur par tranches de `chunk` octets, pour prouver que le
 // cadrage survit à un découpage réseau arbitraire.
@@ -56,6 +75,7 @@ void feedInChunks(TaskSyncReader& r, const std::string& body, size_t chunk) {
 }
 
 const std::string kHeader = "{\"schema\":1,\"cursor\":\"MQ==\",\"more\":false,\"reset\":false,\"count\":1}\n";
+const std::string kHeader2 = "{\"schema\":2,\"cursor\":\"MQ==\",\"more\":false,\"reset\":false,\"count\":1}\n";
 
 }  // namespace
 
@@ -413,10 +433,244 @@ TEST(TaskSyncReader, RejectsAnOverlongCursor) {
 TEST(TaskSyncReader, RejectsAnUnknownSchema) {
   Capture cap;
   TaskSyncReader r(callbacks(cap));
-  const std::string body = "{\"schema\":2,\"cursor\":\"MQ==\",\"more\":false,\"reset\":false,\"count\":0}\n";
+  const std::string body = "{\"schema\":3,\"cursor\":\"MQ==\",\"more\":false,\"reset\":false,\"count\":0}\n";
   r.feed(body.data(), body.size());
   EXPECT_TRUE(r.hasError());
   EXPECT_FALSE(cap.header);
+}
+
+TEST(TaskSyncReader, RejectsASchemaBelowTheFirstOne) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body = "{\"schema\":0,\"cursor\":\"MQ==\",\"more\":false,\"reset\":false,\"count\":0}\n";
+  r.feed(body.data(), body.size());
+  EXPECT_TRUE(r.hasError());
+  EXPECT_FALSE(cap.header);
+}
+
+// La liseuse demande le schema 2 ; un serveur d'avant les groupes repond 1, et
+// la sync doit continuer de marcher contre lui. L'appelant a besoin du schema
+// pour savoir si les groupes ont ete livres.
+TEST(TaskSyncReader, AcceptsSchemaOneAndTwoAndReportsWhichOne) {
+  for (const long schema : {1L, 2L}) {
+    Capture cap;
+    TaskSyncReader r(callbacks(cap));
+    const std::string body =
+        "{\"schema\":" + std::to_string(schema) + ",\"cursor\":\"MQ\",\"more\":false,\"reset\":false,\"count\":0}\n";
+    r.feed(body.data(), body.size());
+    EXPECT_FALSE(r.hasError()) << "schema " << schema;
+    EXPECT_TRUE(cap.header) << "schema " << schema;
+    EXPECT_EQ(cap.schema, schema);
+    EXPECT_TRUE(r.isComplete()) << "schema " << schema;
+  }
+}
+
+// Forme exacte du serveur (crossdrop taskApi.ts metaLine) : la cle `group`
+// sans cle `id` designe une ligne de groupe, jamais une tache.
+TEST(TaskSyncReader, ReadsALiveGroupLine) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body = kHeader2 + "{\"group\":\"g1a2b3c4\",\"name\":\"MAISON\",\"position\":2}\n";
+  r.feed(body.data(), body.size());
+
+  ASSERT_EQ(cap.groups.size(), 1u);
+  EXPECT_STREQ(cap.groups[0].id, "g1a2b3c4");
+  EXPECT_STREQ(cap.groups[0].name, "MAISON");
+  EXPECT_EQ(cap.groups[0].position, 2);
+  EXPECT_TRUE(cap.tasks.empty());
+  EXPECT_TRUE(cap.deleted.empty());
+  EXPECT_TRUE(cap.groupsDeleted.empty());
+  EXPECT_FALSE(r.hasError());
+  EXPECT_TRUE(r.isComplete());
+}
+
+// La position n'est qu'une cle de tri : le serveur ne renumerote pas, elle
+// peut donc depasser 16. Hors de 16 bits, elle est bornee plutot que repliee.
+TEST(TaskSyncReader, KeepsAGroupPositionAboveSixteenAndClampsAnAberrantOne) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body = kHeader2 +
+                           "{\"group\":\"g00000001\",\"name\":\"A\",\"position\":40}\n"
+                           "{\"group\":\"g00000002\",\"name\":\"B\",\"position\":70000}\n"
+                           "{\"group\":\"g00000003\",\"name\":\"C\",\"position\":-4}\n"
+                           "{\"group\":\"g00000004\",\"name\":\"D\"}\n";
+  r.feed(body.data(), body.size());
+
+  ASSERT_EQ(cap.groups.size(), 4u);
+  EXPECT_EQ(cap.groups[0].position, 40);
+  EXPECT_EQ(cap.groups[1].position, UINT16_MAX);
+  EXPECT_EQ(cap.groups[2].position, 0);
+  EXPECT_EQ(cap.groups[3].position, 0);
+  EXPECT_FALSE(r.hasError());
+}
+
+TEST(TaskSyncReader, ReadsAGroupTombstone) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body = kHeader2 + "{\"group\":\"g1a2b3c4\",\"deleted\":true}\n";
+  r.feed(body.data(), body.size());
+
+  ASSERT_EQ(cap.groupsDeleted.size(), 1u);
+  EXPECT_EQ(cap.groupsDeleted[0], "g1a2b3c4");
+  EXPECT_TRUE(cap.groups.empty());
+  // Une tombstone de groupe n'est pas celle d'une tache.
+  EXPECT_TRUE(cap.deleted.empty());
+  EXPECT_FALSE(r.hasError());
+  EXPECT_TRUE(r.isComplete());
+}
+
+// Un id de groupe hors gabarit ne doit atteindre aucun tableau fixe ; la ligne
+// est sautee, sans perdre le cadrage de la suite.
+TEST(TaskSyncReader, SkipsAGroupLineWithAMalformedIdAndKeepsReading) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body = kHeader2 +
+                           "{\"group\":\"g1a2b3c4ffff\",\"name\":\"TROP LONG\",\"position\":1}\n"
+                           "{\"group\":\"\",\"name\":\"VIDE\",\"position\":1}\n"
+                           "{\"group\":\"g1a2b3c4ffff\",\"deleted\":true}\n"
+                           "{\"id\":\"w00000001\",\"title\":\"A\",\"priority\":1,\"done\":false,\"noteBytes\":0}\n";
+  r.feed(body.data(), body.size());
+
+  EXPECT_TRUE(cap.groups.empty());
+  EXPECT_TRUE(cap.groupsDeleted.empty());
+  ASSERT_EQ(cap.tasks.size(), 1u);
+  EXPECT_FALSE(r.hasError());
+  EXPECT_TRUE(r.isComplete());
+}
+
+// Schema 2 : `group` est la derniere cle d'une ligne de tache, et n'y figure
+// que si la tache a un groupe. Absente, elle veut dire « sans groupe ».
+TEST(TaskSyncReader, FillsTheGroupOfATaskLine) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body =
+      kHeader2 +
+      "{\"id\":\"w00000001\",\"title\":\"A\",\"priority\":1,\"done\":false,\"noteBytes\":0,\"order\":0,"
+      "\"group\":\"g1a2b3c4\"}\n"
+      "{\"id\":\"w00000002\",\"title\":\"B\",\"priority\":1,\"done\":false,\"noteBytes\":0,\"order\":1}\n"
+      "{\"id\":\"w00000003\",\"title\":\"C\",\"priority\":1,\"done\":false,\"noteBytes\":0,\"group\":null}\n";
+  r.feed(body.data(), body.size());
+
+  ASSERT_EQ(cap.tasks.size(), 3u);
+  EXPECT_STREQ(cap.tasks[0].group, "g1a2b3c4");
+  EXPECT_EQ(cap.tasks[0].order, 0);
+  EXPECT_STREQ(cap.tasks[1].group, "");
+  EXPECT_STREQ(cap.tasks[2].group, "");
+  // Une ligne avec `id` ET `group` reste une tache.
+  EXPECT_TRUE(cap.groups.empty());
+  EXPECT_FALSE(r.hasError());
+}
+
+// Tronquer un id de groupe trop long le ramenerait peut-etre a celui d'un
+// autre groupe : la tache passe sans groupe, mais elle n'est pas perdue.
+TEST(TaskSyncReader, ATaskWithAMalformedGroupIdIsKeptWithoutAGroup) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body = kHeader2 +
+                           "{\"id\":\"w00000001\",\"title\":\"A\",\"priority\":1,\"done\":false,\"noteBytes\":0,"
+                           "\"group\":\"g1a2b3c4ffff\"}\n";
+  r.feed(body.data(), body.size());
+
+  ASSERT_EQ(cap.tasks.size(), 1u);
+  EXPECT_STREQ(cap.tasks[0].group, "");
+  EXPECT_FALSE(r.hasError());
+}
+
+// Une tache peut arriver avant son groupe, et le reseau peut couper entre les
+// deux lignes : chaque ligne est emise des qu'elle est entiere, dans l'ordre
+// du serveur, et la tache garde l'id de son groupe encore inconnu.
+TEST(TaskSyncReader, ReadsATaskThenItsGroupAcrossTwoFeeds) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string first = kHeader2 +
+                            "{\"id\":\"w00000001\",\"title\":\"A\",\"priority\":0,\"done\":false,\"noteBytes\":0,"
+                            "\"group\":\"g1a2b3c4\"}\n{\"group\":\"g1a2";
+  const std::string second = "b3c4\",\"name\":\"MAISON\",\"position\":0}\n";
+  r.feed(first.data(), first.size());
+
+  ASSERT_EQ(cap.tasks.size(), 1u);
+  EXPECT_STREQ(cap.tasks[0].group, "g1a2b3c4");
+  EXPECT_TRUE(cap.groups.empty());
+  EXPECT_FALSE(r.isComplete());
+
+  r.feed(second.data(), second.size());
+  ASSERT_EQ(cap.groups.size(), 1u);
+  EXPECT_STREQ(cap.groups[0].name, "MAISON");
+  EXPECT_EQ(cap.events, (std::vector<std::string>{"t:w00000001", "g:g1a2b3c4"}));
+  EXPECT_TRUE(r.isComplete());
+}
+
+// Pire nom accepte par le serveur : 32 octets qui s'echappent tous en deux
+// (guillemets). La ligne doit tenir dans LINE_BUF_SIZE, et le nom revenir
+// entier, sans echappement.
+TEST(TaskSyncReader, AnEscapedThirtyTwoByteGroupNameFitsTheLineBuffer) {
+  const std::string escaped = [] {
+    std::string s;
+    for (size_t i = 0; i < TASK_GROUP_NAME_MAX; i++) s += "\\\"";
+    return s;
+  }();
+  const std::string line = "{\"group\":\"g1a2b3c4\",\"name\":\"" + escaped + "\",\"position\":65535}";
+  ASSERT_LT(line.size() + 1, TaskSyncReader::LINE_BUF_SIZE);
+
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body = kHeader2 + line + "\n";
+  r.feed(body.data(), body.size());
+
+  ASSERT_EQ(cap.groups.size(), 1u);
+  EXPECT_EQ(std::string(cap.groups[0].name), std::string(TASK_GROUP_NAME_MAX, '"'));
+  EXPECT_FALSE(r.hasError());
+}
+
+// Pire ligne de tache schema 2 (~507 octets, mesuree cote serveur) : titre de
+// 200 octets tout en guillemets echappes, tous les champs, et le groupe.
+TEST(TaskSyncReader, TheWorstSchemaTwoTaskLineFitsTheLineBuffer) {
+  std::string title;
+  for (size_t i = 0; i < TASK_TITLE_MAX; i++) title += "\\\"";
+  const std::string line = "{\"id\":\"w00000001\",\"title\":\"" + title +
+                           "\",\"priority\":2,\"done\":false,\"noteBytes\":4096,\"order\":65534,"
+                           "\"group\":\"g1a2b3c4\"}";
+  ASSERT_LT(line.size() + 1, TaskSyncReader::LINE_BUF_SIZE);
+
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body = kHeader2 + line + "\n" + std::string(4096, 'n') + "\n";
+  r.feed(body.data(), body.size());
+
+  ASSERT_EQ(cap.tasks.size(), 1u);
+  EXPECT_STREQ(cap.tasks[0].group, "g1a2b3c4");
+  EXPECT_TRUE(r.isComplete());
+}
+
+// Un nom trop long (serveur plus permissif a l'avenir) est coupe sur une
+// frontiere UTF-8, comme un titre.
+TEST(TaskSyncReader, TruncatesAnOverlongGroupNameOnAUtf8Boundary) {
+  std::string name;
+  for (int i = 0; i < 11; i++) name += "\xE2\x82\xAC";  // 33 octets
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body = kHeader2 + "{\"group\":\"g1a2b3c4\",\"name\":\"" + name + "\",\"position\":0}\n";
+  r.feed(body.data(), body.size());
+
+  ASSERT_EQ(cap.groups.size(), 1u);
+  EXPECT_EQ(std::string(cap.groups[0].name), name.substr(0, 30));
+}
+
+// Le serveur n'en envoie jamais, mais si une ligne de groupe annoncait une
+// note, ses octets devraient etre consommes pour garder le cadrage.
+TEST(TaskSyncReader, ConsumesANoteBlockAnnouncedOnAGroupLine) {
+  Capture cap;
+  TaskSyncReader r(callbacks(cap));
+  const std::string body = kHeader2 +
+                           "{\"group\":\"g1a2b3c4\",\"name\":\"X\",\"position\":0,\"noteBytes\":3}\n"
+                           "a\nb\n"
+                           "{\"id\":\"w00000001\",\"title\":\"A\",\"priority\":1,\"done\":false,\"noteBytes\":0}\n";
+  r.feed(body.data(), body.size());
+
+  EXPECT_EQ(cap.groups.size(), 1u);
+  EXPECT_TRUE(cap.notes.empty());
+  ASSERT_EQ(cap.tasks.size(), 1u);
+  EXPECT_TRUE(r.isComplete());
 }
 
 TEST(TaskSyncReader, ToleratesMissingCallbacks) {

@@ -8,7 +8,9 @@
 
 // Del : suppression faite sur l'appareil. Le serveur la pose en tombstone,
 // comme une suppression web, et la rend donc aux autres clients.
-enum class TaskOpKind : uint8_t { Add, Done, Prio, Title, Del };
+// Group : change le groupe d'une tache (schema 2). Un groupe inconnu du
+// serveur n'est pas un refus : la tache y passe sans groupe.
+enum class TaskOpKind : uint8_t { Add, Done, Prio, Title, Del, Group };
 
 struct TaskOp {
   TaskOpKind kind;
@@ -16,6 +18,9 @@ struct TaskOp {
   char title[TASK_TITLE_MAX + 1];
   uint8_t priority;
   bool done;
+  // Add : groupe de la nouvelle tache, vide = sans groupe (cle omise).
+  // Group : groupe cible, vide = retirer du groupe (envoye `null`).
+  char group[TASK_ID_LEN + 1];
 };
 
 // Limite de lot : le serveur refuse au-dela de 50 ops, et le corps doit tenir
@@ -24,8 +29,10 @@ inline constexpr size_t TASK_MAX_OPS_PER_SYNC = 50;
 inline constexpr size_t TASK_REQUEST_BUF_SIZE = 12288;
 
 // Plus longue ligne que la file relit. Pire cas mesure sur taskOpToLine() pour
-// un op "add" (le seul qui cumule titre echappe et priorite) : entete+id (~30)
-// + titre echappe 2*200 o (411) + priorite (15) + accolade finale (2) = 458 o.
+// un op "add" (le seul qui cumule titre echappe, priorite et groupe) :
+// entete+id (~30) + titre echappe 2*200 o (411) + priorite (15) + groupe
+// echappe 2*9 o (29) + accolade finale (2) = 487 o. Epingle par
+// TheWorstLineFitsTheReadBackBuffer (test/task_op_queue).
 inline constexpr size_t TASK_OP_LINE_MAX = 512;
 // Un enregistrement de la file : '\n' + ligne + '\n' (voir taskOpToRecord).
 inline constexpr size_t TASK_OP_RECORD_MAX = TASK_OP_LINE_MAX + 2;
@@ -75,8 +82,8 @@ bool taskOpFromLine(const char* line, size_t len, TaskOp& out);
 // sizeof(StreamingJsonParser) octets, alignes) au lieu de la pile.
 bool taskOpFromLine(void* parserStorage, const char* line, size_t len, TaskOp& out);
 
-// Assemble {"schema":1,"cursor":"…","ops":[…]}. Rend 0 si tout ne tient pas,
-// y compris quand `count` depasse TASK_MAX_OPS_PER_SYNC : cette fonction ne
+// Assemble {"schema":2,"cursor":"…","ops":[…]} (TASK_SYNC_REQUEST_SCHEMA).
+// Rend 0 si tout ne tient pas, y compris quand `count` depasse TASK_MAX_OPS_PER_SYNC : cette fonction ne
 // peut pas dire a l'appelant combien d'ops elle a retenues, donc elle ne doit
 // jamais en ecarter en silence — c'est a l'appelant de decouper le lot avant
 // d'appeler.
