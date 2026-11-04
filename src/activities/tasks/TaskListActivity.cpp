@@ -349,10 +349,15 @@ void TaskListActivity::buildRows(UiScreen& screen) {
 // au theme. Aucune ligne n'a de sectionHeading ni d'isHeader, et l'ecran ne
 // pose pas de ComponentStyle : list() recoit screen.body() tel quel.
 void TaskListActivity::drawGroupHeaders(UiScreen& screen, const fui::ListProps& props) const {
+  // Sans groupe (ou en vue Faites, sans titre) rien a peindre : on evite de
+  // mesurer chaque ligne visible a chaque passe.
+  if (TASK_STORE.groups().empty() || view == TaskListView::Done) return;
   if (props.count == 0 || winItems.empty()) return;
   const fui::ThemeTokens& theme = screen.theme();
   const bool touch = screen.device().hasTouch;
 
+  // Copies sur la pile (~1 Ko avec `styles` plus bas ; la tache de rendu a
+  // 16 Ko) : mesurer exige les valeurs resolues, comme la copie de Screen::list().
   fui::ListProps resolved = props;
   if (resolved.sidePadding < 0) resolved.sidePadding = theme.listSidePadding;
   if (resolved.rowInset < 0) resolved.rowInset = theme.listInset;
