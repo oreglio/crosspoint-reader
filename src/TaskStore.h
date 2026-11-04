@@ -38,6 +38,10 @@ inline constexpr size_t TASK_CURSOR_BUF = 40;
 class TaskStore : public PersistableStore<TaskStore> {
  private:
   std::vector<TaskRecord> records;
+  // Au plus MAX_GROUPS x sizeof(TaskGroup) = 736 o, reserves d'un coup au
+  // chargement ; rendus par unload() comme `records`.
+  std::vector<TaskGroup> groupList;
+  bool groupsSyncedFlag = false;
   std::string secretObfuscated;
 
   TaskStore() = default;
@@ -74,6 +78,23 @@ class TaskStore : public PersistableStore<TaskStore> {
   bool fromJson(JsonVariantConst doc);
 
   const std::vector<TaskRecord>& all() const { return records; }
+
+  // --- Groupes ---
+  // Les mutateurs ne touchent QUE la RAM (comme les stage*()) : les groupes
+  // arrivent par la sync, qui sauvegarde l'index une fois la reponse acceptee.
+  const std::vector<TaskGroup>& groups() const { return groupList; }
+  // Cree ou met a jour (nom, position) le groupe de meme id. False, avec un
+  // LOG_ERR, si l'id est malforme ou si un 17e groupe NOUVEAU est demande ; une
+  // mise a jour d'un groupe existant ne compte jamais dans la limite.
+  bool upsertGroup(const TaskGroup& g);
+  // Retire le groupe ET vide `group` des taches qui le portent : une tache ne
+  // doit jamais pointer vers un groupe disparu.
+  void removeGroup(const char* id);
+  const TaskGroup* findGroup(const char* id) const;
+  // Vrai une fois que le serveur a livre ses groupes (schema 2) : distingue
+  // « aucun groupe » de « serveur qui n'en connait pas encore ».
+  bool groupsSynced() const { return groupsSyncedFlag; }
+  void setGroupsSynced(bool synced) { groupsSyncedFlag = synced; }
   // Rend vraiment la memoire de l'index (jusqu'a 120 x 218 octets = ~26 Ko,
   // 7 % de la RAM d'un C3) et arme le prochain ensureLoaded() pour qu'il
   // relise la carte. Seul TaskListActivity::onExit() l'appelle : c'est le seul

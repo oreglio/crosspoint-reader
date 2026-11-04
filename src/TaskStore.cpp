@@ -38,6 +38,32 @@ bool isValidTaskId(const char* id) {
   return id[TASK_ID_LEN] == '\0';
 }
 
+// Id de groupe : 1 a TASK_ID_LEN octets, sans caractere de controle ni '"'.
+// Plus souple qu'un id de tache (le format cote serveur n'est pas fige a 'g' +
+// hex), mais borne : il atterrit dans un tableau fixe.
+bool isValidGroupId(const char* id) {
+  if (id == nullptr) return false;
+  const size_t len = strlen(id);
+  if (len == 0 || len > TASK_ID_LEN) return false;
+  for (size_t i = 0; i < len; i++) {
+    const unsigned char c = static_cast<unsigned char>(id[i]);
+    if (c < 0x20 || c == 0x7F || c == '"') return false;
+  }
+  return true;
+}
+
+// Copie un nom en le coupant sur une frontiere UTF-8 : couper au milieu d'un
+// caractere laisserait un octet orphelin que l'ecran affiche en tofu.
+void copyGroupName(char* out, const char* name) {
+  size_t len = strlen(name);
+  if (len > TASK_GROUP_NAME_MAX) {
+    len = TASK_GROUP_NAME_MAX;
+    while (len > 0 && (static_cast<unsigned char>(name[len]) & 0xC0) == 0x80) len--;
+  }
+  std::memcpy(out, name, len);
+  out[len] = '\0';
+}
+
 bool clearDirectoryFiles(const char* dirPath) {
   if (!Storage.exists(dirPath)) return true;
   HalFile dir = Storage.open(dirPath);
@@ -182,6 +208,8 @@ bool TaskStore::loadFromFile() {
     // Pas d'index lisible, pas de curseur : un delta depuis l'ancien curseur ne
     // renverrait jamais les taches plus anciennes que lui.
     records.clear();
+    groupList.clear();
+    groupsSyncedFlag = false;
     clearCursor();
   }
   return ok;
@@ -219,13 +247,52 @@ void TaskStore::toJson(JsonDocument& doc) const {
     // Absent tant que le serveur n'a pas classe la tache : un index sans "o"
     // (y compris d'avant l'ordre manuel) se relit en TASK_ORDER_UNSET.
     if (rec.order != TASK_ORDER_UNSET) obj["o"] = rec.order;
+    // Absent pour une tache sans groupe : l'index d'avant les groupes reste
+    // identique octet pour octet.
+    if (rec.group[0] != '\0') obj["g"] = rec.group;
   }
+  JsonArray groupArr = doc["groups"].to<JsonArray>();
+  for (const auto& g : groupList) {
+    JsonObject obj = groupArr.add<JsonObject>();
+    obj["id"] = g.id;
+    obj["name"] = g.name;
+    obj["pos"] = g.position;
+  }
+  doc["gs"] = groupsSyncedFlag;
 }
 
 bool TaskStore::fromJson(JsonVariantConst doc) {
   // Tolerer une cle 'tasks' absente/invalide (liste vide) ; seule une erreur
   // de parsing JSON est fatale — meme convention qu'OpdsServerStore::fromJson.
   records.clear();
+  groupList.clear();
+  // Capacite fixe d'emblee : upsertGroup() ne reallouera jamais.
+  groupList.reserve(MAX_GROUPS);
+  groupsSyncedFlag = doc["gs"] | false;
+
+  // Lus avant les taches : `groupList` est complet quand la boucle des taches
+  // commence.
+  for (JsonObjectConst obj : doc["groups"].as<JsonArrayConst>()) {
+    const char* idRaw = obj["id"] | "";
+    if (!isValidGroupId(idRaw)) {
+      LOG_ERR(TAG, "Skipping group with a malformed id in index.json");
+      continue;
+    }
+    if (findGroup(idRaw) != nullptr) {
+      LOG_ERR(TAG, "Skipping duplicate group id in index.json: %s", idRaw);
+      continue;
+    }
+    if (groupList.size() >= MAX_GROUPS) {
+      LOG_ERR(TAG, "index.json has more than %zu groups; ignoring the rest", MAX_GROUPS);
+      break;
+    }
+    TaskGroup g{};
+    std::snprintf(g.id, sizeof(g.id), "%s", idRaw);
+    copyGroupName(g.name, obj["name"] | "");
+    const long pos = obj["pos"] | 0L;
+    g.position = (pos < 0 || pos > UINT16_MAX) ? 0 : static_cast<uint16_t>(pos);
+    groupList.push_back(g);
+  }
 
   JsonArrayConst arr = doc["tasks"].as<JsonArrayConst>();
   records.reserve(std::min(arr.size(), MAX_TASKS));
@@ -268,6 +335,14 @@ bool TaskStore::fromJson(JsonVariantConst doc) {
     rec.noteBytes = (noteBytes < 0 || noteBytes > UINT16_MAX) ? 0 : static_cast<uint16_t>(noteBytes);
     const long order = obj["o"] | static_cast<long>(TASK_ORDER_UNSET);
     rec.order = (order < 0 || order >= TASK_ORDER_UNSET) ? TASK_ORDER_UNSET : static_cast<uint16_t>(order);
+    const char* groupRaw = obj["g"] | "";
+    // Un id de groupe trop long ou malforme se lit « sans groupe » : la tache
+    // reste visible plutot que d'etre ecartee pour un champ annexe.
+    if (isValidGroupId(groupRaw)) {
+      std::snprintf(rec.group, sizeof(rec.group), "%s", groupRaw);
+    } else if (groupRaw[0] != '\0') {
+      LOG_ERR(TAG, "Task %s has a malformed group id; treating it as ungrouped", idRaw);
+    }
     records.push_back(rec);
   }
 
@@ -280,6 +355,9 @@ void TaskStore::unload() {
   // d'octets, et l'appairage doit survivre a la fermeture de l'ecran).
   records.clear();
   records.shrink_to_fit();
+  groupList.clear();
+  groupList.shrink_to_fit();
+  groupsSyncedFlag = false;
   markUnloaded();
 }
 
@@ -304,6 +382,10 @@ void TaskStore::replaceAll(std::vector<TaskRecord> next) {
     next.resize(MAX_TASKS);
   }
   records = std::move(next);
+  // Un instantane complet remplace aussi les groupes : les anciens ne
+  // correspondent plus aux taches ; la sync les relivre.
+  groupList.clear();
+  groupsSyncedFlag = false;
   saveIndex();
 }
 
@@ -370,6 +452,55 @@ bool TaskStore::stageRemove(const char* id) {
 void TaskStore::stageReset() {
   ensureLoaded();  // meme raison que dans replaceAll()
   records.clear();
+  groupList.clear();  // le serveur relivre les groupes avec l'instantane
+  groupsSyncedFlag = false;
+}
+
+const TaskGroup* TaskStore::findGroup(const char* id) const {
+  if (id == nullptr) return nullptr;
+  for (const auto& g : groupList) {
+    if (strcmp(g.id, id) == 0) return &g;
+  }
+  return nullptr;
+}
+
+bool TaskStore::upsertGroup(const TaskGroup& g) {
+  ensureLoaded();  // meme raison que dans stageUpsert()
+  if (!isValidGroupId(g.id)) {
+    LOG_ERR(TAG, "Refusing a group with a malformed id");
+    return false;
+  }
+  for (auto& existing : groupList) {
+    if (strcmp(existing.id, g.id) == 0) {
+      copyGroupName(existing.name, g.name);
+      existing.position = g.position;
+      return true;
+    }
+  }
+  if (groupList.size() >= MAX_GROUPS) {
+    LOG_ERR(TAG, "Dropping group %s: already at the %zu-group cap", g.id, MAX_GROUPS);
+    return false;
+  }
+  // Index charge sans fromJson() (absent) : la capacite n'est pas encore posee.
+  if (groupList.capacity() < MAX_GROUPS) groupList.reserve(MAX_GROUPS);
+  TaskGroup stored{};
+  std::snprintf(stored.id, sizeof(stored.id), "%s", g.id);
+  copyGroupName(stored.name, g.name);
+  stored.position = g.position;
+  groupList.push_back(stored);
+  return true;
+}
+
+void TaskStore::removeGroup(const char* id) {
+  if (id == nullptr) return;
+  ensureLoaded();
+  const auto it =
+      std::find_if(groupList.begin(), groupList.end(), [id](const TaskGroup& g) { return strcmp(g.id, id) == 0; });
+  if (it == groupList.end()) return;
+  groupList.erase(it);
+  for (auto& rec : records) {
+    if (strcmp(rec.group, id) == 0) rec.group[0] = '\0';
+  }
 }
 
 void TaskStore::discardStaged() {

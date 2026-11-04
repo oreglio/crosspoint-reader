@@ -11,6 +11,9 @@ inline constexpr size_t MAX_TASKS = 120;
 inline constexpr size_t TASK_ID_LEN = 9;       // 'd' + 8 hex
 inline constexpr size_t TASK_TITLE_MAX = 200;  // octets, hors terminateur
 inline constexpr size_t TASK_NOTE_MAX = 4096;
+// Groupes : etiquettes libres posees sur le web (spec CrossTasks, partie 2).
+inline constexpr size_t MAX_GROUPS = 16;
+inline constexpr size_t TASK_GROUP_NAME_MAX = 32;  // octets, hors terminateur
 
 inline constexpr uint8_t TASK_PRIORITY_HIGH = 0;
 inline constexpr uint8_t TASK_PRIORITY_NORMAL = 1;
@@ -27,6 +30,17 @@ struct TaskRecord {
   // sur l'appareil, ou index d'avant l'ordre manuel. Elle se range alors au
   // bout de son groupe jusqu'a ce qu'une sync lui rende son rang.
   uint16_t order;
+  // Id du groupe (meme largeur qu'un id de tache) ; chaine vide = sans groupe.
+  char group[TASK_ID_LEN + 1];
+};
+
+// `position` ne sert qu'a trier : le serveur ne la renumerote pas quand un
+// groupe disparait, elle peut donc depasser MAX_GROUPS. Ne jamais s'en servir
+// comme indice.
+struct TaskGroup {
+  char id[TASK_ID_LEN + 1];
+  char name[TASK_GROUP_NAME_MAX + 1];
+  uint16_t position;
 };
 
 inline constexpr uint16_t TASK_ORDER_UNSET = 0xFFFF;
